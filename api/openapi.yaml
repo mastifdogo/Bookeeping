@@ -692,7 +692,7 @@ components:
       additionalProperties: false
       properties:
         current_password: { type: string, format: password }
-        new_password: { type: string, format: password, minLength: 10, description: '10+ characters, at most 72 bytes' }
+        new_password: { type: string, format: password, minLength: 4, description: '4+ characters (a 4-digit PIN is allowed), at most 72 bytes' }
 
     ReportLine:
       type: object

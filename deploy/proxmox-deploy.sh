@@ -187,8 +187,8 @@ done
 case "$ADMIN_USER" in
 '' | [!a-z0-9]* | *[!a-z0-9._-]*) die "--admin-user: use lowercase letters, digits, '.', '_' or '-'" ;;
 esac
-if [ -n "$ADMIN_PASSWORD" ] && [ "${#ADMIN_PASSWORD}" -lt 10 ]; then
-	die "the admin password must be at least 10 characters"
+if [ -n "$ADMIN_PASSWORD" ] && [ "${#ADMIN_PASSWORD}" -lt 4 ]; then
+	die "the admin password must be at least 4 characters"
 fi
 
 # Locate the release: an explicit tarball, or the directory this script is in.

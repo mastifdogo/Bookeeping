@@ -324,16 +324,21 @@ async function handleHealth(c: Ctx): Promise<void> {
 
 async function handleLogin(c: Ctx): Promise<void> {
 	const input = await decodeBody(c, true, decodeLoginRequest);
-	const key = clientIP(c.req) + "|" + normalizeUsername(input.username);
-	if (!c.app.logins.allowed(key)) throw new TooManyLoginsError();
+	const user = normalizeUsername(input.username);
+	const key = clientIP(c.req) + "|" + user;
+	if (!c.app.logins.allowed(key) || !c.app.userLogins.allowed(user)) throw new TooManyLoginsError();
 	let result;
 	try {
 		result = await login(c.app, input.username, input.password);
 	} catch (err) {
-		if (err instanceof BadCredentialsError) c.app.logins.fail(key);
+		if (err instanceof BadCredentialsError) {
+			c.app.logins.fail(key);
+			c.app.userLogins.fail(user);
+		}
 		throw err;
 	}
 	c.app.logins.reset(key);
+	c.app.userLogins.reset(user);
 	setSessionCookie(c, result.token, SESSION_MAX_AGE_SECONDS);
 	writeJSON(c.res, 200, publicUser(result.user));
 }

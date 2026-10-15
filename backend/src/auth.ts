@@ -13,7 +13,7 @@ export const SESSION_IDLE_TIMEOUT = "8 hours";
 export const SESSION_MAX_AGE_SECONDS = 7 * 24 * 3600;
 const SESSION_TOUCH_EVERY_MS = 60_000;
 const BCRYPT_COST = 12;
-const MIN_PASSWORD_LEN = 10;
+const MIN_PASSWORD_LEN = 4; // a 4-digit PIN is allowed; logins are rate-limited
 const MAX_PASSWORD_BYTES = 72; // bcrypt limit
 
 /** Must match the users_username_format CHECK constraint in db/schema.sql. */

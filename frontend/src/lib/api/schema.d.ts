@@ -454,7 +454,7 @@ export interface components {
             current_password: string;
             /**
              * Format: password
-             * @description 10+ characters, at most 72 bytes
+             * @description 4+ characters (a 4-digit PIN is allowed), at most 72 bytes
              */
             new_password: string;
         };

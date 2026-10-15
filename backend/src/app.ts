@@ -1,6 +1,6 @@
 import type { Pool } from "./db.ts";
 import type { CookieSecure } from "./config.ts";
-import { LoginLimiter } from "./limiter.ts";
+import { LOGIN_MAX_FAILURES_PER_USER, LoginLimiter } from "./limiter.ts";
 
 /** Shared dependencies for handlers and ledger operations. */
 export interface App {
@@ -9,8 +9,16 @@ export interface App {
 	cookieSecure: CookieSecure;
 	webDir: string;
 	logins: LoginLimiter;
+	userLogins: LoginLimiter;
 }
 
 export function newApp(db: Pool, cfg: { csvDir: string; cookieSecure: CookieSecure; webDir: string }): App {
-	return { db, csvDir: cfg.csvDir, cookieSecure: cfg.cookieSecure, webDir: cfg.webDir, logins: new LoginLimiter() };
+	return {
+		db,
+		csvDir: cfg.csvDir,
+		cookieSecure: cfg.cookieSecure,
+		webDir: cfg.webDir,
+		logins: new LoginLimiter(),
+		userLogins: new LoginLimiter(LOGIN_MAX_FAILURES_PER_USER),
+	};
 }
