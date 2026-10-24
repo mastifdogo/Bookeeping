@@ -1,7 +1,7 @@
 # /etc/systemd/system/ledger.service
 [Unit]
 Description=Ledger double-entry accounting
-Documentation=https://github.com/mastifdogo/Accounting/blob/main/docs/DEPLOYMENT.md
+Documentation=https://github.com/mastifdogo/Bookeeping/blob/main/docs/DEPLOYMENT.md
 Wants=network-online.target
 After=network-online.target postgresql.service
 RequiresMountsFor=/app/csv_data
