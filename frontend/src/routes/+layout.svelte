@@ -36,64 +36,142 @@
 </svelte:head>
 
 {#if data.user}
-	<header>
-		<nav aria-label="Main">
-			<a class="brand" href="/">Ledger</a>
-			{#each links as l (l.href)}
-				<a href={l.href} aria-current={active(l.href, l.exact) ? 'page' : undefined}>{l.label}</a>
-			{/each}
-			<span class="user">
-				<a href="/settings" aria-current={active('/settings', true) ? 'page' : undefined} title="Account settings">{data.user.username}</a>
-				<button class="link" onclick={logout}>Log out</button>
-			</span>
-		</nav>
-	</header>
+	<div class="shell">
+		<aside>
+			<nav aria-label="Main">
+				<a class="brand" href="/">Ledger</a>
+				<ul>
+					{#each links as l (l.href)}
+						<li><a href={l.href} aria-current={active(l.href, l.exact) ? 'page' : undefined}>{l.label}</a></li>
+					{/each}
+				</ul>
+				<ul class="bottom">
+					<li><a href="/system" aria-current={active('/system', true) ? 'page' : undefined}>Updates</a></li>
+					<li>
+						<a href="/settings" aria-current={active('/settings', true) ? 'page' : undefined} title="Account settings">{data.user.username}</a>
+					</li>
+					<li><button class="link" onclick={logout}>Log out</button></li>
+				</ul>
+			</nav>
+		</aside>
+		<main>
+			{@render children()}
+		</main>
+	</div>
+{:else}
+	<main>
+		{@render children()}
+	</main>
 {/if}
 
-<main>
-	{@render children()}
-</main>
-
 <style>
-	header {
+	.shell {
+		display: grid;
+		grid-template-columns: 13rem minmax(0, 1fr);
+		min-height: 100vh;
+	}
+	aside {
 		background: var(--surface);
-		border-bottom: 1px solid var(--border);
-		position: sticky;
-		top: 0;
-		z-index: 10;
+		border-right: 1px solid var(--border);
 	}
 	nav {
-		max-width: 1200px;
-		margin: 0 auto;
-		padding: 0 1rem;
+		position: sticky;
+		top: 0;
 		display: flex;
-		flex-wrap: wrap;
-		gap: 0.25rem 1.25rem;
-		align-items: center;
-		min-height: 3.25rem;
+		flex-direction: column;
+		gap: 0.5rem;
+		height: 100vh;
+		padding: 1rem 0.75rem;
+		overflow-y: auto;
 	}
-	nav a {
+	ul {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+	ul.bottom {
+		margin-top: auto;
+		border-top: 1px solid var(--border);
+		padding-top: 0.5rem;
+	}
+	nav a,
+	nav button.link {
+		display: block;
+		width: 100%;
+		text-align: left;
 		color: var(--muted);
-		padding: 0.4rem 0;
-		border-bottom: 2px solid transparent;
+		padding: 0.45rem 0.75rem;
+		border-radius: var(--radius);
+		border-left: 3px solid transparent;
 	}
-	nav a:hover {
+	nav a:hover,
+	nav button.link:hover {
 		color: var(--text);
+		background: var(--row-hover);
 		text-decoration: none;
 	}
 	nav a[aria-current='page'] {
 		color: var(--text);
-		border-bottom-color: var(--accent);
-	}
-	.user {
-		margin-left: auto;
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
+		font-weight: 600;
+		background: var(--row-hover);
+		border-left-color: var(--accent);
 	}
 	nav a.brand {
 		color: var(--text);
 		font-weight: 700;
-		margin-right: 0.75rem;
+		font-size: 1.1rem;
+		padding-bottom: 0.75rem;
+	}
+	nav a.brand:hover {
+		background: none;
+	}
+	.shell main {
+		margin: 0;
+		max-width: 1200px;
+		width: 100%;
+	}
+
+	/* Narrow screens: the sidebar becomes a bar across the top. */
+	@media (max-width: 760px) {
+		.shell {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		aside {
+			border-right: none;
+			border-bottom: 1px solid var(--border);
+			position: sticky;
+			top: 0;
+			z-index: 10;
+		}
+		nav {
+			position: static;
+			height: auto;
+			flex-direction: row;
+			flex-wrap: wrap;
+			align-items: center;
+			padding: 0.5rem 0.75rem;
+		}
+		ul,
+		ul.bottom {
+			flex-direction: row;
+			flex-wrap: wrap;
+			margin: 0;
+			border: none;
+			padding: 0;
+		}
+		ul.bottom {
+			margin-left: auto;
+		}
+		nav a,
+		nav button.link {
+			padding: 0.35rem 0.5rem;
+			border-left: none;
+		}
+		nav a.brand {
+			padding-bottom: 0.35rem;
+		}
 	}
 </style>
