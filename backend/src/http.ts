@@ -8,6 +8,7 @@ import { isPgError } from "./db.ts";
 import {
 	BadCredentialsError,
 	ConflictError,
+	HttpError,
 	NotFoundError,
 	TooLargeError,
 	TooManyLoginsError,
@@ -47,21 +48,15 @@ import { CSV_FILENAME_RE, MAX_FILE_BYTES, exportGeneralLedger, listCsvFiles, ope
 import { importJournalEntries } from "./import.ts";
 import { changePassword, login, logout, normalizeUsername, sessionUser, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS } from "./auth.ts";
 import { MultipartError, formDataBoundary, parseHeaderParams, parseMultipart } from "./multipart.ts";
-import { staticHandler } from "./static.ts";
+import { CONTENT_TYPES, staticHandler } from "./static.ts";
+import { promises as fsp } from "node:fs";
+import pathMod from "node:path";
+import { MAX_MODULES, normalizeRepo, readDesired, readModuleResults, requestModuleSync, writeDesired, compatible, type DesiredModule } from "./modules.ts";
+import { fetchManifest, githubApi, latestModuleRelease } from "./github.ts";
 
 const MAX_BODY_BYTES = 1 << 20; // 1 MiB for JSON
 const MULTIPART_OVERHEAD = 64 << 10;
 
-/** An error that maps directly to a status and error code. */
-class HttpError extends Error {
-	readonly status: number;
-	readonly code: string;
-	constructor(status: number, code: string, message: string) {
-		super(message);
-		this.status = status;
-		this.code = code;
-	}
-}
 
 class BodyTooLargeError extends Error {}
 
@@ -190,7 +185,7 @@ async function readJSON(c: Ctx, required: boolean): Promise<unknown> {
 	const ct = c.req.headers["content-type"] ?? "";
 	const length = Number(c.req.headers["content-length"] ?? 0);
 	if ((ct !== "" || length > 0) && parseHeaderParams(ct).type !== "application/json") {
-		throw new HttpError(415, "bad_request", "Content-Type must be application/json");
+		throw new HttpError(415, "Content-Type must be application/json", "bad_request");
 	}
 	let body: Buffer;
 	try {
@@ -198,14 +193,14 @@ async function readJSON(c: Ctx, required: boolean): Promise<unknown> {
 	} catch (err) {
 		if (err instanceof BodyTooLargeError) {
 			c.res.setHeader("Connection", "close");
-			throw new HttpError(413, "payload_too_large", "request body too large");
+			throw new HttpError(413, "request body too large", "payload_too_large");
 		}
 		throw err;
 	}
 	const text = body.toString("utf8");
 	if (text.trim() === "") {
 		if (!required) return undefined;
-		throw new HttpError(400, "bad_request", "request body is required");
+		throw new HttpError(400, "request body is required", "bad_request");
 	}
 	return parseJson(text);
 }
@@ -215,7 +210,7 @@ async function decodeBody<T>(c: Ctx, required: boolean, decode: (v: unknown) => 
 		const v = await readJSON(c, required);
 		return decode(v === undefined ? null : v);
 	} catch (err) {
-		if (err instanceof DecodeError) throw new HttpError(400, "bad_request", "invalid JSON: " + err.message);
+		if (err instanceof DecodeError) throw new HttpError(400, "invalid JSON: " + err.message, "bad_request");
 		throw err;
 	}
 }
@@ -500,7 +495,7 @@ async function handleDownloadFile(c: Ctx): Promise<void> {
 
 async function handleUploadFile(c: Ctx): Promise<void> {
 	const boundary = formDataBoundary(c.req.headers["content-type"]);
-	if (!boundary) throw new HttpError(400, "bad_request", 'expected a multipart/form-data body with a "file" field');
+	if (!boundary) throw new HttpError(400, 'expected a multipart/form-data body with a "file" field', "bad_request");
 	let body: Buffer;
 	try {
 		body = await readBody(c.req, MAX_FILE_BYTES + MULTIPART_OVERHEAD);
@@ -515,11 +510,11 @@ async function handleUploadFile(c: Ctx): Promise<void> {
 	try {
 		parts = parseMultipart(body, boundary);
 	} catch (err) {
-		if (err instanceof MultipartError) throw new HttpError(400, "bad_request", "invalid multipart body: " + err.message);
+		if (err instanceof MultipartError) throw new HttpError(400, "invalid multipart body: " + err.message, "bad_request");
 		throw err;
 	}
 	const part = parts.find((p) => p.name === "file");
-	if (!part) throw new HttpError(400, "bad_request", 'missing "file" field');
+	if (!part) throw new HttpError(400, 'missing "file" field', "bad_request");
 	writeJSON(c.res, 201, await saveUploadedCsv(c.app, part.filename, part.data));
 }
 
@@ -573,6 +568,179 @@ async function handleCheckUpdate(c: Ctx): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Modules: management (the root installer does the installing) and dispatch
+// ---------------------------------------------------------------------------
+
+async function modulesInfo(c: Ctx) {
+	const desired = await readDesired(c.app.update);
+	const results = await readModuleResults(c.app.update);
+	const loaded = [...c.app.modules.modules.values()];
+	const list: Record<string, unknown>[] = [];
+	const seen = new Set<string>();
+	const resultFor = (repo: string | null, id: string | null) => results.find((r) => (repo && r.repo === repo) || (id && r.id === id)) ?? null;
+	for (const d of desired) {
+		const m = loaded.find((x) => (d.id && x.manifest.id === d.id) || (x.repo && x.repo === d.repo));
+		const last = resultFor(d.repo, d.id);
+		if (m) seen.add(m.manifest.id);
+		list.push({
+			repo: d.repo,
+			id: m?.manifest.id ?? d.id,
+			name: m?.manifest.name ?? d.id ?? d.repo,
+			version: m?.manifest.version ?? null,
+			description: m?.manifest.description ?? "",
+			nav_label: m && !m.error ? (m.manifest.nav?.label ?? null) : null,
+			state: m ? (m.error ? "failed" : "running") : last?.state === "error" ? "error" : "pending",
+			message: m?.error ?? (last?.state === "error" ? last.message : m ? "" : "Waiting for the installer…"),
+		});
+	}
+	for (const m of loaded) {
+		if (seen.has(m.manifest.id)) continue;
+		list.push({
+			repo: m.repo,
+			id: m.manifest.id,
+			name: m.manifest.name,
+			version: m.manifest.version,
+			description: m.manifest.description,
+			nav_label: null,
+			state: "removing",
+			message: "Removed from the list; uninstalls at the next sync.",
+		});
+	}
+	return { installer_available: await updaterInstalled(c.app.update), modules: list, nav: c.app.modules.nav() };
+}
+
+async function handleListModules(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await modulesInfo(c));
+}
+
+async function previewModule(input: string) {
+	const repo = normalizeRepo(input);
+	if (!repo) {
+		const v = new ValidationError();
+		v.add("repo", "must be a GitHub repository, e.g. someone/ledger-invoicing or its github.com URL");
+		throw v;
+	}
+	try {
+		const rel = await latestModuleRelease(githubApi(), repo);
+		const manifest = await fetchManifest(githubApi(), repo, rel.tag);
+		return { repo, tag: rel.tag, manifest };
+	} catch (err) {
+		if (err instanceof ValidationError) throw new HttpError(422, `${repo}: ledger-module.json is invalid: ${err.message.replace(/^validation failed: /, "")}`, "validation_failed");
+		throw new HttpError(422, `${repo}: ${(err as Error).message}`, "validation_failed");
+	}
+}
+
+function decodeRepoBody(v: unknown): { repo: string } {
+	const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+	for (const k of Object.keys(o)) if (k !== "repo") throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+	return { repo: typeof o.repo === "string" ? o.repo : "" };
+}
+
+async function handlePreviewModule(c: Ctx): Promise<void> {
+	const { repo } = await decodeBody(c, true, decodeRepoBody);
+	const p = await previewModule(repo);
+	writeJSON(c.res, 200, { ...p, compatible: compatible(p.manifest, c.app.version), ledger_version: c.app.version });
+}
+
+async function handleAddModule(c: Ctx): Promise<void> {
+	const { repo } = await decodeBody(c, true, decodeRepoBody);
+	await requireUpdater(c);
+	const p = await previewModule(repo);
+	if (!compatible(p.manifest, c.app.version)) throw new ConflictError(`${p.repo} needs Ledger ${p.manifest.ledger} (this is ${c.app.version})`);
+	const desired = await readDesired(c.app.update);
+	const clash = desired.find((d) => d.id === p.manifest.id && d.repo !== p.repo) ?? (c.app.modules.modules.get(p.manifest.id)?.repo ?? p.repo) !== p.repo;
+	if (clash) throw new ConflictError(`another module already uses the id "${p.manifest.id}"`);
+	if (!desired.some((d) => d.repo === p.repo)) {
+		if (desired.length >= MAX_MODULES) throw new ConflictError(`at most ${MAX_MODULES} modules`);
+		desired.push({ repo: p.repo, id: p.manifest.id });
+		await writeDesired(c.app.update, desired);
+	}
+	await requestModuleSync(c.app.update);
+	writeJSON(c.res, 202, await modulesInfo(c));
+}
+
+async function handleRemoveModule(c: Ctx): Promise<void> {
+	await requireUpdater(c);
+	const id = c.params.id ?? "";
+	const loaded = c.app.modules.modules.get(id);
+	const desired = await readDesired(c.app.update);
+	const keep = desired.filter((d: DesiredModule) => d.id !== id && !(loaded?.repo && d.repo === loaded.repo));
+	if (keep.length === desired.length && !loaded) throw new NotFoundError();
+	await writeDesired(c.app.update, keep);
+	await requestModuleSync(c.app.update);
+	writeJSON(c.res, 202, await modulesInfo(c));
+}
+
+async function handleSyncModules(c: Ctx): Promise<void> {
+	await requireUpdater(c);
+	await requestModuleSync(c.app.update);
+	writeJSON(c.res, 202, await modulesInfo(c));
+}
+
+/** /api/v1/m/<id>/...: a module's own API. Always requires a session. */
+async function serveModuleAPI(c: Ctx, segments: string[]): Promise<void> {
+	c.token = sessionToken(c.req);
+	c.user = await sessionUser(c.app, c.token);
+	const id = segments[1]!;
+	const rest = segments.length > 2 ? segments.slice(2) : [""];
+	const found = c.app.modules.match(id, c.req.method ?? "", rest);
+	if (found === null) return writeError(c.res, 404, "not_found", "no such endpoint");
+	if (found === "method") return writeError(c.res, 405, "bad_request", "method not allowed");
+	let body: unknown = undefined;
+	if (c.req.method !== "GET" && c.req.method !== "DELETE") {
+		const v = await decodeBody(c, false, (x) => x);
+		body = v === null ? undefined : plainJson(v);
+	}
+	const out = await c.app.modules.run(
+		found.route,
+		{ method: found.route.method, path: "/" + rest.join("/"), params: found.params, query: c.query, body },
+		c.user,
+	);
+	if (out.status === 204 || out.body === undefined) {
+		c.res.writeHead(out.status).end();
+		return;
+	}
+	writeJSON(c.res, out.status, out.body);
+}
+
+/** /m/<id>/...: a module's UI, shown in an iframe inside Ledger. */
+async function serveModuleUI(c: Ctx, pathname: string): Promise<void> {
+	c.res.setHeader("X-Frame-Options", "SAMEORIGIN");
+	c.res.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
+	if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+		c.res.writeHead(405, { Allow: "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" }).end("method not allowed\n");
+		return;
+	}
+	try {
+		c.user = await sessionUser(c.app, sessionToken(c.req));
+	} catch {
+		c.res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" }).end("log in to Ledger first\n");
+		return;
+	}
+	const m = /^\/m\/([a-z][a-z0-9-]{1,31})(\/.*)?$/.exec(pathname);
+	if (!m) {
+		c.res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found\n");
+		return;
+	}
+	if (m[2] === undefined) {
+		c.res.writeHead(301, { Location: `/m/${m[1]}/` }).end();
+		return;
+	}
+	const file = await c.app.modules.uiFile(m[1]!, m[2].slice(1));
+	if (!file) {
+		c.res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found\n");
+		return;
+	}
+	const data = await fsp.readFile(file);
+	c.res.writeHead(200, {
+		"Content-Type": CONTENT_TYPES[pathMod.extname(file).toLowerCase()] ?? "application/octet-stream",
+		"Content-Length": data.length,
+		"Cache-Control": "no-cache",
+	});
+	c.res.end(c.req.method === "HEAD" ? undefined : data);
+}
+
+// ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
 
@@ -614,6 +782,12 @@ const ROUTES: Route[] = [
 	route("GET", "/system/update", true, handleGetUpdate),
 	route("PUT", "/system/update/schedule", true, handlePutUpdateSchedule),
 	route("POST", "/system/update/check", true, handleCheckUpdate),
+
+	route("GET", "/modules", true, handleListModules),
+	route("POST", "/modules", true, handleAddModule),
+	route("POST", "/modules/preview", true, handlePreviewModule),
+	route("POST", "/modules/sync", true, handleSyncModules),
+	route("DELETE", "/modules/:id", true, handleRemoveModule),
 ];
 
 /** Matches a path relative to /api/v1 against a route; returns its decoded params. */
@@ -634,6 +808,7 @@ function match(r: Route, segments: string[]): Record<string, string> | null {
 
 async function serveAPI(c: Ctx, rel: string): Promise<void> {
 	const segments = rel.split("/").slice(1);
+	if (segments[0] === "m" && segments.length >= 2 && segments[1] !== "") return serveModuleAPI(c, segments);
 	let pathMatched = false;
 	for (const r of ROUTES) {
 		const params = match(r, segments);
@@ -702,6 +877,8 @@ export function createHandler(app: App): (req: IncomingMessage, res: ServerRespo
 				await serveAPI(c, pathname.slice("/api/v1".length));
 			} else if (pathname.startsWith("/api/")) {
 				writeError(res, 404, "not_found", "no such endpoint");
+			} else if (pathname === "/m" || pathname.startsWith("/m/")) {
+				await serveModuleUI(c, pathname);
 			} else {
 				await serveStatic(req, res, pathname);
 			}

@@ -10,7 +10,7 @@
 		"build": "node build.mjs",
 		"start": "node src/main.ts",
 		"check": "tsc --noEmit",
-		"test": "node --test test/unit.test.ts test/update.test.ts",
+		"test": "node --test test/unit.test.ts test/update.test.ts test/modules.test.ts",
 		"test:integration": "node --test --test-concurrency=1 test/integration.test.ts"
 	},
 	"dependencies": {

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hello module</title>
+<style>
+	:root { --bg: #fff; --text: #1d232b; --muted: #5d6875; --border: #dde1e6; --accent: #1f6feb; color-scheme: light; }
+	@media (prefers-color-scheme: dark) { :root { --bg: #171b21; --text: #e3e7ec; --muted: #97a1ad; --border: #2c333c; --accent: #4c8dff; color-scheme: dark; } }
+	body { margin: 0; padding: 1rem 1.25rem; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+	h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+	.muted { color: var(--muted); }
+	form { display: flex; gap: 0.5rem; margin: 1rem 0; }
+	input { flex: 1; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; font: inherit; }
+	button { padding: 0.4rem 0.8rem; border: 1px solid var(--border); border-radius: 6px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+	li { margin: 0.3rem 0; }
+	li button { background: transparent; color: var(--muted); padding: 0 0.4rem; margin-left: 0.5rem; }
+</style>
+</head>
+<body>
+<h1>Hello from a module</h1>
+<p id="summary" class="muted">Loading…</p>
+
+<h2>Notes</h2>
+<form id="add"><input id="body" placeholder="Write a note" maxlength="500" required><button>Add</button></form>
+<ul id="notes"></ul>
+<p id="error" style="color:#cf222e"></p>
+
+<script>
+	// The page is served by Ledger at /m/hello/, so API calls carry your login.
+	const api = (path, opts = {}) =>
+		fetch(`/api/v1/m/hello${path}`, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } }).then(async (r) => {
+			if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error?.message || r.statusText);
+			return r.status === 204 ? null : r.json();
+		});
+	const fmt = (cents) => (cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 });
+	const show = (e) => (document.getElementById("error").textContent = e ? e.message : "");
+
+	async function load() {
+		const s = await api("/summary");
+		document.getElementById("summary").textContent =
+			`${s.accounts} accounts. ` + (s.totals.map((t) => `${t.currency} ${fmt(t.debit_cents)} total debits`).join(", ") || "No postings yet.");
+		const { data } = await api("/notes");
+		const ul = document.getElementById("notes");
+		ul.replaceChildren(
+			...data.map((n) => {
+				const li = document.createElement("li");
+				li.textContent = `${n.body} — ${n.created_by}`;
+				const del = document.createElement("button");
+				del.textContent = "✕";
+				del.title = "Delete";
+				del.onclick = () => api(`/notes/${n.id}`, { method: "DELETE" }).then(load, show);
+				li.append(del);
+				return li;
+			}),
+		);
+	}
+
+	document.getElementById("add").onsubmit = async (e) => {
+		e.preventDefault();
+		const input = document.getElementById("body");
+		try {
+			await api("/notes", { method: "POST", body: JSON.stringify({ body: input.value }) });
+			input.value = "";
+			show(null);
+			await load();
+		} catch (err) {
+			show(err);
+		}
+	};
+	load().catch(show);
+</script>
+</body>
+</html>

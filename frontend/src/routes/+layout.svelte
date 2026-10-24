@@ -26,6 +26,8 @@
 		user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
 		logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
 		collapse: 'M15 6l-6 6 6 6',
+		module: 'M9 3h6v3a2 2 0 1 0 4 0V5h2v6h-3a2 2 0 1 0 0 4h3v6h-6v-3a2 2 0 1 0-4 0v3H3v-6h3a2 2 0 1 0 0-4H3V5h6z',
+		modules: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM16.5 13v7M13 16.5h7',
 		menu: 'M4 6h16M4 12h16M4 18h16'
 	} as const;
 
@@ -112,8 +114,20 @@
 								</a>
 							</li>
 						{/each}
+						{#each data.modules as mod (mod.id)}
+							<li>
+								<a href="/apps/{mod.id}" title={mod.label} aria-current={active('/apps/' + mod.id, false) ? 'page' : undefined}>
+									{@render icon(ICONS.module)}<span class="label">{mod.label}</span>
+								</a>
+							</li>
+						{/each}
 					</ul>
 					<ul class="bottom">
+						<li>
+							<a href="/modules" title="Modules" aria-current={active('/modules', true) ? 'page' : undefined}>
+								{@render icon(ICONS.modules)}<span class="label">Modules</span>
+							</a>
+						</li>
 						<li>
 							<a href="/system" title="Updates" aria-current={active('/system', true) ? 'page' : undefined}>
 								{@render icon(ICONS.updates)}<span class="label">Updates</span>

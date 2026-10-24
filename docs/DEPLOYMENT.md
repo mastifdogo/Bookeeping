@@ -22,6 +22,7 @@ What runs where:
 | `ledger-update.timer` / `.path` | automatic updates from GitHub Releases on the schedule set in the app (see step 9) |
 | `/var/lib/ledger/update-config/` | the update schedule, written by the app (user `ledger`) |
 | `/var/lib/ledger/update-status/` | the updater's last result, written by root, shown in the app |
+| `/var/lib/ledger/modules/` | installed modules (root-owned; see [MODULES.md](MODULES.md)) |
 | `/etc/ledger/ledger.env` | configuration, including the DB password (root:ledger, 0640) |
 | `/usr/local/share/ledger/` | `schema.sql`, `grants.sql`, `setup-db.sh`, PostgreSQL tuning |
 | `/app/csv_data/` | CSV uploads/exports; `backups/` holds database dumps |

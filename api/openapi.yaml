@@ -60,6 +60,13 @@ info:
     (`ledger-update.timer`) reads the schedule, installs new GitHub releases
     and reboots the container. The app itself never installs anything.
 
+    ## Modules
+    Modules add features (invoicing, dashboards, integrations) from GitHub
+    repositories. `/modules` lists them and records which ones you want; the
+    root updater installs them. A running module serves its own API under
+    `/api/v1/m/{moduleId}/...` (session required) and its UI under
+    `/m/{moduleId}/`. See docs/MODULES.md.
+
     ## Requests
     JSON request bodies must be sent with `Content-Type: application/json`
     (otherwise 415). Cross-site state-changing requests from browsers are
@@ -77,6 +84,7 @@ tags:
   - name: Journal Entries
   - name: Reports
   - name: Files
+  - name: Modules
 
 paths:
   /auth/login:
@@ -642,6 +650,95 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /modules:
+    get:
+      tags: [Modules]
+      operationId: listModules
+      summary: Installed and wanted modules, and sidebar entries
+      responses:
+        '200':
+          description: Modules
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesInfo' }
+        '401': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Modules]
+      operationId: addModule
+      summary: Add a module from a GitHub repository (installed within seconds)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModuleRepo' }
+      responses:
+        '202':
+          description: Queued for installation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesInfo' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /modules/preview:
+    post:
+      tags: [Modules]
+      operationId: previewModule
+      summary: Read a repository's module manifest from its latest release, without installing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModuleRepo' }
+      responses:
+        '200':
+          description: The module that would be installed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulePreview' }
+        '401': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /modules/sync:
+    post:
+      tags: [Modules]
+      operationId: syncModules
+      summary: Update all modules to their latest releases now
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesInfo' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /modules/{moduleId}:
+    delete:
+      tags: [Modules]
+      operationId: removeModule
+      summary: Remove a module (its data is kept)
+      parameters:
+        - name: moduleId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-z][a-z0-9-]{1,31}$' }
+      responses:
+        '202':
+          description: Queued for removal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesInfo' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
 components:
   securitySchemes:
     sessionCookie:
@@ -1103,3 +1200,71 @@ components:
           allOf: [{ $ref: '#/components/schemas/UpdateStatus' }]
           nullable: true
           description: Null until the updater has run once
+    ModuleRepo:
+      type: object
+      additionalProperties: false
+      required: [repo]
+      properties:
+        repo: { type: string, example: someone/ledger-invoicing, description: 'owner/name or a github.com URL' }
+    ModuleManifest:
+      type: object
+      required: [id, name, version, description, ledger, server, ui, nav, migrations]
+      properties:
+        id: { type: string, pattern: '^[a-z][a-z0-9-]{1,31}$' }
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        ledger: { type: string, nullable: true, example: '>=0.6.0' }
+        server: { type: string, nullable: true }
+        ui: { type: string, nullable: true }
+        nav:
+          type: object
+          nullable: true
+          required: [label]
+          properties:
+            label: { type: string }
+        migrations: { type: string, nullable: true }
+    ModulePreview:
+      type: object
+      required: [repo, tag, manifest, compatible, ledger_version]
+      properties:
+        repo: { type: string }
+        tag: { type: string }
+        manifest: { $ref: '#/components/schemas/ModuleManifest' }
+        compatible: { type: boolean }
+        ledger_version: { type: string }
+    ModuleInfo:
+      type: object
+      required: [repo, id, name, version, description, nav_label, state, message]
+      properties:
+        repo: { type: string, nullable: true }
+        id: { type: string, nullable: true }
+        name: { type: string }
+        version: { type: string, nullable: true }
+        description: { type: string }
+        nav_label: { type: string, nullable: true }
+        state:
+          type: string
+          enum: [running, failed, pending, error, removing]
+          description: |
+            running; failed (installed but would not load: see message);
+            pending (waiting for the installer); error (the installer could
+            not install it: see message); removing (taken off the list).
+        message: { type: string }
+    ModulesInfo:
+      type: object
+      required: [installer_available, modules, nav]
+      properties:
+        installer_available: { type: boolean }
+        modules:
+          type: array
+          items: { $ref: '#/components/schemas/ModuleInfo' }
+        nav:
+          type: array
+          description: Sidebar entries of running modules
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id: { type: string }
+              label: { type: string }

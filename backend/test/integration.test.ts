@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectStatus, multipartBody, sessionFrom, setupTestApp, type TestApp } from "./harness.ts";
@@ -9,6 +9,8 @@ import { GENERAL_LEDGER_HEADER, MAX_FILE_BYTES } from "../src/files.ts";
 import { readCsv } from "../src/csv.ts";
 import { createUser, setUserActive, SESSION_COOKIE } from "../src/auth.ts";
 import { LOGIN_MAX_FAILURES, LOGIN_MAX_FAILURES_PER_USER, LoginLimiter } from "../src/limiter.ts";
+import { ModuleHost } from "../src/module-host.ts";
+import { fakeGitHub } from "./fake-github.ts";
 
 type Line = { account_code: string; debit_cents: number; credit_cents: number; memo?: string };
 const dr = (code: string, cents: number): Line => ({ account_code: code, debit_cents: cents, credit_cents: 0 });
@@ -636,4 +638,116 @@ test("update settings API", async (t) => {
 
 	// Requires a session, like everything else.
 	expectStatus(await ta.request("GET", "/api/v1/system/update"), 401);
+});
+
+test("modules: runtime, UI and management API", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	const cookie = `${SESSION_COOKIE}=${ta.token}`;
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-modrt-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const hello = path.join(path.resolve(import.meta.dirname, "..", ".."), "examples", "modules", "hello");
+
+	// Installed modules (what the root installer leaves behind): the example,
+	// one that posts entries, and one that fails to load.
+	const modules = path.join(root, "modules");
+	await cp(hello, path.join(modules, "hello"), { recursive: true });
+	await mkdir(path.join(modules, "poster"), { recursive: true });
+	await writeFile(path.join(modules, "poster", "ledger-module.json"), JSON.stringify({ id: "poster", name: "Poster", version: "1.0.0", server: "server.mjs" }));
+	await writeFile(
+		path.join(modules, "poster", "server.mjs"),
+		`export default function (ctx) {
+			ctx.route("POST", "/sale/:amount", (req) => ctx.ledger.createJournalEntry({
+				entry_date: "2026-10-01", description: "Sale via module",
+				lines: [{ account_code: "1000", debit_cents: req.params.amount }, { account_code: "4000", credit_cents: Number(req.params.amount) }],
+			}, req.user));
+			ctx.route("GET", "/boom", () => { throw new ctx.HttpError(418, "teapot"); });
+		}`,
+	);
+	await mkdir(path.join(modules, "broken"), { recursive: true });
+	await writeFile(path.join(modules, "broken", "ledger-module.json"), JSON.stringify({ id: "broken", name: "Broken", version: "1.0.0", server: "server.mjs" }));
+	await writeFile(path.join(modules, "broken", "server.mjs"), `export default function () { throw new Error("cannot start"); }`);
+	// The hello module's migration, as the installer would apply it.
+	await app.db.query(`CREATE SCHEMA mod_hello; SET search_path = mod_hello; ${await readFile(path.join(hello, "migrations", "001_notes.sql"), "utf8")} RESET search_path;`);
+
+	app.modules = new ModuleHost(modules);
+	await app.modules.loadAll(app);
+	assert.equal(app.modules.modules.get("broken")!.error, "cannot start");
+	assert.equal(app.modules.modules.get("hello")!.error, null);
+
+	// The example module's API.
+	await createAccount(ta, "1000", "Bank CAD", "asset", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	let r = await call("GET", "/m/hello/summary");
+	expectStatus(r, 200);
+	assert.equal(r.json().accounts, 2);
+	r = await call("POST", "/m/hello/notes", { body: "First note" });
+	expectStatus(r, 201);
+	assert.equal(r.json().created_by, "tester");
+	expectStatus(await call("POST", "/m/hello/notes", { body: "" }), 422);
+	r = await call("GET", "/m/hello/notes");
+	assert.equal(r.json().data.length, 1);
+	expectStatus(await call("DELETE", `/m/hello/notes/${r.json().data[0].id}`), 204);
+	expectStatus(await call("DELETE", "/m/hello/notes/999"), 404);
+	expectStatus(await call("PUT", "/m/hello/notes"), 405);
+	expectStatus(await call("GET", "/m/hello/nope"), 404);
+	expectStatus(await call("GET", "/m/broken/anything"), 404);
+	expectStatus(await request("GET", "/api/v1/m/hello/summary"), 401); // needs a session
+
+	// Entries posted by a module are validated and attributed like any other.
+	r = await call("POST", "/m/poster/sale/2500");
+	expectStatus(r, 200);
+	assert.equal(r.json().created_by, "tester");
+	assert.equal(r.json().totals[0].amount_cents, 2500);
+	expectStatus(await call("POST", "/m/poster/sale/0"), 422);
+	r = await call("GET", "/m/poster/boom");
+	expectStatus(r, 418);
+	assert.equal(r.json().error.message, "teapot");
+
+	// The UI: same origin, framable by Ledger only, login required.
+	r = await request("GET", "/m/hello/", { cookie });
+	expectStatus(r, 200);
+	assert.match(r.text, /Hello from a module/);
+	assert.equal(r.headers["x-frame-options"], "SAMEORIGIN");
+	expectStatus(await request("GET", "/m/hello", { cookie }), 301);
+	expectStatus(await request("GET", "/m/hello/some/client/route", { cookie }), 200); // index.html
+	expectStatus(await request("GET", "/m/hello/missing.js", { cookie }), 404);
+	expectStatus(await request("GET", "/m/hello/..%2F..%2Fledger-module.json", { cookie }), 404);
+	expectStatus(await request("GET", "/m/hello/"), 401);
+	expectStatus(await request("GET", "/m/poster/", { cookie }), 404); // no UI
+
+	// Management API: preview and add through (fake) GitHub, then remove.
+	r = await call("GET", "/modules");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().nav, [{ id: "hello", label: "Hello" }]);
+	assert.equal(r.json().installer_available, false);
+	const names = r.json().modules.map((m: { id: string; state: string }) => `${m.id}:${m.state}`).sort();
+	assert.deepEqual(names, ["broken:removing", "hello:removing", "poster:removing"]); // installed but not on the wanted list
+
+	const gh = await fakeGitHub(t);
+	process.env.LEDGER_UPDATE_API = gh.base;
+	t.after(() => delete process.env.LEDGER_UPDATE_API);
+	await gh.publish("someone/ledger-hello", "v1.0.0", hello);
+	r = await call("POST", "/modules/preview", { repo: "https://github.com/someone/ledger-hello" });
+	expectStatus(r, 200);
+	assert.equal(r.json().manifest.id, "hello");
+	assert.equal(r.json().tag, "v1.0.0");
+	expectStatus(await call("POST", "/modules/preview", { repo: "someone/nothing-here" }), 422);
+	expectStatus(await call("POST", "/modules/preview", { repo: "not a repo" }), 422);
+	expectStatus(await call("POST", "/modules", { repo: "someone/ledger-hello" }), 409); // updater not set up
+
+	app.update = { config: path.join(root, "config"), status: path.join(root, "status") };
+	await mkdir(app.update.config);
+	await mkdir(app.update.status);
+	r = await call("POST", "/modules", { repo: "someone/ledger-hello" });
+	expectStatus(r, 202);
+	assert.deepEqual(JSON.parse(await readFile(path.join(app.update.config, "modules.json"), "utf8")), [{ repo: "someone/ledger-hello", id: "hello" }]);
+	await stat(path.join(app.update.config, "modules-run-now"));
+	const added = r.json().modules.find((m: { repo: string }) => m.repo === "someone/ledger-hello");
+	assert.equal(added.state, "running"); // matched to the installed copy by id
+	r = await call("DELETE", "/modules/hello");
+	expectStatus(r, 202);
+	assert.deepEqual(JSON.parse(await readFile(path.join(app.update.config, "modules.json"), "utf8")), []);
+	expectStatus(await call("DELETE", "/modules/nonexistent"), 404);
 });

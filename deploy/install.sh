@@ -60,6 +60,8 @@ install -d -m 0755 -o root -g root /var/lib/ledger
 install -d -m 0750 -o ledger -g ledger /var/lib/ledger/update-config
 install -d -m 0750 -o root -g ledger /var/lib/ledger/update-status
 install -d -m 0700 -o root -g root /var/cache/ledger-update
+# Modules: installed by the root updater, read-only to the service.
+install -d -m 0755 -o root -g root /var/lib/ledger/modules
 
 install -d -m 0750 -o root -g ledger /etc/ledger
 if [ ! -f /etc/ledger/ledger.env ]; then

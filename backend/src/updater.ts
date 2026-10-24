@@ -19,6 +19,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import { log } from "./log.ts";
+import { MODULES_RUN_NOW_FILE, modulesDir } from "./modules.ts";
+import { moduleOps, syncModules, type ModuleOps } from "./module-installer.ts";
 import { parseListenAddr } from "./config.ts";
 import {
 	EMPTY_STATUS,
@@ -65,6 +67,8 @@ export interface UpdaterOptions {
 	currentVersion: string;
 	now?: () => number;
 	sys: SystemOps;
+	/** Module syncing (omitted: modules are left alone). */
+	modules?: { dir: string; ops: ModuleOps };
 }
 
 export interface UpdateOutcome {
@@ -155,22 +159,14 @@ async function fetchRelease(o: UpdaterOptions, rel: Release): Promise<string> {
 	return dir;
 }
 
-/**
- * Runs one update if one is requested or due. Never throws: failures are
- * recorded in status.json.
- */
-export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
-	const now = (o.now ?? Date.now)();
-	const runNow = path.join(o.dirs.config, RUN_NOW_FILE);
-	const manual = await fsp.rm(runNow).then(
-		() => true,
-		() => false,
-	);
-	const schedule: UpdateSchedule = await readSchedule(o.dirs);
-	const prev = (await readStatus(o.dirs)) ?? { ...EMPTY_STATUS };
-	const slot = dueSlot(schedule, now, prev.last_scheduled_for);
-	if (!manual && slot === null) return { ran: false, installed: null, rebooted: false };
-
+/** The core update: check, download, install, verify. */
+async function runCore(
+	o: UpdaterOptions,
+	manual: boolean,
+	now: number,
+	slot: number | null,
+	prev: UpdateStatus,
+): Promise<{ ok: boolean; installed: string | null; save: (patch: Partial<UpdateStatus>) => Promise<void>; status: UpdateStatus }> {
 	const status: UpdateStatus = {
 		...prev,
 		state: "running",
@@ -188,42 +184,84 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 	};
 	await save({});
 
-	let installed: string | null = null;
 	try {
 		const rel = await latestRelease(o);
 		status.latest_version = rel.tag;
 		if (!isNewer(rel.tag, o.currentVersion)) {
 			await save({ message: `Up to date (${o.currentVersion}).` });
-		} else {
-			await save({ message: `Downloading ${rel.tag}…` });
-			const dir = await fetchRelease(o, rel);
-			await save({ message: `Backing up the database before installing ${rel.tag}…` });
-			await o.sys.backup();
-			await o.sys.snapshot();
-			await save({ message: `Installing ${rel.tag}…` });
-			await o.sys.install(dir);
-			await o.sys.restart();
-			if (!(await o.sys.healthy())) {
-				await o.sys.rollback();
-				await o.sys.restart();
-				throw new Error(`${rel.tag} did not start correctly; restored ${o.currentVersion}`);
-			}
-			installed = rel.tag;
-			await fsp.rm(path.join(o.cacheDir, rel.tag), { recursive: true, force: true });
-			await save({ installed_version: rel.tag, message: `Installed ${rel.tag} (was ${o.currentVersion}).` });
+			return { ok: true, installed: null, save, status };
 		}
+		await save({ message: `Downloading ${rel.tag}…` });
+		const dir = await fetchRelease(o, rel);
+		await save({ message: `Backing up the database before installing ${rel.tag}…` });
+		await o.sys.backup();
+		await o.sys.snapshot();
+		await save({ message: `Installing ${rel.tag}…` });
+		await o.sys.install(dir);
+		await o.sys.restart();
+		if (!(await o.sys.healthy())) {
+			await o.sys.rollback();
+			await o.sys.restart();
+			throw new Error(`${rel.tag} did not start correctly; restored ${o.currentVersion}`);
+		}
+		await fsp.rm(path.join(o.cacheDir, rel.tag), { recursive: true, force: true });
+		await save({ installed_version: rel.tag, message: `Installed ${rel.tag} (was ${o.currentVersion}).` });
+		return { ok: true, installed: rel.tag, save, status };
 	} catch (err) {
 		if (status.latest_version) await fsp.rm(path.join(o.cacheDir, status.latest_version), { recursive: true, force: true }).catch(() => {});
 		await save({ state: "error", finished_at: new Date().toISOString(), message: `Update failed: ${(err as Error).message}` });
-		return { ran: true, installed: null, rebooted: false };
+		return { ok: false, installed: null, save, status };
+	}
+}
+
+/**
+ * Runs one update if one is requested or due, and syncs modules. Never
+ * throws: failures are recorded in the status files.
+ *
+ *   run-now          ("Check for updates now"): Ledger, then modules
+ *   modules-run-now  (a module was added or removed): modules only
+ *   a due slot       (the schedule): Ledger, then modules, then the reboot policy
+ */
+export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
+	const now = (o.now ?? Date.now)();
+	const take = (name: string) =>
+		fsp.rm(path.join(o.dirs.config, name)).then(
+			() => true,
+			() => false,
+		);
+	const manual = await take(RUN_NOW_FILE);
+	const modulesRequested = await take(MODULES_RUN_NOW_FILE);
+	const schedule: UpdateSchedule = await readSchedule(o.dirs);
+	const prev = (await readStatus(o.dirs)) ?? { ...EMPTY_STATUS };
+	const slot = dueSlot(schedule, now, prev.last_scheduled_for);
+	const core = manual || slot !== null;
+	if (!core && !modulesRequested) return { ran: false, installed: null, rebooted: false };
+
+	const result = core ? await runCore(o, manual, now, slot, prev) : null;
+	const installed = result?.installed ?? null;
+
+	if (o.modules) {
+		try {
+			await syncModules({
+				dirs: o.dirs,
+				modulesDir: o.modules.dir,
+				cacheDir: o.cacheDir,
+				apiBase: o.apiBase,
+				ledgerVersion: installed ?? o.currentVersion,
+				ops: o.modules.ops,
+			});
+		} catch (err) {
+			log.error("module sync failed", { err: (err as Error).message });
+		}
 	}
 
+	if (!result || !result.ok) return { ran: true, installed: null, rebooted: false };
 	// Manual checks reboot only to finish an install; scheduled runs follow the policy.
 	const reboot = schedule.reboot === "always" ? !manual || installed !== null : schedule.reboot === "after_update" && installed !== null;
-	await save({
+	await result.save({
 		state: "ok",
 		finished_at: new Date().toISOString(),
-		message: status.message + (reboot ? " Rebooting the container." : ""),
+		message: result.status.message + (reboot ? " Rebooting the container." : ""),
 	});
 	if (reboot) await o.sys.reboot();
 	return { ran: true, installed, rebooted: reboot };
@@ -292,6 +330,8 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 	const cacheDir = process.env.LEDGER_UPDATE_CACHE || "/var/cache/ledger-update";
 	await fsp.mkdir(cacheDir, { recursive: true, mode: 0o700 });
 	await fsp.chmod(cacheDir, 0o700);
+	const sys = systemOps(cacheDir, process.env.HTTP_ADDR || ":8080");
+	const databaseUrl = process.env.DATABASE_URL ?? "";
 	await runUpdater({
 		dirs,
 		cacheDir,
@@ -299,6 +339,7 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 		apiBase: process.env.LEDGER_UPDATE_API || "https://api.github.com",
 		arch,
 		currentVersion,
-		sys: systemOps(cacheDir, process.env.HTTP_ADDR || ":8080"),
+		sys,
+		modules: databaseUrl ? { dir: modulesDir(), ops: moduleOps(databaseUrl, { restart: sys.restart, healthy: sys.healthy }) } : undefined,
 	});
 }
