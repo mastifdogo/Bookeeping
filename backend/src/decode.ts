@@ -28,6 +28,14 @@ export function parseJson(text: string): unknown {
 	}
 }
 
+/** Converts parsed JSON back to plain values (numbers as numbers), for bodies validated elsewhere. */
+export function plainJson(v: unknown): unknown {
+	if (v instanceof JsonNumber) return Number(v.source);
+	if (Array.isArray(v)) return v.map(plainJson);
+	if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plainJson(x)]));
+	return v;
+}
+
 function kind(v: unknown): string {
 	if (v instanceof JsonNumber) return "number";
 	if (Array.isArray(v)) return "array";

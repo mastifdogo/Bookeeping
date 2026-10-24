@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectStatus, multipartBody, sessionFrom, setupTestApp, type TestApp } from "./harness.ts";
 import { insertJournalEntry, lockAccounts } from "../src/ledger.ts";
@@ -586,4 +587,53 @@ test("financial statements", async (t) => {
 	assert.equal(is.currencies[1].currency, "USD");
 	assert.equal(is.currencies[1].net_income_cents, 80000);
 	expectStatus(await call("GET", "/reports/income-statement?from=2026-02-01&to=2026-01-01"), 422);
+});
+
+test("update settings API", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+
+	// Without the updater's directories the page explains it isn't set up.
+	let r = await call("GET", "/system/update");
+	expectStatus(r, 200);
+	assert.equal(r.json().updater_installed, false);
+	assert.equal(r.json().status, null);
+	expectStatus(await call("POST", "/system/update/check"), 409);
+
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-upd-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	app.update = { config: path.join(root, "config"), status: path.join(root, "status") };
+	await mkdir(app.update.config);
+	await mkdir(app.update.status);
+
+	r = await call("GET", "/system/update");
+	assert.equal(r.json().updater_installed, true);
+	assert.equal(r.json().schedule.enabled, false);
+	assert.equal(r.json().next_run_at, null);
+
+	const schedule = { enabled: true, days: [6, 0], time: "02:15", timezone: "America/Toronto", reboot: "after_update" };
+	r = await call("PUT", "/system/update/schedule", schedule);
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().schedule, { ...schedule, days: [0, 6] });
+	assert.ok(Date.parse(r.json().next_run_at) > Date.now());
+	assert.deepEqual(JSON.parse(await readFile(path.join(app.update.config, "schedule.json"), "utf8")).days, [0, 6]);
+
+	r = await call("PUT", "/system/update/schedule", { ...schedule, time: "25:00", timezone: "Nowhere/Land" });
+	expectStatus(r, 422);
+	assert.equal(r.json().error.details.length, 2);
+	expectStatus(await call("PUT", "/system/update/schedule", { ...schedule, extra: true }), 422);
+
+	expectStatus(await call("POST", "/system/update/check"), 202);
+	await stat(path.join(app.update.config, "run-now"));
+
+	// A run in progress blocks another request.
+	await writeFile(path.join(app.update.status, "status.json"), JSON.stringify({ state: "running", started_at: new Date().toISOString(), message: "Downloading" }));
+	r = await call("GET", "/system/update");
+	assert.equal(r.json().status.state, "running");
+	assert.equal(r.json().status.installed_version, null); // defaults filled in
+	expectStatus(await call("POST", "/system/update/check"), 409);
+
+	// Requires a session, like everything else.
+	expectStatus(await ta.request("GET", "/api/v1/system/update"), 401);
 });

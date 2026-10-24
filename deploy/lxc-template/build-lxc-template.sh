@@ -162,7 +162,7 @@ install -m 0755 "$work/ledger-firstboot.sh" "\$root/usr/local/sbin/ledger-firstb
 install -m 0644 "$work/ledger-firstboot.service" "\$root/etc/systemd/system/ledger-firstboot.service"
 install -d "\$root/etc/systemd/system/ledger.service.d"
 install -m 0644 "$work/ledger-after-firstboot.conf" "\$root/etc/systemd/system/ledger.service.d/firstboot.conf"
-in_root systemctl enable ledger-firstboot.service ledger.service ledger-backup.timer >/dev/null 2>&1
+in_root systemctl enable ledger-firstboot.service ledger.service ledger-backup.timer ledger-update.timer ledger-update.path >/dev/null 2>&1
 if [ "$DISTRO" = ubuntu ]; then
 	in_root systemctl enable systemd-networkd.service >/dev/null 2>&1 || true
 fi

@@ -13,6 +13,7 @@ REL := dist/ledger-$(VERSION)-linux-$(ARCH)
 #   out/bin/ledger              launcher (runs the server or `ledger user ...`)
 #   out/lib/ledger/ledger.mjs   the server, bundled with its dependencies
 #   out/lib/ledger/web/         the SvelteKit static site
+#   out/lib/ledger/VERSION      release version (the updater compares it with GitHub's latest)
 # `make build` uses the system's node; `make release` adds the runtime.
 build: frontend backend
 	rm -rf $(OUT)
@@ -20,6 +21,7 @@ build: frontend backend
 	install -m 0755 backend/ledger.sh $(OUT)/bin/ledger
 	cp backend/dist/ledger.mjs $(OUT)/lib/ledger/
 	cp -R frontend/build $(OUT)/lib/ledger/web
+	echo "$(VERSION)" > $(OUT)/lib/ledger/VERSION
 
 frontend:
 	cd frontend && npm ci && npm run build

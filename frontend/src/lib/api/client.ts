@@ -21,6 +21,8 @@ export type User = Schemas['User'];
 export type BalanceSheet = Schemas['BalanceSheet'];
 export type IncomeStatement = Schemas['IncomeStatement'];
 export type ReportLine = Schemas['ReportLine'];
+export type UpdateInfo = Schemas['UpdateInfo'];
+export type UpdateSchedule = Schemas['UpdateSchedule'];
 
 export const API_BASE = '/api/v1';
 export const ACCOUNT_TYPES: AccountType[] = ['asset', 'liability', 'equity', 'revenue', 'expense'];

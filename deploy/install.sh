@@ -54,6 +54,13 @@ install -m 0644 "$src/db/schema.sql" "$src/db/grants.sql" /usr/local/share/ledge
 install -m 0755 "$src/deploy/setup-db.sh" /usr/local/share/ledger/setup-db.sh
 install -m 0644 "$src/deploy/postgresql-lowmem.conf" /usr/local/share/ledger/
 
+# Automatic updates: the app (user ledger) writes the schedule; the root
+# updater writes its status where the app can read it.
+install -d -m 0755 -o root -g root /var/lib/ledger
+install -d -m 0750 -o ledger -g ledger /var/lib/ledger/update-config
+install -d -m 0750 -o root -g ledger /var/lib/ledger/update-status
+install -d -m 0700 -o root -g root /var/cache/ledger-update
+
 install -d -m 0750 -o root -g ledger /etc/ledger
 if [ ! -f /etc/ledger/ledger.env ]; then
 	install -m 0640 -o root -g ledger "$src/deploy/ledger.env.example" /etc/ledger/ledger.env
@@ -65,8 +72,15 @@ fi
 if command -v systemctl >/dev/null 2>&1; then
 	echo "==> systemd units"
 	install -m 0644 "$src/deploy/ledger.service" "$src/deploy/ledger-backup.service" \
-		"$src/deploy/ledger-backup.timer" /etc/systemd/system/
-	systemctl daemon-reload 2>/dev/null || echo "    (systemd not running; run systemctl daemon-reload later)"
+		"$src/deploy/ledger-backup.timer" "$src/deploy/ledger-update.service" \
+		"$src/deploy/ledger-update.timer" "$src/deploy/ledger-update.path" /etc/systemd/system/
+	# The updater only acts when the schedule (off by default) or the app asks.
+	systemctl enable ledger-update.timer ledger-update.path >/dev/null 2>&1 || true
+	if systemctl daemon-reload 2>/dev/null; then
+		systemctl start ledger-update.timer ledger-update.path 2>/dev/null || true
+	else
+		echo "    (systemd not running; run systemctl daemon-reload later)"
+	fi
 fi
 
 echo "==> CSV directory $CSV_DIR"

@@ -423,7 +423,7 @@ run pct push "$CTID" "$pw_file" /root/.ledger-admin-pw --perms 0600
 ct_sh "ledger-user add '$ADMIN_USER' --password-stdin </root/.ledger-admin-pw; rc=\$?; rm -f /root/.ledger-admin-pw; exit \$rc"
 
 log "starting Ledger and nightly backups"
-ct systemctl enable --now ledger ledger-backup.timer
+ct systemctl enable --now ledger ledger-backup.timer ledger-update.timer ledger-update.path
 wait_healthy
 
 # Check the share is writable by the service (exports, uploads, backups).
