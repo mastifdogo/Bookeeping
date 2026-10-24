@@ -1,6 +1,6 @@
 Fully vibe coded local bookkeeping software
 
-# Accounting
+# Bookeeping
 
 Lightweight double-entry accounting web app, sized for a low-resource Proxmox LXC container.
 
