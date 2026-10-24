@@ -285,7 +285,7 @@ export const UPDATE_USAGE = `usage:
 export async function runUpdateCommand(args: string[], currentVersion: string, dirs: UpdateDirs): Promise<void> {
 	if (args.length !== 1 || args[0] !== "run") throw new Error(UPDATE_USAGE);
 	if (process.getuid?.() !== 0) throw new Error("ledger update run must run as root (it is started by ledger-update.service)");
-	const repo = process.env.LEDGER_UPDATE_REPO || "mastifdogo/Accounting";
+	const repo = process.env.LEDGER_UPDATE_REPO || "mastifdogo/Bookeeping";
 	if (!REPO_RE.test(repo)) throw new Error(`LEDGER_UPDATE_REPO must look like owner/name, got ${JSON.stringify(repo)}`);
 	const arch = process.arch === "x64" ? "amd64" : process.arch === "arm64" ? "arm64" : "";
 	if (!arch) throw new Error(`unsupported architecture ${process.arch}`);

@@ -20,7 +20,7 @@ Lightweight double-entry accounting web app, sized for a low-resource Proxmox LX
 LXC container and installs everything inside it.
 
 1. Download `ledger-<version>-linux-amd64.tar.gz` from a
-   [GitHub Release](https://github.com/mastifdogo/Accounting/releases), or build
+   [GitHub Release](https://github.com/mastifdogo/Bookeeping/releases), or build
    one on a machine with Node.js 22.18+:
 
    ```sh
@@ -88,13 +88,13 @@ configuration and port:
 ### As a Proxmox LXC template
 
 **Download a ready-made one:** every
-[GitHub Release](https://github.com/mastifdogo/Accounting/releases) has a
+[GitHub Release](https://github.com/mastifdogo/Bookeeping/releases) has a
 Debian 12 CT template (`debian-12-ledger_<version>_amd64.tar.zst`) with Ledger
 and PostgreSQL pre-installed. On the Proxmox host:
 
 ```sh
 wget -P /var/lib/vz/template/cache \
-  https://github.com/mastifdogo/Accounting/releases/download/<version>/debian-12-ledger_<version>_amd64.tar.zst
+  https://github.com/mastifdogo/Bookeeping/releases/download/<version>/debian-12-ledger_<version>_amd64.tar.zst
 ```
 
 It then appears under **local → CT Templates**. Each release's notes include

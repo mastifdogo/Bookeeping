@@ -6,7 +6,7 @@
 # reboot the container.
 [Unit]
 Description=Ledger automatic update
-Documentation=https://github.com/mastifdogo/Accounting/blob/main/docs/DEPLOYMENT.md
+Documentation=https://github.com/mastifdogo/Bookeeping/blob/main/docs/DEPLOYMENT.md
 Wants=network-online.target
 After=network-online.target ledger.service
 

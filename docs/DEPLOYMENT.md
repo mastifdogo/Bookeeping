@@ -73,12 +73,12 @@ troubleshooting.
 If you prefer the Proxmox GUI, or want to create several containers, use a
 **CT template** with Ledger and PostgreSQL already installed.
 
-**Download it** from the [Releases page](https://github.com/mastifdogo/Accounting/releases).
+**Download it** from the [Releases page](https://github.com/mastifdogo/Bookeeping/releases).
 On the Proxmox host:
 
 ```sh
 cd /var/lib/vz/template/cache
-wget https://github.com/mastifdogo/Accounting/releases/download/<version>/debian-12-ledger_<version>_amd64.tar.zst
+wget https://github.com/mastifdogo/Bookeeping/releases/download/<version>/debian-12-ledger_<version>_amd64.tar.zst
 sha256sum debian-12-ledger_<version>_amd64.tar.zst     # compare with SHA256SUMS on the release
 ```
 
@@ -338,7 +338,7 @@ automatically**. **Check for updates now** runs a check straight away.
 
 At the scheduled time, `ledger-update.service` (root) runs:
 
-1. It asks GitHub for the latest release of `mastifdogo/Accounting`. Set
+1. It asks GitHub for the latest release of `mastifdogo/Bookeeping`. Set
    `LEDGER_UPDATE_REPO=owner/name` in `/etc/ledger/ledger.env` to follow a
    fork.
 2. If that release is newer than the installed one, it downloads the
