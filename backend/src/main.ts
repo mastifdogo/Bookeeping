@@ -42,6 +42,7 @@ async function serve(): Promise<void> {
 	}
 
 	const app = newApp(db, { ...cfg, version: installedVersion(programDir) });
+	await app.modules.loadAll(app);
 	try {
 		const r = await db.query<{ n: bigint }>(`SELECT count(*) AS n FROM users WHERE is_active`);
 		if (r.rows[0]!.n === 0n) log.warn("no active users: create one with `ledger user add <name>` to log in");

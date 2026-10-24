@@ -23,6 +23,9 @@ export type IncomeStatement = Schemas['IncomeStatement'];
 export type ReportLine = Schemas['ReportLine'];
 export type UpdateInfo = Schemas['UpdateInfo'];
 export type UpdateSchedule = Schemas['UpdateSchedule'];
+export type ModulesInfo = Schemas['ModulesInfo'];
+export type ModuleInfo = Schemas['ModuleInfo'];
+export type ModulePreview = Schemas['ModulePreview'];
 
 export const API_BASE = '/api/v1';
 export const ACCOUNT_TYPES: AccountType[] = ['asset', 'liability', 'equity', 'revenue', 'expense'];

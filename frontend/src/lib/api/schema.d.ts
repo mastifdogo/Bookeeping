@@ -458,6 +458,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/modules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Installed and wanted modules, and sidebar entries */
+        get: operations["listModules"];
+        put?: never;
+        /** Add a module from a GitHub repository (installed within seconds) */
+        post: operations["addModule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/modules/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read a repository's module manifest from its latest release, without installing */
+        post: operations["previewModule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/modules/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Update all modules to their latest releases now */
+        post: operations["syncModules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/modules/{moduleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a module (its data is kept) */
+        delete: operations["removeModule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -788,6 +857,59 @@ export interface components {
             next_run_at: string | null;
             /** @description Null until the updater has run once */
             status: components["schemas"]["UpdateStatus"] | null;
+        };
+        ModuleRepo: {
+            /**
+             * @description owner/name or a github.com URL
+             * @example someone/ledger-invoicing
+             */
+            repo: string;
+        };
+        ModuleManifest: {
+            id: string;
+            name: string;
+            version: string;
+            description: string;
+            /** @example >=0.6.0 */
+            ledger: string | null;
+            server: string | null;
+            ui: string | null;
+            nav: {
+                label: string;
+            } | null;
+            migrations: string | null;
+        };
+        ModulePreview: {
+            repo: string;
+            tag: string;
+            manifest: components["schemas"]["ModuleManifest"];
+            compatible: boolean;
+            ledger_version: string;
+        };
+        ModuleInfo: {
+            repo: string | null;
+            id: string | null;
+            name: string;
+            version: string | null;
+            description: string;
+            nav_label: string | null;
+            /**
+             * @description running; failed (installed but would not load: see message);
+             *     pending (waiting for the installer); error (the installer could
+             *     not install it: see message); removing (taken off the list).
+             * @enum {string}
+             */
+            state: "running" | "failed" | "pending" | "error" | "removing";
+            message: string;
+        };
+        ModulesInfo: {
+            installer_available: boolean;
+            modules: components["schemas"]["ModuleInfo"][];
+            /** @description Sidebar entries of running modules */
+            nav: {
+                id: string;
+                label: string;
+            }[];
         };
     };
     responses: {
@@ -1511,6 +1633,132 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listModules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Modules */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModulesInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    addModule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModuleRepo"];
+            };
+        };
+        responses: {
+            /** @description Queued for installation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModulesInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    previewModule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModuleRepo"];
+            };
+        };
+        responses: {
+            /** @description The module that would be installed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModulePreview"];
+                };
+            };
+            401: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    syncModules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModulesInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    removeModule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued for removal */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModulesInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };

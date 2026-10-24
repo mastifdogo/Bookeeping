@@ -8,7 +8,7 @@ import path from "node:path";
 /** The page adapter-static writes for routes that are not prerendered (`fallback` in frontend/vite.config.ts). */
 const SPA_FALLBACK = "200.html";
 
-const CONTENT_TYPES: Record<string, string> = {
+export const CONTENT_TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
 	".js": "text/javascript; charset=utf-8",
 	".mjs": "text/javascript; charset=utf-8",

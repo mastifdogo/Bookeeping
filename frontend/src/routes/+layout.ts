@@ -16,12 +16,15 @@ export const load: LayoutLoad = async ({ fetch, url, depends }) => {
 	if (!user && !onLogin) {
 		if (res.response.status !== 401) {
 			// API down or misconfigured: let the page show the error.
-			return { user: null };
+			return { user: null, modules: [] };
 		}
 		redirect(307, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
 	}
 	if (user && onLogin) redirect(307, safeNext(url.searchParams.get('next')));
-	return { user };
+	// Sidebar entries for installed modules (none if the request fails).
+	depends('app:modules');
+	const modules = user ? ((await api(fetch).GET('/modules')).data?.nav ?? []) : [];
+	return { user, modules };
 };
 
 /** Only same-site relative paths are followed after login. */

@@ -163,6 +163,9 @@ backend/src/reports.ts    Balance sheet and income statement
 backend/src/cli.ts        `ledger user add|passwd|disable|enable|list`
 backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
 backend/src/updater.ts    `ledger update run`: the root updater (GitHub Releases, verify, install, rollback, reboot)
+backend/src/module-host.ts       Runs installed modules: routes, UI, the `ctx` API
+backend/src/module-installer.ts  Root side: installs/updates/removes modules, runs their migrations
+examples/modules/hello/   A complete example module
 backend/src/http.ts       Routes, handlers, error mapping, request safety
 backend/src/decode.ts     Strict JSON request decoding (exact integers, no unknown fields)
 backend/src/csv.ts        RFC 4180 CSV reader/writer
@@ -269,6 +272,16 @@ container afterwards. At that time a root service installs the latest GitHub
 Release if it is newer: it verifies the checksum, backs up the database
 first, and rolls back if the new version doesn't start. Details:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#9-upgrading).
+
+### Modules
+
+The **Modules** page installs extensions from GitHub repositories, such as
+invoicing, dashboards or an LLM gateway. Enter `owner/name`; Ledger shows
+what the module does, then installs its latest release. A module runs inside
+Ledger and appears in the sidebar. It can read the books and post entries,
+but it can't edit or delete posted ones. Writing a module:
+[docs/MODULES.md](docs/MODULES.md); a working example is in
+`examples/modules/hello/`.
 
 ### Reports
 

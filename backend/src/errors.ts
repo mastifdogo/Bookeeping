@@ -71,6 +71,17 @@ export class TooManyLoginsError extends Error {
 	}
 }
 
+/** An error that maps directly to a status and error code. */
+export class HttpError extends Error {
+	readonly status: number;
+	readonly code: string;
+	constructor(status: number, message: string, code?: string) {
+		super(message);
+		this.status = status;
+		this.code = code ?? (status === 404 ? "not_found" : status === 409 ? "conflict" : status === 401 ? "unauthorized" : status === 403 ? "forbidden" : status >= 500 ? "internal_error" : "bad_request");
+	}
+}
+
 /** An upload larger than the limit (HTTP 413). */
 export class TooLargeError extends Error {
 	constructor() {

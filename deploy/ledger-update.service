@@ -1,6 +1,7 @@
 # /etc/systemd/system/ledger-update.service
 # Installs new Ledger releases from GitHub on the schedule set in the app
-# (Updates page), or when the app asks for a check. Started every 5 minutes
+# (Updates page), or when the app asks for a check, and installs, updates
+# or removes modules chosen on the Modules page. Started every 5 minutes
 # by ledger-update.timer and on request by ledger-update.path; it exits at
 # once when nothing is due. Runs as root: it installs the program and may
 # reboot the container.
