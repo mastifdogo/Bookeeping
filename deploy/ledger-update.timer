@@ -1,0 +1,10 @@
+# /etc/systemd/system/ledger-update.timer
+[Unit]
+Description=Check whether a scheduled Ledger update is due
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

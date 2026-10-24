@@ -29,7 +29,17 @@ import {
 	decodePasswordChange,
 	decodeReverseRequest,
 	parseJson,
+	plainJson,
 } from "./decode.ts";
+import {
+	nextScheduledTime,
+	readSchedule,
+	readStatus,
+	requestRunNow,
+	updaterInstalled,
+	validateSchedule,
+	writeSchedule,
+} from "./update.ts";
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listCurrencies, updateAccount } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry, type EntryFilter } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
@@ -324,16 +334,21 @@ async function handleHealth(c: Ctx): Promise<void> {
 
 async function handleLogin(c: Ctx): Promise<void> {
 	const input = await decodeBody(c, true, decodeLoginRequest);
-	const key = clientIP(c.req) + "|" + normalizeUsername(input.username);
-	if (!c.app.logins.allowed(key)) throw new TooManyLoginsError();
+	const user = normalizeUsername(input.username);
+	const key = clientIP(c.req) + "|" + user;
+	if (!c.app.logins.allowed(key) || !c.app.userLogins.allowed(user)) throw new TooManyLoginsError();
 	let result;
 	try {
 		result = await login(c.app, input.username, input.password);
 	} catch (err) {
-		if (err instanceof BadCredentialsError) c.app.logins.fail(key);
+		if (err instanceof BadCredentialsError) {
+			c.app.logins.fail(key);
+			c.app.userLogins.fail(user);
+		}
 		throw err;
 	}
 	c.app.logins.reset(key);
+	c.app.userLogins.reset(user);
 	setSessionCookie(c, result.token, SESSION_MAX_AGE_SECONDS);
 	writeJSON(c.res, 200, publicUser(result.user));
 }
@@ -518,6 +533,45 @@ async function handleImportJournalEntries(c: Ctx): Promise<void> {
 	writeJSON(c.res, 201, await importJournalEntries(c.app, input.filename, c.user!.id));
 }
 
+async function updateInfo(c: Ctx) {
+	const schedule = await readSchedule(c.app.update);
+	const next = nextScheduledTime(schedule, Date.now());
+	return {
+		current_version: c.app.version,
+		updater_installed: await updaterInstalled(c.app.update),
+		schedule,
+		next_run_at: next === null ? null : new Date(next).toISOString(),
+		status: await readStatus(c.app.update),
+	};
+}
+
+async function handleGetUpdate(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await updateInfo(c));
+}
+
+async function requireUpdater(c: Ctx): Promise<void> {
+	if (!(await updaterInstalled(c.app.update))) {
+		throw new ConflictError("automatic updates are not set up on this server; install from a release with deploy/install.sh");
+	}
+}
+
+async function handlePutUpdateSchedule(c: Ctx): Promise<void> {
+	const schedule = validateSchedule(plainJson(await decodeBody(c, true, (v) => v)));
+	await requireUpdater(c);
+	await writeSchedule(c.app.update, schedule);
+	writeJSON(c.res, 200, await updateInfo(c));
+}
+
+async function handleCheckUpdate(c: Ctx): Promise<void> {
+	await requireUpdater(c);
+	const status = await readStatus(c.app.update);
+	// A run that never finished (power loss, say) stops blocking after an hour.
+	const started = Date.parse(status?.started_at ?? "");
+	if (status?.state === "running" && Date.now() - started < 3600_000) throw new ConflictError("an update is already running");
+	await requestRunNow(c.app.update);
+	writeJSON(c.res, 202, await updateInfo(c));
+}
+
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
@@ -556,6 +610,10 @@ const ROUTES: Route[] = [
 	route("POST", "/files", true, handleUploadFile),
 	route("GET", "/files/:filename", true, handleDownloadFile),
 	route("POST", "/imports/journal-entries", true, handleImportJournalEntries),
+
+	route("GET", "/system/update", true, handleGetUpdate),
+	route("PUT", "/system/update/schedule", true, handlePutUpdateSchedule),
+	route("POST", "/system/update/check", true, handleCheckUpdate),
 ];
 
 /** Matches a path relative to /api/v1 against a route; returns its decoded params. */

@@ -6,6 +6,7 @@
 //   ledger user disable <name>  block logins (ends their sessions)
 //   ledger user enable <name>
 //   ledger user list
+//   ledger update run           install a release if requested or due (root; see updater.ts)
 //
 // Pass --password-stdin to add/passwd to read the password from stdin.
 
@@ -19,11 +20,15 @@ import { connectDB } from "./db.ts";
 import { createHandler } from "./http.ts";
 import { log } from "./log.ts";
 import { runUserCommand } from "./cli.ts";
+import { installedVersion, updateDirs } from "./update.ts";
+import { runUpdateCommand } from "./updater.ts";
+
+/** Where the program lives: the bundle's directory (lib/ledger), or src/ in a checkout. */
+const programDir = path.dirname(fileURLToPath(import.meta.url));
 
 /** The built frontend: "web" next to the server bundle, or frontend/build in a checkout. */
 function defaultWebDir(): string {
-	const here = path.dirname(fileURLToPath(import.meta.url));
-	return path.basename(here) === "src" ? path.join(here, "..", "..", "frontend", "build") : path.join(here, "web");
+	return path.basename(programDir) === "src" ? path.join(programDir, "..", "..", "frontend", "build") : path.join(programDir, "web");
 }
 
 async function serve(): Promise<void> {
@@ -36,7 +41,7 @@ async function serve(): Promise<void> {
 		log.warn("CSV directory is not available; exports will fail", { dir: cfg.csvDir, err: (err as Error).message });
 	}
 
-	const app = newApp(db, cfg);
+	const app = newApp(db, { ...cfg, version: installedVersion(programDir) });
 	try {
 		const r = await db.query<{ n: bigint }>(`SELECT count(*) AS n FROM users WHERE is_active`);
 		if (r.rows[0]!.n === 0n) log.warn("no active users: create one with `ledger user add <name>` to log in");
@@ -87,6 +92,15 @@ async function main(): Promise<void> {
 	}
 	process.title = "ledger";
 	const [, , command, ...args] = process.argv;
+	if (command === "update") {
+		try {
+			await runUpdateCommand(args, installedVersion(programDir), updateDirs());
+		} catch (err) {
+			process.stderr.write(`error: ${(err as Error).message}\n`);
+			process.exitCode = 1;
+		}
+		return;
+	}
 	if (command === "user") {
 		try {
 			await runUserCommand(args);

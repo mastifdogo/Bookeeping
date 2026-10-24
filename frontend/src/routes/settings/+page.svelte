@@ -49,9 +49,9 @@
 	<ErrorNotice {error} />
 	<div style="display:flex; flex-direction:column; gap:0.8rem">
 		<label>Current password <input type="password" bind:value={current} autocomplete="current-password" required /></label>
-		<label>New password <input type="password" bind:value={next} autocomplete="new-password" required minlength="10" /></label>
-		<label>Repeat new password <input type="password" bind:value={repeat} autocomplete="new-password" required minlength="10" /></label>
+		<label>New password <input type="password" bind:value={next} autocomplete="new-password" required minlength="4" /></label>
+		<label>Repeat new password <input type="password" bind:value={repeat} autocomplete="new-password" required minlength="4" /></label>
 		<div><button class="primary" disabled={busy}>Change password</button></div>
 	</div>
-	<p class="muted small" style="margin-bottom:0">At least 10 characters. A few random words make a strong, memorable password.</p>
+	<p class="muted small" style="margin-bottom:0">At least 4 characters (a 4-digit PIN works). Longer is safer: a few random words make a strong, memorable password.</p>
 </form>

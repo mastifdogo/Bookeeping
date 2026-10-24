@@ -187,8 +187,8 @@ done
 case "$ADMIN_USER" in
 '' | [!a-z0-9]* | *[!a-z0-9._-]*) die "--admin-user: use lowercase letters, digits, '.', '_' or '-'" ;;
 esac
-if [ -n "$ADMIN_PASSWORD" ] && [ "${#ADMIN_PASSWORD}" -lt 10 ]; then
-	die "the admin password must be at least 10 characters"
+if [ -n "$ADMIN_PASSWORD" ] && [ "${#ADMIN_PASSWORD}" -lt 4 ]; then
+	die "the admin password must be at least 4 characters"
 fi
 
 # Locate the release: an explicit tarball, or the directory this script is in.
@@ -423,7 +423,7 @@ run pct push "$CTID" "$pw_file" /root/.ledger-admin-pw --perms 0600
 ct_sh "ledger-user add '$ADMIN_USER' --password-stdin </root/.ledger-admin-pw; rc=\$?; rm -f /root/.ledger-admin-pw; exit \$rc"
 
 log "starting Ledger and nightly backups"
-ct systemctl enable --now ledger ledger-backup.timer
+ct systemctl enable --now ledger ledger-backup.timer ledger-update.timer ledger-update.path
 wait_healthy
 
 # Check the share is writable by the service (exports, uploads, backups).

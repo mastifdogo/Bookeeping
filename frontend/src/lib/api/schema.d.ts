@@ -402,6 +402,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Installed version, update schedule and the updater's last result */
+        get: operations["getUpdate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/update/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set when updates are installed and whether the container reboots */
+        put: operations["setUpdateSchedule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/update/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check GitHub now and install a newer release if there is one
+         * @description Queues a run of the updater (it starts within seconds). It reboots
+         *     only if it installed a release and the schedule's reboot policy is
+         *     not `never`. Poll `GET /system/update` for progress.
+         */
+        post: operations["checkForUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -454,7 +510,7 @@ export interface components {
             current_password: string;
             /**
              * Format: password
-             * @description 10+ characters, at most 72 bytes
+             * @description 4+ characters (a 4-digit PIN is allowed), at most 72 bytes
              */
             new_password: string;
         };
@@ -682,6 +738,56 @@ export interface components {
             sha256: string;
             entries_imported: number;
             lines_imported: number;
+        };
+        UpdateSchedule: {
+            /** @description Whether scheduled runs happen */
+            enabled: boolean;
+            /** @description Days of the week, 0 = Sunday ... 6 = Saturday */
+            days: number[];
+            /**
+             * @description 24-hour local time
+             * @example 03:30
+             */
+            time: string;
+            /**
+             * @description IANA time zone for days and time
+             * @example America/Winnipeg
+             */
+            timezone: string;
+            /**
+             * @description When a scheduled run reboots the container: never, only after
+             *     installing a release, or always (even when already up to date).
+             * @enum {string}
+             */
+            reboot: "never" | "after_update" | "always";
+        };
+        UpdateStatus: {
+            /** @enum {string} */
+            state: "idle" | "running" | "ok" | "error";
+            /** @enum {string|null} */
+            trigger: "scheduled" | "manual" | null;
+            message: string;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+            /** @description Latest release on GitHub at the last check */
+            latest_version: string | null;
+            /** @description Set when the last run installed a release */
+            installed_version: string | null;
+            /** Format: date-time */
+            last_scheduled_for: string | null;
+        };
+        UpdateInfo: {
+            /** @example v0.6.0 */
+            current_version: string;
+            /** @description False when the server was not installed from a release */
+            updater_installed: boolean;
+            schedule: components["schemas"]["UpdateSchedule"];
+            /** Format: date-time */
+            next_run_at: string | null;
+            /** @description Null until the updater has run once */
+            status: components["schemas"]["UpdateStatus"] | null;
         };
     };
     responses: {
@@ -1333,6 +1439,79 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Update information */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    setUpdateSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSchedule"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    checkForUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

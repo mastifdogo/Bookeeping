@@ -27,6 +27,8 @@ TasksMax=64
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/app/csv_data
+# The update schedule set in the app (the root updater reads it).
+ReadWritePaths=-/var/lib/ledger/update-config
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

@@ -161,6 +161,8 @@ backend/src/import.ts     All-or-nothing CSV import of journal entries
 backend/src/auth.ts       Users, bcrypt passwords, sessions
 backend/src/reports.ts    Balance sheet and income statement
 backend/src/cli.ts        `ledger user add|passwd|disable|enable|list`
+backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
+backend/src/updater.ts    `ledger update run`: the root updater (GitHub Releases, verify, install, rollback, reboot)
 backend/src/http.ts       Routes, handlers, error mapping, request safety
 backend/src/decode.ts     Strict JSON request decoding (exact integers, no unknown fields)
 backend/src/csv.ts        RFC 4180 CSV reader/writer
@@ -258,6 +260,15 @@ session in an HttpOnly, SameSite=Strict cookie. Sessions end after 8 hours idle
 or 7 days. Repeated failed logins are throttled. There's no sign-up page:
 users are managed with `ledger user …` on the server. Every journal entry and
 import records who posted it.
+
+### Automatic updates
+
+The **Updates** page (sidebar) shows the installed version and sets a
+schedule: days of the week, time, time zone, and whether to reboot the
+container afterwards. At that time a root service installs the latest GitHub
+Release if it is newer: it verifies the checksum, backs up the database
+first, and rolls back if the new version doesn't start. Details:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#9-upgrading).
 
 ### Reports
 

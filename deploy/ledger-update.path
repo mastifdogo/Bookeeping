@@ -1,0 +1,11 @@
+# /etc/systemd/system/ledger-update.path
+# The app writes this file when you press "Check for updates now".
+[Unit]
+Description=Run a Ledger update check when the app requests one
+
+[Path]
+PathExists=/var/lib/ledger/update-config/run-now
+Unit=ledger-update.service
+
+[Install]
+WantedBy=paths.target

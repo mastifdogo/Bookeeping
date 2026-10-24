@@ -19,6 +19,9 @@ What runs where:
 | `/usr/local/lib/ledger/` | the server (`ledger.mjs`), the web UI (`web/`) and its Node.js runtime (`node`) |
 | `/usr/local/sbin/ledger-user` | root wrapper: runs `ledger user …` with the service config |
 | `/usr/local/bin/ledger-backup` | nightly `pg_dump` (run by `ledger-backup.timer`) |
+| `ledger-update.timer` / `.path` | automatic updates from GitHub Releases on the schedule set in the app (see step 9) |
+| `/var/lib/ledger/update-config/` | the update schedule, written by the app (user `ledger`) |
+| `/var/lib/ledger/update-status/` | the updater's last result, written by root, shown in the app |
 | `/etc/ledger/ledger.env` | configuration, including the DB password (root:ledger, 0640) |
 | `/usr/local/share/ledger/` | `schema.sql`, `grants.sql`, `setup-db.sh`, PostgreSQL tuning |
 | `/app/csv_data/` | CSV uploads/exports; `backups/` holds database dumps |
@@ -241,7 +244,7 @@ the password are kept.
 
 ```sh
 ledger-user add alice                # prompts for a password (10+ characters)
-systemctl enable --now ledger ledger-backup.timer
+systemctl enable --now ledger ledger-backup.timer ledger-update.timer ledger-update.path
 systemctl status ledger
 ```
 
@@ -327,6 +330,43 @@ backups work.
 
 ## 9. Upgrading
 
+### Automatically (recommended)
+
+Open **Updates** in the app's sidebar. Choose the days, time and time zone,
+whether to reboot the container, and tick **Install updates
+automatically**. **Check for updates now** runs a check straight away.
+
+At the scheduled time, `ledger-update.service` (root) runs:
+
+1. It asks GitHub for the latest release of `mastifdogo/Accounting`. Set
+   `LEDGER_UPDATE_REPO=owner/name` in `/etc/ledger/ledger.env` to follow a
+   fork.
+2. If that release is newer than the installed one, it downloads the
+   tarball and `SHA256SUMS` and verifies the checksum.
+3. It backs up the database (the same dump as the nightly backup), keeps a
+   copy of the installed program and runs the release's `install.sh`.
+   Then it restarts the service and checks `/api/v1/health`.
+4. If the new version doesn't come up within a minute, it puts the previous
+   one back.
+5. It reboots the container according to the reboot setting:
+   - **always**: every scheduled run, even when already up to date.
+   - **only after an update**: only when it installed a release.
+   - **never**: no reboot.
+
+   A manual check reboots only after installing an update.
+
+The timer wakes every 5 minutes and exits at once when nothing is due. A
+run missed by more than 6 hours (the container was off, say) waits for the
+next slot. The updater needs outbound HTTPS to `api.github.com` and
+GitHub's download hosts (`*.githubusercontent.com`). Its log is in
+`journalctl -u ledger-update`.
+
+The web app never installs anything itself. It only writes the schedule
+and a "check now" request; the root service validates them and installs
+only official releases from the configured repository.
+
+### By hand
+
 Build a new release and copy it into the container, then:
 
 ```sh
@@ -354,6 +394,8 @@ schema only.
 | `password authentication failed for user "ledger_app"` | Re-run `APP_PASSWORD=<new> sh /usr/local/share/ledger/setup-db.sh`; it resets the password and updates `ledger.env`. |
 | Log in works but you're logged out immediately behind a proxy | The proxy serves HTTPS but doesn't send `X-Forwarded-Proto`, or `COOKIE_SECURE=true` is set while you browse over plain HTTP. |
 | "cross-origin request rejected" (403) behind a proxy | The proxy rewrites `Host`. Pass the original host through. |
+| Updates page says updates aren't set up | The server was installed without `deploy/install.sh` 0.6+; run it from a current release. |
+| Update failed: GitHub answered 403 | GitHub's rate limit for unauthenticated requests (60 per hour per IP); it clears within an hour. |
 | Forgot the only password | `ledger-user passwd <name>` as root in the container. |
 | `JavaScript heap out of memory` in the log | Raise `LEDGER_MAX_HEAP_MB` in `ledger.env` (keep it well below `MemoryMax=256M`) and restart. |
 

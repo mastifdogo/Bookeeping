@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Ledger API
-  version: 0.4.0
+  version: 0.6.0
   description: |
     API for a lightweight double-entry accounting ledger.
 
@@ -51,8 +51,14 @@ info:
     `/auth/login` and `/auth/logout` requires it and answers 401 without it.
     Sessions end after 8 hours of inactivity or 7 days. Users are managed on
     the server with `ledger user add|passwd|disable|enable|list`; there is no
-    self-registration. Repeated failed logins for the same username and client
-    are refused with 429 for 15 minutes.
+    self-registration. Repeated failed logins are refused with 429 for 15
+    minutes: 10 per username and client, or 30 per username from anywhere.
+
+    ## Automatic updates
+    `/system/update` shows the installed version and the updater's status,
+    and stores the update schedule. A root service on the server
+    (`ledger-update.timer`) reads the schedule, installs new GitHub releases
+    and reboots the container. The app itself never installs anything.
 
     ## Requests
     JSON request bodies must be sent with `Content-Type: application/json`
@@ -582,6 +588,60 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /system/update:
+    get:
+      tags: [System]
+      operationId: getUpdate
+      summary: Installed version, update schedule and the updater's last result
+      responses:
+        '200':
+          description: Update information
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdateInfo' }
+        '401': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /system/update/schedule:
+    put:
+      tags: [System]
+      operationId: setUpdateSchedule
+      summary: Set when updates are installed and whether the container reboots
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateSchedule' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdateInfo' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /system/update/check:
+    post:
+      tags: [System]
+      operationId: checkForUpdate
+      summary: Check GitHub now and install a newer release if there is one
+      description: |
+        Queues a run of the updater (it starts within seconds). It reboots
+        only if it installed a release and the schedule's reboot policy is
+        not `never`. Poll `GET /system/update` for progress.
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdateInfo' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
 components:
   securitySchemes:
     sessionCookie:
@@ -692,7 +752,7 @@ components:
       additionalProperties: false
       properties:
         current_password: { type: string, format: password }
-        new_password: { type: string, format: password, minLength: 10, description: '10+ characters, at most 72 bytes' }
+        new_password: { type: string, format: password, minLength: 4, description: '4+ characters (a 4-digit PIN is allowed), at most 72 bytes' }
 
     ReportLine:
       type: object
@@ -996,3 +1056,50 @@ components:
         sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         entries_imported: { type: integer }
         lines_imported: { type: integer }
+
+    UpdateSchedule:
+      type: object
+      additionalProperties: false
+      required: [enabled, days, time, timezone, reboot]
+      properties:
+        enabled: { type: boolean, description: Whether scheduled runs happen }
+        days:
+          type: array
+          minItems: 1
+          maxItems: 7
+          uniqueItems: true
+          items: { type: integer, minimum: 0, maximum: 6 }
+          description: Days of the week, 0 = Sunday ... 6 = Saturday
+        time: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', example: '03:30', description: 24-hour local time }
+        timezone: { type: string, example: America/Winnipeg, description: IANA time zone for days and time }
+        reboot:
+          type: string
+          enum: [never, after_update, always]
+          description: |
+            When a scheduled run reboots the container: never, only after
+            installing a release, or always (even when already up to date).
+    UpdateStatus:
+      type: object
+      required: [state, trigger, message, started_at, finished_at, latest_version, installed_version, last_scheduled_for]
+      properties:
+        state: { type: string, enum: [idle, running, ok, error] }
+        trigger: { type: string, enum: [scheduled, manual], nullable: true }
+        message: { type: string }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        latest_version: { type: string, nullable: true, description: Latest release on GitHub at the last check }
+        installed_version: { type: string, nullable: true, description: Set when the last run installed a release }
+        last_scheduled_for: { type: string, format: date-time, nullable: true }
+    UpdateInfo:
+      type: object
+      required: [current_version, updater_installed, schedule, next_run_at, status]
+      properties:
+        current_version: { type: string, example: v0.6.0 }
+        updater_installed: { type: boolean, description: False when the server was not installed from a release }
+        schedule: { $ref: '#/components/schemas/UpdateSchedule' }
+        next_run_at: { type: string, format: date-time, nullable: true }
+        status:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/UpdateStatus' }]
+          nullable: true
+          description: Null until the updater has run once
