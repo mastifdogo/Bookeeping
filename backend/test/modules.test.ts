@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { compatible, normalizeRepo, scanInstalled, validateDesired, validateManifest, writeDesired } from "../src/modules.ts";
@@ -69,6 +69,20 @@ function fakeOps() {
 	};
 	return ops;
 }
+
+test("scanInstalled follows a symlinked module directory", async (t) => {
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-mods-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const modulesDir = path.join(root, "modules");
+	await mkdir(modulesDir);
+	await symlink(HELLO, path.join(modulesDir, "hello"), "dir");
+	// A link to a file is not a module.
+	await writeFile(path.join(root, "file"), "");
+	await symlink(path.join(root, "file"), path.join(modulesDir, "notadir"));
+	const installed = await scanInstalled(modulesDir);
+	assert.deepEqual(installed.map((i) => i.manifest.id), ["hello"]);
+	assert.equal(installed[0]!.dir, path.join(modulesDir, "hello"));
+});
 
 async function world(t: import("node:test").TestContext) {
 	const root = await mkdtemp(path.join(tmpdir(), "ledger-mods-"));

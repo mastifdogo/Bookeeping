@@ -166,8 +166,10 @@ export async function scanInstalled(dir: string): Promise<InstalledModule[]> {
 	const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
 	const out: InstalledModule[] = [];
 	for (const e of entries) {
-		if (!e.isDirectory() || !MODULE_ID_RE.test(e.name)) continue;
+		if (!MODULE_ID_RE.test(e.name)) continue;
 		const mdir = path.join(dir, e.name);
+		// Follow symlinks so a module linked in for local development loads.
+		if (!e.isDirectory() && !(e.isSymbolicLink() && (await fsp.stat(mdir).catch(() => null))?.isDirectory())) continue;
 		const text = await readSmallFile(path.join(mdir, MANIFEST_FILE));
 		if (text === null) continue;
 		let manifest: ModuleManifest;
