@@ -31,6 +31,21 @@
 		menu: 'M4 6h16M4 12h16M4 18h16'
 	} as const;
 
+	// Icons modules can name in their manifest's nav.icon (docs/MODULES.md).
+	const MODULE_ICONS: Record<string, string> = {
+		hammer: 'M15 12l-8.4 8.4a1 1 0 1 1-3-3L12 9M18 15l4-4M21.5 11.5l-1.9-1.9A2 2 0 0 1 19 8.2V7l-2.3-2.3a6 6 0 0 0-4.2-1.7L9 3l.9.8A6.2 6.2 0 0 1 12 8.4V10l2 2h1.2a2 2 0 0 1 1.4.6l1.9 1.9',
+		invoice: 'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3',
+		cart: 'M3 4h2l2.5 11h11L21 7H6.2M9 20a1 1 0 1 0 0-.01M18 20a1 1 0 1 0 0-.01',
+		chart: 'M4 20h16M7 16V11M12 16V6M17 16v-3',
+		users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M18 14a7 7 0 0 1 4 7',
+		mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
+		calendar: 'M4 5h16v16H4zM4 10h16M8 3v4M16 3v4',
+		box: 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',
+		dollar: 'M12 2v20M17 6.5C17 4.6 14.8 4 12 4S7 5 7 7.5 9.5 10.5 12 11s5 1.5 5 4-2.2 3.5-5 3.5-5-.9-5-3',
+		wrench: 'M14.7 6.3a4 4 0 0 0 5 5L22 14l-3 3-2.4-2.3a4 4 0 0 0-5-5L4 17.3a2 2 0 1 0 2.8 2.8l7.6-7.6'
+	};
+	const moduleIcon = (name: string | null) => (name && MODULE_ICONS[name]) || ICONS.module;
+
 	const links = [
 		{ href: '/', label: 'Dashboard', exact: true, icon: ICONS.dashboard },
 		{ href: '/journal', label: 'Journal', exact: true, icon: ICONS.journal },
@@ -117,7 +132,7 @@
 						{#each data.modules as mod (mod.id)}
 							<li>
 								<a href="/apps/{mod.id}" title={mod.label} aria-current={active('/apps/' + mod.id, false) ? 'page' : undefined}>
-									{@render icon(ICONS.module)}<span class="label">{mod.label}</span>
+									{@render icon(moduleIcon(mod.icon))}<span class="label">{mod.label}</span>
 								</a>
 							</li>
 						{/each}

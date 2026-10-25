@@ -13,7 +13,15 @@ const HELLO = path.join(repoRoot, "examples", "modules", "hello");
 test("the example module's manifest is valid", async () => {
 	const m = validateManifest(JSON.parse(await readFile(path.join(HELLO, "ledger-module.json"), "utf8")));
 	assert.equal(m.id, "hello");
-	assert.deepEqual(m.nav, { label: "Hello" });
+	assert.deepEqual(m.nav, { label: "Hello", icon: null });
+});
+
+test("nav icons", () => {
+	const base = { id: "sales", name: "Sales", version: "0.1.0", ui: "ui" };
+	assert.deepEqual(validateManifest({ ...base, nav: { label: "Sales", icon: "hammer" } }).nav, { label: "Sales", icon: "hammer" });
+	// Names from newer Ledger versions are accepted (and shown as the generic icon).
+	assert.deepEqual(validateManifest({ ...base, nav: { label: "Sales", icon: "rocket-ship" } }).nav, { label: "Sales", icon: "rocket-ship" });
+	assert.deepEqual(validateManifest({ ...base, nav: { label: "Sales" } }).nav, { label: "Sales", icon: null });
 });
 
 test("validateManifest rejects bad manifests", () => {
@@ -28,6 +36,9 @@ test("validateManifest rejects bad manifests", () => {
 		{ ...ok, server: "/abs.mjs" },
 		{ ...ok, ui: ".hidden" },
 		{ ...ok, nav: { label: "Budget" } }, // nav needs ui
+		{ ...ok, ui: "ui", nav: { label: "Budget", icon: "Bad Icon" } },
+		{ ...ok, ui: "ui", nav: { label: "Budget", icon: 3 } },
+		{ ...ok, ui: "ui", nav: { label: "Budget", colour: "red" } },
 		{ ...ok, ledger: "^1.0.0" },
 		{ ...ok, extra: true },
 		{ name: "No id", version: "1.0.0" },

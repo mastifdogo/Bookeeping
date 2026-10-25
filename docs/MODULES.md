@@ -61,7 +61,7 @@ migrations/001_*.sql   database migrations (optional)
 | `ledger` | Optional minimum Ledger version, as `>=x.y.z`. |
 | `server` | Optional ES module exporting `default async function register(ctx)`. |
 | `ui` | Optional directory containing `index.html`. It is served at `/m/<id>/`. |
-| `nav` | Optional sidebar entry (`label`, up to 24 characters) that opens the UI inside Ledger. Requires `ui`. |
+| `nav` | Optional sidebar entry that opens the UI inside Ledger: `label` (up to 24 characters) and an optional `icon`, one of `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`. Other names show the generic module icon. Requires `ui`. |
 | `migrations` | Optional directory of `NNN_name.sql` files. |
 
 Paths are relative to the repository root and cannot contain `..` or hidden
