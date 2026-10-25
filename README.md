@@ -275,9 +275,21 @@ the largest expenses this month. Below that are **notifications** and
 installed or fails). Dismiss a notification with ✕; tick a to-do to mark it
 done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)).
 
+### Sidebar, settings and panes
+
+The sidebar's gear opens **Settings**: Account (password), Sidebar, Modules
+and Updates. Under **Sidebar** each user chooses which bookkeeping pages and
+modules appear and in what order (saved per user, on the server).
+
+On a wide screen, hover a sidebar entry and click its split icon to **open
+it beside** the current page. Panes fill the window's height and sit side by
+side: drag a pane's header onto another to move it, drag the edge between two
+to resize, ✕ to close, or ⤢ to open it full width. Each browser remembers its
+panes.
+
 ### Automatic updates
 
-The **Updates** page (sidebar) shows the installed version and sets a
+**Settings → Updates** shows the installed version and sets a
 schedule: days of the week, time, time zone, and whether to reboot the
 container afterwards. At that time a root service installs the latest GitHub
 Release if it is newer: it verifies the checksum, backs up the database
@@ -286,13 +298,15 @@ first, and rolls back if the new version doesn't start. Details:
 
 ### Modules
 
-The **Modules** page installs extensions from GitHub repositories, such as
+**Settings → Modules** installs extensions from GitHub repositories, such as
 invoicing, dashboards or an LLM gateway. Enter `owner/name`; Ledger shows
 what the module does, then installs its latest release. A module runs inside
 Ledger and appears in the sidebar. It can read the books and post entries,
 but it can't edit or delete posted ones. Writing a module:
 [docs/MODULES.md](docs/MODULES.md); a working example is in
-`examples/modules/hello/`.
+`examples/modules/hello/`. To have an LLM write one, paste
+[docs/MODULE_LLM_CONTEXT.md](docs/MODULE_LLM_CONTEXT.md) into the chat and
+describe the module.
 
 ### Reports
 

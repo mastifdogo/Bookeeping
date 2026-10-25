@@ -2,12 +2,14 @@
 
 A module adds a feature to Ledger: invoicing, a budget dashboard, a gateway
 to an LLM API, an integration with another service. It lives in its own
-GitHub repository. You install it from the **Modules** page by entering
+GitHub repository. You install it from **Settings → Modules** by entering
 `owner/name`. Ledger installs the repository's latest release and keeps it
 updated together with Ledger itself.
 
 `examples/modules/hello/` is a complete, working module. To start a new one,
-copy it into a new repository.
+copy it into a new repository. To have an LLM write one, paste
+[MODULE_LLM_CONTEXT.md](MODULE_LLM_CONTEXT.md) into the chat, followed by
+what the module should do.
 
 ## What a module can do (and cannot)
 
@@ -57,11 +59,11 @@ migrations/001_*.sql   database migrations (optional)
 | Field | Meaning |
 |---|---|
 | `id` | 2–32 lowercase letters, digits or `-`, starting with a letter. Fixed for the module's lifetime; its schema is `mod_<id>` (`-` becomes `_`). |
-| `name`, `version`, `description` | Shown on the Modules page. `version` is `x.y.z`. |
+| `name`, `version`, `description` | Shown under Settings → Modules. `version` is `x.y.z`. |
 | `ledger` | Optional minimum Ledger version, as `>=x.y.z`. |
 | `server` | Optional ES module exporting `default async function register(ctx)`. |
 | `ui` | Optional directory containing `index.html`. It is served at `/m/<id>/`. |
-| `nav` | Optional sidebar entry that opens the UI inside Ledger: `label` (up to 24 characters) and an optional `icon`, one of `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`. Other names show the generic module icon. Requires `ui`. |
+| `nav` | Optional sidebar entry that opens the UI inside Ledger (users can hide or move it under Settings → Sidebar): `label` (up to 24 characters) and an optional `icon`, one of `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`. Other names show the generic module icon. Requires `ui`. |
 | `migrations` | Optional directory of `NNN_name.sql` files. |
 
 Paths are relative to the repository root and cannot contain `..` or hidden
@@ -79,12 +81,12 @@ archive; no build artifacts are needed. To publish a version:
 
 Installed modules are updated:
 
-- on Ledger's update schedule (**Updates** page)
+- on Ledger's update schedule (**Settings → Updates**)
 - when you press **Check for updates now** there
-- when you press **Update modules now** on the Modules page
+- when you press **Update modules now** under Settings → Modules
 
 If Ledger fails to start after a module is installed or updated, the change
-is undone automatically and the Modules page shows the reason.
+is undone automatically and Settings → Modules shows the reason.
 
 ## The server API (`register(ctx)`)
 
@@ -98,7 +100,7 @@ export default async function register(ctx) {
 ```
 
 `register` runs once at startup and must finish within 15 seconds. If it
-throws, the module shows as *Failed to load* on the Modules page, and the
+throws, the module shows as *Failed to load* under Settings → Modules, and the
 rest of Ledger runs normally.
 
 | `ctx.` | |
@@ -182,7 +184,8 @@ await ctx.dashboard.list({ kind: "todo", open: true }); // your module's items
 ## The UI
 
 `ui/` is served at `/m/<id>/`. The page is shown in a frame inside Ledger,
-next to the sidebar. It shares Ledger's login, so calls to
+next to the sidebar or in a side-by-side pane (so it should work from about
+260px wide). It shares Ledger's login, so calls to
 `/api/v1/m/<id>/...` with `fetch` just work.
 
 - Send JSON with `Content-Type: application/json`.

@@ -95,7 +95,6 @@
 	const stateLabel: Record<string, string> = { running: 'Running', failed: 'Failed to load', error: 'Install failed', pending: 'Installing', removing: 'Removing' };
 </script>
 
-<h1>Modules</h1>
 
 <p class="muted" style="margin-top:0">
 	Modules add features such as invoicing, budgets or integrations. Each one comes from a GitHub repository with a
@@ -142,7 +141,7 @@
 		</table>
 		<p style="margin-bottom:0">
 			<button onclick={updateAll} disabled={busy || !info.installer_available}>Update modules now</button>
-			<span class="muted small">Modules also update with Ledger on the schedule set under <a href="/system">Updates</a>.</span>
+			<span class="muted small">Modules also update with Ledger on the schedule set under <a href="/settings/updates">Updates</a>.</span>
 		</p>
 	{/if}
 </div>

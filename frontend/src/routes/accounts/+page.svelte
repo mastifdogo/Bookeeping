@@ -2,7 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import Amount from '#lib/components/Amount.svelte';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
-	import { ACCOUNT_TYPES, CURRENCIES, api, unwrap, type AccountType, type Currency } from '#lib/api/client.ts';
+	import { ACCOUNT_TYPES, CURRENCIES, api, unwrap, type Account, type AccountType, type Currency } from '#lib/api/client.ts';
 	import { naturalBalance } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
@@ -32,6 +32,57 @@
 		} finally {
 			saving = false;
 		}
+	}
+
+	// Sorting: click a column heading; again to reverse. Remembered in this browser.
+	type SortKey = 'code' | 'name' | 'type' | 'currency' | 'balance' | 'status';
+	const SORT_STORAGE = 'ledger.accounts.sort';
+	function readSort(): { key: SortKey; desc: boolean } {
+		try {
+			const v = JSON.parse(localStorage.getItem(SORT_STORAGE) ?? 'null');
+			if (v && ['code', 'name', 'type', 'currency', 'balance', 'status'].includes(v.key)) return { key: v.key, desc: v.desc === true };
+		} catch {
+			// no saved order
+		}
+		return { key: 'code', desc: false };
+	}
+	let sort = $state(readSort());
+	function sortBy(key: SortKey) {
+		sort = { key, desc: sort.key === key ? !sort.desc : key === 'balance' };
+		try {
+			localStorage.setItem(SORT_STORAGE, JSON.stringify(sort));
+		} catch {
+			// storage blocked: keep it for this page only
+		}
+	}
+	const byCode = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+	let sorted = $derived.by(() => {
+		const cmp: Record<SortKey, (a: Account, b: Account) => number> = {
+			code: (a, b) => byCode(a.code, b.code),
+			name: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+			type: (a, b) => ACCOUNT_TYPES.indexOf(a.type) - ACCOUNT_TYPES.indexOf(b.type),
+			currency: (a, b) => a.currency.localeCompare(b.currency),
+			balance: (a, b) => naturalBalance(a.type, a.balance_cents) - naturalBalance(b.type, b.balance_cents),
+			status: (a, b) => Number(a.is_active) - Number(b.is_active)
+		};
+		const f = cmp[sort.key];
+		const dir = sort.desc ? -1 : 1;
+		return [...data.accounts].sort((a, b) => dir * f(a, b) || byCode(a.code, b.code));
+	});
+	const columns: { key: SortKey; label: string; num?: boolean }[] = [
+		{ key: 'code', label: 'Code' },
+		{ key: 'name', label: 'Name' },
+		{ key: 'type', label: 'Type' },
+		{ key: 'currency', label: 'Currency' },
+		{ key: 'balance', label: 'Balance', num: true },
+		{ key: 'status', label: 'Status' }
+	];
+
+	// The whole row opens the account (the code stays a real link for
+	// keyboards, new tabs and middle-clicks).
+	function openRow(e: MouseEvent, code: string) {
+		if ((e.target as HTMLElement).closest('a, button, input') || window.getSelection()?.toString()) return;
+		goto(`/accounts/${encodeURIComponent(code)}`);
 	}
 
 	function toggleInactive(e: Event) {
@@ -79,11 +130,19 @@
 	{:else}
 		<table>
 			<thead>
-				<tr><th>Code</th><th>Name</th><th>Type</th><th>Currency</th><th class="num">Balance</th><th></th></tr>
+				<tr>
+					{#each columns as c (c.key)}
+						<th class:num={c.num} aria-sort={sort.key === c.key ? (sort.desc ? 'descending' : 'ascending') : 'none'}>
+							<button class="sort" onclick={() => sortBy(c.key)}
+								>{c.label}<span class="arrow" aria-hidden="true">{sort.key === c.key ? (sort.desc ? '▼' : '▲') : ''}</span></button
+							>
+						</th>
+					{/each}
+				</tr>
 			</thead>
 			<tbody>
-				{#each data.accounts as a (a.code)}
-					<tr>
+				{#each sorted as a (a.code)}
+					<tr class="clickable" onclick={(e) => openRow(e, a.code)}>
 						<td class="mono"><a href="/accounts/{encodeURIComponent(a.code)}">{a.code}</a></td>
 						<td>{a.name}{#if a.description}<div class="muted small">{a.description}</div>{/if}</td>
 						<td>{a.type}</td>
@@ -97,3 +156,31 @@
 	{/if}
 </div>
 <p class="muted small">Balances use each account's normal side: debit for assets and expenses, credit for liabilities, equity and revenue.</p>
+
+<style>
+	button.sort {
+		all: unset;
+		cursor: pointer;
+		font: inherit;
+		color: inherit;
+		text-transform: inherit;
+		letter-spacing: inherit;
+		white-space: nowrap;
+	}
+	button.sort:hover {
+		color: var(--text);
+	}
+	button.sort:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+	.arrow {
+		display: inline-block;
+		width: 1em;
+		font-size: 0.7em;
+		text-align: center;
+	}
+	tr.clickable {
+		cursor: pointer;
+	}
+</style>

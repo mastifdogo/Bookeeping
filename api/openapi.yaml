@@ -152,6 +152,39 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /settings/sidebar:
+    get:
+      tags: [Auth]
+      operationId: getSidebar
+      summary: The current user's sidebar order and hidden entries
+      responses:
+        '200':
+          description: Sidebar preferences (empty means the default order)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SidebarPrefs' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Auth]
+      operationId: putSidebar
+      summary: Save the current user's sidebar order and hidden entries
+      description: |
+        Entries are listed in display order. Entries not listed (for example a
+        module installed later) are shown after the listed ones.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SidebarPrefs' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SidebarPrefs' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /health:
     get:
       tags: [System]
@@ -1295,6 +1328,22 @@ components:
         manifest: { $ref: '#/components/schemas/ModuleManifest' }
         compatible: { type: boolean }
         ledger_version: { type: string }
+    SidebarPrefs:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            required: [id, hidden]
+            properties:
+              id:
+                type: string
+                description: '"core:<page>" (dashboard, journal, new-entry, accounts, reports, files) or "module:<id>"'
+                example: core:journal
+              hidden: { type: boolean }
     PeriodSummary:
       type: object
       required: [from, to, revenue_cents, expenses_cents, net_income_cents]

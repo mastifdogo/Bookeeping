@@ -408,7 +408,8 @@ test("upload and request safety", async (t) => {
 		const r = await request("GET", p);
 		assert.equal(r.status, want, `GET ${p}`);
 		if (p.startsWith("/api/")) assert.ok(r.text.includes('"not_found"'), `GET ${p}: expected JSON error, got ${r.text}`);
-		assert.equal(r.headers["x-frame-options"], "DENY", `GET ${p}: missing security headers`);
+		assert.equal(r.headers["x-frame-options"], "SAMEORIGIN", `GET ${p}: missing security headers`);
+		assert.equal(r.headers["content-security-policy"], "frame-ancestors 'self'", `GET ${p}: missing security headers`);
 	}
 	r = await request("DELETE", "/api/v1/accounts", { cookie });
 	expectStatus(r, 405);
@@ -841,4 +842,42 @@ test("dashboard: summary, notifications and to-dos", async (t) => {
 	expectStatus(await call("POST", "/dashboard/items/999999/close"), 404);
 	expectStatus(await call("POST", "/dashboard/items/abc/close"), 404);
 	expectStatus(await ta.request("GET", "/api/v1/dashboard"), 401);
+});
+
+test("sidebar preferences are per user", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	let r = await call("GET", "/settings/sidebar");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { items: [] });
+
+	const items = [
+		{ id: "module:invoicing", hidden: false },
+		{ id: "core:dashboard", hidden: false },
+		{ id: "core:files", hidden: true },
+	];
+	r = await call("PUT", "/settings/sidebar", { items });
+	expectStatus(r, 200);
+	assert.deepEqual((await call("GET", "/settings/sidebar")).json(), { items });
+
+	// Another user has their own.
+	await createUser(ta.app, "other", "1234");
+	const login = await ta.request("POST", "/api/v1/auth/login", { body: { username: "other", password: "1234" } });
+	const cookie = sessionFrom(login).header.split(";")[0]!;
+	assert.deepEqual((await ta.request("GET", "/api/v1/settings/sidebar", { cookie })).json(), { items: [] });
+
+	for (const bad of [
+		{ items: [{ id: "core:files" }, { id: "core:files" }] },
+		{ items: [{ id: "elsewhere" }] },
+		{ items: [{ id: "module:x", hidden: "yes" }] },
+		{ items: "nope" },
+	]) {
+		expectStatus(await call("PUT", "/settings/sidebar", bad), 422);
+	}
+	expectStatus(await call("PUT", "/settings/sidebar", { items: [], extra: 1 }), 400);
+	expectStatus(await call("PUT", "/settings/sidebar", { items: [{ id: "core:files", colour: "red" }] }), 400);
+	expectStatus(await call("PUT", "/settings/sidebar", { items: [] }), 200);
+	assert.deepEqual((await call("GET", "/settings/sidebar")).json(), { items: [] });
+	expectStatus(await ta.request("GET", "/api/v1/settings/sidebar"), 401);
 });

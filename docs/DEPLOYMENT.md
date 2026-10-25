@@ -333,7 +333,7 @@ backups work.
 
 ### Automatically (recommended)
 
-Open **Updates** in the app's sidebar. Choose the days, time and time zone,
+Open **Settings → Updates** in the app. Choose the days, time and time zone,
 whether to reboot the container, and tick **Install updates
 automatically**. **Check for updates now** runs a check straight away.
 
@@ -397,7 +397,7 @@ grants; automatic updates do the same. To run them by hand:
 | `password authentication failed for user "ledger_app"` | Re-run `APP_PASSWORD=<new> sh /usr/local/share/ledger/setup-db.sh`; it resets the password and updates `ledger.env`. |
 | Log in works but you're logged out immediately behind a proxy | The proxy serves HTTPS but doesn't send `X-Forwarded-Proto`, or `COOKIE_SECURE=true` is set while you browse over plain HTTP. |
 | "cross-origin request rejected" (403) behind a proxy | The proxy rewrites `Host`. Pass the original host through. |
-| Updates page says updates aren't set up | The server was installed without `deploy/install.sh` 0.6+; run it from a current release. |
+| Settings → Updates says updates aren't set up | The server was installed without `deploy/install.sh` 0.6+; run it from a current release. |
 | Update failed: GitHub answered 403 | GitHub's rate limit for unauthenticated requests (60 per hour per IP); it clears within an hour. |
 | Forgot the only password | `ledger-user passwd <name>` as root in the container. |
 | `JavaScript heap out of memory` in the log | Raise `LEDGER_MAX_HEAP_MB` in `ledger.env` (keep it well below `MemoryMax=256M`) and restart. |

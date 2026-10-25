@@ -16,15 +16,18 @@ export const load: LayoutLoad = async ({ fetch, url, depends }) => {
 	if (!user && !onLogin) {
 		if (res.response.status !== 401) {
 			// API down or misconfigured: let the page show the error.
-			return { user: null, modules: [] };
+			return { user: null, modules: [], sidebar: [] };
 		}
 		redirect(307, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
 	}
 	if (user && onLogin) redirect(307, safeNext(url.searchParams.get('next')));
-	// Sidebar entries for installed modules (none if the request fails).
+	// Sidebar entries for installed modules and the user's sidebar
+	// preferences (defaults if either request fails).
 	depends('app:modules');
-	const modules = user ? ((await api(fetch).GET('/modules')).data?.nav ?? []) : [];
-	return { user, modules };
+	depends('app:sidebar');
+	if (!user) return { user, modules: [], sidebar: [] };
+	const [mods, prefs] = await Promise.all([api(fetch).GET('/modules'), api(fetch).GET('/settings/sidebar')]);
+	return { user, modules: mods.data?.nav ?? [], sidebar: prefs.data?.items ?? [] };
 };
 
 /** Only same-site relative paths are followed after login. */

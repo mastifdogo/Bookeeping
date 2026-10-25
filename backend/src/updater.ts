@@ -374,7 +374,7 @@ async function postUpdateNotice(databaseUrl: string, n: { title: string; body: s
 	try {
 		await client.query(
 			`INSERT INTO dashboard_items (source, kind, key, title, body, level, link)
-			 VALUES ('ledger', 'notification', 'update', $1, $2, $3, '/system')
+			 VALUES ('ledger', 'notification', 'update', $1, $2, $3, '/settings/updates')
 			 ON CONFLICT (source, kind, key) DO UPDATE
 			    SET title = EXCLUDED.title, body = EXCLUDED.body, level = EXCLUDED.level,
 			        created_at = now(), updated_at = now(), closed_at = NULL, closed_by = NULL`,
