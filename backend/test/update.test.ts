@@ -254,3 +254,28 @@ test("updater: an invalid schedule file is ignored", async (t) => {
 	const out = await runUpdater(opts(f, "v0.6.0", Date.parse("2026-10-24T03:01:00Z")));
 	assert.equal(out.ran, false);
 });
+
+test("updater: posts the outcome to the dashboard", async (t) => {
+	const f = await fakeWorld(t);
+	const notices: { title: string; level: string }[] = [];
+	const notify = async (n: { title: string; level: string }) => {
+		notices.push({ title: n.title, level: n.level });
+	};
+	await f.setLatest("v0.7.0");
+	await writeFile(path.join(f.dirs.config, "run-now"), "x");
+	await runUpdater({ ...opts(f, "v0.6.0", Date.now()), notify });
+	assert.deepEqual(notices, [{ title: "Ledger updated to v0.7.0", level: "success" }]);
+
+	// Up to date: nothing to say. A failure is posted; a failing notify is ignored.
+	notices.length = 0;
+	await writeFile(path.join(f.dirs.config, "run-now"), "x");
+	await runUpdater({ ...opts(f, "v0.7.0", Date.now()), notify });
+	assert.deepEqual(notices, []);
+	await f.setLatest("v0.8.0", { corrupt: true });
+	await writeFile(path.join(f.dirs.config, "run-now"), "x");
+	await runUpdater({ ...opts(f, "v0.7.0", Date.now()), notify });
+	assert.deepEqual(notices, [{ title: "Update failed", level: "danger" }]);
+	await writeFile(path.join(f.dirs.config, "run-now"), "x");
+	const out = await runUpdater({ ...opts(f, "v0.7.0", Date.now()), notify: () => Promise.reject(new Error("no db")) });
+	assert.equal(out.ran, true);
+});

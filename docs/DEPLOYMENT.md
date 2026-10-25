@@ -381,9 +381,11 @@ users, passwords and sessions carry over unchanged, and `GOMEMLIMIT` in
 `ledger.env` is simply ignored. Optionally add `LEDGER_MAX_HEAP_MB=96` there
 (the default) to make the heap limit explicit.
 
-If a release changes the database schema, its notes include a migration to
-run as `ledger_owner` before restarting. Release 0.x ships the baseline
-schema only.
+Database changes ship as numbered files in `db/migrations/`. `install.sh`
+applies the new ones (as `ledger_owner`, each in a transaction, recorded in
+`schema_migrations`) before replacing the program, then re-applies the
+grants; automatic updates do the same. To run them by hand:
+`sh /usr/local/share/ledger/migrate-db.sh`.
 
 ## 10. Troubleshooting
 

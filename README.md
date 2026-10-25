@@ -152,6 +152,7 @@ suffix (`v0.5.0-rc.1`) are published as pre-releases.
 ```
 api/openapi.yaml      API contract (frontend and backend both follow it)
 db/schema.sql         Tables, CHECK constraints, balance/immutability triggers
+db/migrations/        Later schema changes, applied in order by deploy/migrate-db.sh
 backend/src/main.ts       Startup, HTTP server, `ledger user` dispatch
 backend/src/types.ts      Models matching the spec
 backend/src/ledger.ts     Journal entry validation, transactional posting, reversal
@@ -160,6 +161,7 @@ backend/src/files.ts      General Ledger CSV export, file listing/download, uplo
 backend/src/import.ts     All-or-nothing CSV import of journal entries
 backend/src/auth.ts       Users, bcrypt passwords, sessions
 backend/src/reports.ts    Balance sheet and income statement
+backend/src/dashboard.ts  Dashboard summary, notifications and to-dos
 backend/src/cli.ts        `ledger user add|passwd|disable|enable|list`
 backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
 backend/src/updater.ts    `ledger update run`: the root updater (GitHub Releases, verify, install, rollback, reboot)
@@ -263,6 +265,15 @@ session in an HttpOnly, SameSite=Strict cookie. Sessions end after 8 hours idle
 or 7 days. Repeated failed logins are throttled. There's no sign-up page:
 users are managed with `ledger user …` on the server. Every journal entry and
 import records who posted it.
+
+### Dashboard
+
+The dashboard shows, per currency, net worth (assets minus liabilities), and
+revenue, expenses and net income for this month and the year to date, with
+the largest expenses this month. Below that are **notifications** and
+**to-dos** posted by modules (and by Ledger itself, e.g. when an update is
+installed or fails). Dismiss a notification with ✕; tick a to-do to mark it
+done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)).
 
 ### Automatic updates
 

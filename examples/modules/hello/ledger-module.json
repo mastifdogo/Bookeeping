@@ -1,9 +1,9 @@
 {
   "id": "hello",
   "name": "Hello module",
-  "version": "1.0.0",
-  "description": "A minimal example: a summary of your books and a notes list stored in the module's own table.",
-  "ledger": ">=0.6.0",
+  "version": "1.1.0",
+  "description": "A minimal example: a summary of your books and a notes list stored in the module's own table, with a to-do and notifications on the dashboard.",
+  "ledger": ">=0.7.0",
   "server": "server.mjs",
   "ui": "ui",
   "nav": { "label": "Hello" },

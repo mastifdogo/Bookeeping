@@ -11,6 +11,8 @@ import { createUser, setUserActive, SESSION_COOKIE } from "../src/auth.ts";
 import { LOGIN_MAX_FAILURES, LOGIN_MAX_FAILURES_PER_USER, LoginLimiter } from "../src/limiter.ts";
 import { ModuleHost } from "../src/module-host.ts";
 import { fakeGitHub } from "./fake-github.ts";
+import { today } from "../src/date.ts";
+import { postItem } from "../src/dashboard.ts";
 
 type Line = { account_code: string; debit_cents: number; credit_cents: number; memo?: string };
 const dr = (code: string, cents: number): Line => ({ account_code: code, debit_cents: cents, credit_cents: 0 });
@@ -682,9 +684,20 @@ test("modules: runtime, UI and management API", async (t) => {
 	let r = await call("GET", "/m/hello/summary");
 	expectStatus(r, 200);
 	assert.equal(r.json().accounts, 2);
+	r = await call("GET", "/dashboard");
+	assert.deepEqual(
+		r.json().todos.map((i: any) => [i.source, i.source_name, i.key, i.closed_at === null]),
+		[["hello", "Hello module", "first-note", true]],
+	);
 	r = await call("POST", "/m/hello/notes", { body: "First note" });
 	expectStatus(r, 201);
 	assert.equal(r.json().created_by, "tester");
+	r = await call("GET", "/dashboard");
+	assert.notEqual(r.json().todos[0].closed_at, null); // ticked off by the module
+	assert.deepEqual(
+		r.json().notifications.map((i: any) => [i.key, i.title, i.body, i.link]),
+		[["latest-note", "tester wrote a note", "First note", "/apps/hello"]],
+	);
 	expectStatus(await call("POST", "/m/hello/notes", { body: "" }), 422);
 	r = await call("GET", "/m/hello/notes");
 	assert.equal(r.json().data.length, 1);
@@ -750,4 +763,82 @@ test("modules: runtime, UI and management API", async (t) => {
 	expectStatus(r, 202);
 	assert.deepEqual(JSON.parse(await readFile(path.join(app.update.config, "modules.json"), "utf8")), []);
 	expectStatus(await call("DELETE", "/modules/nonexistent"), 404);
+});
+
+test("dashboard: summary, notifications and to-dos", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const day = today();
+
+	let r = await call("GET", "/dashboard");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { summary: { as_of: day, currencies: [] }, notifications: [], todos: [] });
+
+	await createAccount(ta, "1000", "Bank", "asset", "CAD");
+	await createAccount(ta, "2000", "Card", "liability", "CAD");
+	await createAccount(ta, "3000", "Equity", "equity", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	await createAccount(ta, "6200", "Rent", "expense", "CAD");
+	const post = async (...lines: Line[]) => expectStatus(await call("POST", "/journal-entries", entry(day, "x", ...lines)), 201);
+	await post(dr("1000", 500000), cr("3000", 500000));
+	await post(dr("1000", 120000), cr("4000", 120000));
+	await post(dr("6100", 3000), cr("2000", 3000));
+	await post(dr("6200", 90000), cr("1000", 90000));
+
+	r = await call("GET", "/dashboard");
+	const [cad] = r.json().summary.currencies;
+	assert.equal(cad.currency, "CAD");
+	assert.equal(cad.assets_cents, 530000);
+	assert.equal(cad.liabilities_cents, 3000);
+	assert.equal(cad.net_worth_cents, 527000);
+	assert.equal(cad.month.revenue_cents, 120000);
+	assert.equal(cad.month.expenses_cents, 93000);
+	assert.equal(cad.month.net_income_cents, 27000);
+	assert.equal(cad.year.net_income_cents, 27000);
+	assert.equal(cad.year.from, day.slice(0, 4) + "-01-01");
+	assert.deepEqual(
+		cad.top_expenses.map((e: any) => [e.account_code, e.amount_cents]),
+		[["6200", 90000], ["6100", 3000]],
+	);
+
+	// Posting (as a module would): the same key updates instead of duplicating.
+	const n = await postItem(app, "ledger", "notification", { key: "k", title: "Hello", level: "warning", link: "/system" });
+	await postItem(app, "ledger", "notification", { key: "k", title: "Hello", level: "warning", link: "/system" });
+	await postItem(app, "ledger", "notification", { title: "No key, always new" });
+	const later = await postItem(app, "ledger", "todo", { key: "b", title: "Later", due: "2099-01-01" });
+	await postItem(app, "ledger", "todo", { key: "a", title: "Sooner", due: "2000-01-01" });
+	await postItem(app, "ledger", "notification", { key: "old", title: "Gone", expiresAt: new Date(Date.now() - 1000) });
+	r = await call("GET", "/dashboard");
+	assert.deepEqual(r.json().notifications.map((i: any) => i.title).sort(), ["Hello", "No key, always new"]);
+	assert.deepEqual(r.json().todos.map((i: any) => i.key), ["a", "b"]); // by due date
+
+	// Bad input is a validation error.
+	for (const bad of [{ title: "" }, { title: "x", level: "loud" }, { title: "x", link: "https://evil.example" }, { title: "x", link: "//evil.example" }]) {
+		await assert.rejects(postItem(app, "ledger", "notification", bad), /validation failed/);
+	}
+	await assert.rejects(postItem(app, "ledger", "todo", { title: "no key" } as any), /key/);
+	await assert.rejects(postItem(app, "ledger", "todo", { key: "x", title: "x", due: "soon" }), /due/);
+
+	// Dismiss a notification; it shows again only if its text changes.
+	r = await call("POST", `/dashboard/items/${n.id}/close`);
+	expectStatus(r, 200);
+	assert.equal(r.json().closed_by, "tester");
+	expectStatus(await call("POST", `/dashboard/items/${n.id}/reopen`), 404); // to-dos only
+	await postItem(app, "ledger", "notification", { key: "k", title: "Hello", level: "warning", link: "/system" });
+	assert.equal((await call("GET", "/dashboard")).json().notifications.length, 1);
+	await postItem(app, "ledger", "notification", { key: "k", title: "Hello again" });
+	assert.equal((await call("GET", "/dashboard")).json().notifications.length, 2);
+
+	// Complete and reopen a to-do; done ones stay listed, after the open ones.
+	expectStatus(await call("POST", `/dashboard/items/${later.id}/close`), 200);
+	r = await call("GET", "/dashboard");
+	assert.deepEqual(r.json().todos.map((i: any) => [i.key, i.closed_at === null]), [["a", true], ["b", false]]);
+	r = await call("POST", `/dashboard/items/${later.id}/reopen`);
+	expectStatus(r, 200);
+	assert.equal(r.json().closed_at, null);
+	expectStatus(await call("POST", "/dashboard/items/999999/close"), 404);
+	expectStatus(await call("POST", "/dashboard/items/abc/close"), 404);
+	expectStatus(await ta.request("GET", "/api/v1/dashboard"), 401);
 });

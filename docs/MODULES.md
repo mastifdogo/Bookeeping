@@ -108,6 +108,7 @@ rest of Ledger runs normally.
 | `route(method, path, handler)` | Adds `GET`/`POST`/`PUT`/`PATCH`/`DELETE` routes under `/api/v1/m/<id>`. Paths may contain `:params`. |
 | `db.query(sql, params)` | Runs SQL with Ledger's connection; returns `{ rows, rowCount }`. Use `$1` placeholders, never string concatenation of input. |
 | `ledger.*` | Ledger's own functions; see below. |
+| `dashboard.*` | Notifications and to-dos on Ledger's dashboard (Ledger 0.7.0 and later); see below. |
 | `HttpError` | `throw new ctx.HttpError(404, "no such invoice")` answers with that status and message. |
 | `response(status, body)` | Return this from a handler to choose the status, e.g. `201`. |
 | `log.info/warn/error(msg, attrs)` | Writes JSON lines to the service log (`journalctl -u ledger`). |
@@ -145,6 +146,38 @@ amounts can be numbers, bigints or digit strings.
 | `createJournalEntry({ entry_date, description, reference, lines: [{ account_code, debit_cents, credit_cents, memo }] }, req.user)` | Pass `req.user` so the entry is recorded as posted by that user. Invalid entries throw, and the API answers 422 with the details. |
 | `reverseJournalEntry(id, { entry_date, description }, req.user)` | |
 | `trialBalance({ asOf, currency })`, `balanceSheet({ asOf, currency })`, `incomeStatement({ from, to, currency })` | |
+
+**`ctx.dashboard`** puts notifications and to-dos on Ledger's dashboard,
+next to the financial summary. Each item belongs to your module and has a
+`key` of your choosing (1-100 characters). Posting the same key again
+updates the item instead of adding another one.
+
+```js
+// A notification: shown until dismissed (or until expiresAt).
+await ctx.dashboard.notify({
+	key: "overdue",                       // optional; without one, every call adds a new notification
+	title: "2 invoices are overdue",      // 1-200 characters
+	body: "Acme Corp (#28) and Globex (#30)", // optional, up to 2000 characters, plain text
+	level: "warning",                     // info (default), success, warning or danger
+	link: "/apps/invoicing",              // optional; a path inside Ledger
+	expiresAt: "2026-11-01T00:00:00Z",    // optional
+});
+
+// A to-do: the user ticks it off, or your module does.
+await ctx.dashboard.todo({ key: "q3-gst", title: "File the Q3 GST return", due: "2026-10-31", link: "/reports" });
+await ctx.dashboard.complete("q3-gst");   // done (false if there is no such to-do)
+await ctx.dashboard.reopen("q3-gst");     // not done again
+await ctx.dashboard.dismiss("overdue");   // hide a notification
+await ctx.dashboard.remove("q3-gst");     // delete; remove(key, "notification") for notifications
+await ctx.dashboard.list({ kind: "todo", open: true }); // your module's items
+```
+
+- A dismissed notification shows again only if you post it with a different
+  title or body. Updating a to-do keeps whether it is done.
+- Invalid items throw, and inside a route handler the API answers 422.
+- Dismissed notifications and done to-dos are deleted after 30 days, and
+  expired notifications a day after they expire.
+- Set `"ledger": ">=0.7.0"` in `ledger-module.json` when you use it.
 
 ## The UI
 

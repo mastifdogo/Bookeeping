@@ -86,8 +86,9 @@ else
 	{ echo "SET ROLE $OWNER_ROLE;"; cat "$SQL_DIR/schema.sql"; } | psql_su -d "$DB_NAME"
 fi
 
-echo "==> grants for $APP_ROLE"
-{ echo "SET ROLE $OWNER_ROLE;"; cat "$SQL_DIR/grants.sql"; } | psql_su -d "$DB_NAME" -v app_role="$APP_ROLE"
+# Migrations newer than schema.sql, then the app role's grants.
+DB_NAME="$DB_NAME" OWNER_ROLE="$OWNER_ROLE" APP_ROLE="$APP_ROLE" SQL_DIR="$SQL_DIR" PSQL="$PSQL" \
+	sh "$here/migrate-db.sh"
 
 url="postgres://$APP_ROLE:$APP_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=disable"
 if [ -z "${keep_url:-}" ]; then
