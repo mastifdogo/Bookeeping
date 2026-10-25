@@ -261,7 +261,11 @@ export function moduleOps(databaseUrl: string, base: Pick<ModuleOps, "restart" |
 			name       text        NOT NULL,
 			applied_at timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (module_id, name)
-		);`;
+		);
+		-- Read access for the app's role, so the nightly pg_dump (which runs as
+		-- that role) can include this table; only root writes to it.
+		GRANT USAGE ON SCHEMA ledger_modules TO ${quoteIdent(appRole)};
+		GRANT SELECT ON ledger_modules.migrations TO ${quoteIdent(appRole)};`;
 
 	return {
 		...base,
