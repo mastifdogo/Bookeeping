@@ -280,7 +280,21 @@ export function systemOps(cacheDir: string, httpAddr: string): SystemOps {
 	const { host, port } = parseListenAddr(httpAddr);
 	const healthHost = !host || host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host;
 	return {
-		backup: () => run("systemctl", ["start", "ledger-backup.service"]),
+		async backup() {
+			try {
+				await run("systemctl", ["start", "ledger-backup.service"]);
+			} catch {
+				// Say why: the last lines the backup wrote to the journal.
+				const why = await new Promise<string>((resolve) => {
+					const p = spawn("journalctl", ["-u", "ledger-backup.service", "-n", "3", "-o", "cat", "--no-pager"], { stdio: ["ignore", "pipe", "ignore"] });
+					let out = "";
+					p.stdout.on("data", (d: Buffer) => (out += d.toString()));
+					p.on("error", () => resolve(""));
+					p.on("exit", () => resolve(out.trim().split("\n").filter(Boolean).slice(-2).join(" / ")));
+				});
+				throw new Error(`the database backup failed, so nothing was installed${why ? `: ${why}` : ""} (see journalctl -u ledger-backup)`);
+			}
+		},
 		async snapshot() {
 			await fsp.rm(prevLib, { recursive: true, force: true });
 			await run("cp", ["-a", LIB, prevLib]);
