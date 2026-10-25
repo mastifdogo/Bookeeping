@@ -84,7 +84,6 @@
 	}
 </script>
 
-<h1>Updates</h1>
 
 <div class="card">
 	<p style="margin-top:0">

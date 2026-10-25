@@ -30,6 +30,10 @@ export default async function register(ctx) {
 			body,
 			req.user.username,
 		]);
+		// Tick off the to-do posted below, and tell the dashboard. The same key
+		// replaces the previous notification instead of piling them up.
+		await ctx.dashboard.complete("first-note");
+		await ctx.dashboard.notify({ key: "latest-note", title: `${req.user.username} wrote a note`, body, link: "/apps/hello" });
 		return ctx.response(201, rows[0]);
 	});
 
@@ -38,6 +42,10 @@ export default async function register(ctx) {
 		const { rowCount } = await ctx.db.query(`DELETE FROM ${notes} WHERE id = $1`, [req.params.id]);
 		if (rowCount === 0) throw new ctx.HttpError(404, "no such note");
 	});
+
+	// A to-do on Ledger's dashboard until the first note is written.
+	const { rows } = await ctx.db.query(`SELECT count(*)::int AS n FROM ${notes}`);
+	if (rows[0].n === 0) await ctx.dashboard.todo({ key: "first-note", title: "Write your first note in the Hello module", link: "/apps/hello" });
 
 	ctx.log.info("hello module ready");
 }

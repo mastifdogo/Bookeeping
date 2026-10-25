@@ -216,7 +216,7 @@ else
 	stage="$tmp_dir/ledger-release"
 	mkdir -p "$stage/db"
 	cp -R "$tree/bin" "$tree/lib" "$src_dir/deploy" "$stage/"
-	cp "$src_dir/db/schema.sql" "$src_dir/db/grants.sql" "$stage/db/"
+	cp -R "$src_dir/db/schema.sql" "$src_dir/db/grants.sql" "$src_dir/db/migrations" "$stage/db/"
 	release_tar="$tmp_dir/ledger-release.tar.gz"
 	tar -C "$tmp_dir" -czf "$release_tar" ledger-release
 fi

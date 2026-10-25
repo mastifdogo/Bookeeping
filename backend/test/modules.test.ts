@@ -102,7 +102,7 @@ async function world(t: import("node:test").TestContext) {
 	for (const d of [dirs.config, dirs.status]) await mkdir(d);
 	const gh = await fakeGitHub(t);
 	const ops = fakeOps();
-	const opts = { dirs, modulesDir: path.join(root, "modules"), cacheDir: path.join(root, "cache"), apiBase: gh.base, ledgerVersion: "v0.6.0", ops };
+	const opts = { dirs, modulesDir: path.join(root, "modules"), cacheDir: path.join(root, "cache"), apiBase: gh.base, ledgerVersion: "v0.7.0", ops };
 	return { root, dirs, gh, ops, opts };
 }
 
@@ -166,7 +166,7 @@ test("syncModules undoes a change Ledger cannot start with", async (t) => {
 	assert.match(r.results[0]!.message, /undone/);
 	assert.deepEqual(ops.calls, ["restart", "restart"]);
 	const installed = await scanInstalled(opts.modulesDir);
-	assert.equal(installed[0]!.manifest.version, "1.0.0"); // the previous copy is back
+	assert.equal(installed[0]!.manifest.version, "1.1.0"); // the previous copy (the example as published) is back
 	assert.equal(installed[0]!.source?.tag, "v1.0.0");
 });
 

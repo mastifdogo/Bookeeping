@@ -89,7 +89,7 @@ else
 		die "no $repo/out with a Node.js runtime: run 'make build runtime' or pass --release FILE"
 	mkdir -p "$stage/db"
 	cp -R "$repo/out/bin" "$repo/out/lib" "$stage/"
-	cp "$repo/db/schema.sql" "$repo/db/grants.sql" "$stage/db/"
+	cp -R "$repo/db/schema.sql" "$repo/db/grants.sql" "$repo/db/migrations" "$stage/db/"
 	cp -R "$repo/deploy" "$stage/deploy"
 fi
 for f in bin/ledger lib/ledger/ledger.mjs lib/ledger/node deploy/install.sh; do

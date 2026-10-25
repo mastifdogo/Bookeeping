@@ -34,8 +34,6 @@
 	}
 </script>
 
-<h1>Account settings</h1>
-
 <div class="card">
 	<p style="margin-top:0">
 		Signed in as <strong>{data.user?.username}</strong>.

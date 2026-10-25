@@ -1,12 +1,12 @@
 // Integration test harness: a throwaway PostgreSQL database with
-// ../db/schema.sql applied, and the real HTTP handler on an ephemeral port.
+// ../db/schema.sql and ../db/migrations applied, and the real HTTP handler on an ephemeral port.
 //
 // Set TEST_DATABASE_URL to a role that may CREATE DATABASE, e.g.
 //   TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm run test:integration
 // Without it these tests are skipped.
 
 import { request as httpRequest, createServer, type IncomingHttpHeaders, type Server } from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
@@ -70,6 +70,11 @@ export async function setupTestApp(t: TestContext): Promise<TestApp | null> {
 
 	// No parameters: the simple protocol runs the multi-statement script as-is.
 	await db.query(await readFile(path.join(repo, "db", "schema.sql"), "utf8"));
+	// Then the migrations, in order, as deploy/migrate-db.sh applies them.
+	const migrations = path.join(repo, "db", "migrations");
+	for (const f of (await readdir(migrations)).filter((n) => /^\d+.*\.sql$/.test(n)).sort()) {
+		await db.query(await readFile(path.join(migrations, f), "utf8"));
+	}
 
 	const app = newApp(db, { csvDir, cookieSecure: "auto", webDir: path.join(repo, "frontend", "build") });
 	await createUser(app, "tester", "correct horse battery");

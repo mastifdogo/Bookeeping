@@ -12,7 +12,7 @@
 	<iframe class="module" title={mod.label} src="/m/{id}/"></iframe>
 {:else}
 	<h1>Module not found</h1>
-	<p>No running module is called "{id}". See <a href="/modules">Modules</a>.</p>
+	<p>No running module is called "{id}". See <a href="/settings/modules">Settings → Modules</a>.</p>
 {/if}
 
 <style>

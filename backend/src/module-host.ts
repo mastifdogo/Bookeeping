@@ -17,6 +17,7 @@ import { compatible, scanInstalled, type InstalledModule, type ModuleManifest } 
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
+import { listBySource, postItem, removeByKey, setClosedByKey, type ItemInput, type ItemKind } from "./dashboard.ts";
 import { isCurrency, publicUser, type AccountCreate, type Currency, type JournalEntryCreate, type User } from "./types.ts";
 
 export type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -133,6 +134,23 @@ function makeContext(app: App, m: LoadedModule) {
 			if (!/^\/[A-Za-z0-9_\-/:.]*$/.test(routePath)) throw new Error(`route: invalid path ${routePath}`);
 			if (typeof handler !== "function") throw new Error("route: handler must be a function");
 			m.routes.push({ method, segments: routePath.split("/").slice(1), handler });
+		},
+		/** Notifications and to-dos on Ledger's dashboard, owned by this module. */
+		dashboard: {
+			/** Posts a notification. Posting the same key again updates it (and shows it again if its text changed). */
+			notify: (n: ItemInput) => postItem(app, id, "notification", n),
+			/** Adds or updates a to-do; key is required. */
+			todo: (t: ItemInput & { key: string }) => postItem(app, id, "todo", t),
+			/** Marks a to-do done. Returns false if there is no such to-do. */
+			complete: (key: string) => setClosedByKey(app, id, "todo", String(key), true),
+			/** Marks a to-do not done again. */
+			reopen: (key: string) => setClosedByKey(app, id, "todo", String(key), false),
+			/** Hides a notification, as if the user had dismissed it. */
+			dismiss: (key: string) => setClosedByKey(app, id, "notification", String(key), true),
+			/** Deletes an item outright. */
+			remove: (key: string, kind: ItemKind = "todo") => removeByKey(app, id, kind === "notification" ? "notification" : "todo", String(key)),
+			/** This module's items, newest first. */
+			list: (opts: { kind?: ItemKind; open?: boolean } = {}) => listBySource(app, id, opts),
 		},
 		HttpError,
 		response: (status: number, body?: unknown) => new ModuleResponse(status, body),

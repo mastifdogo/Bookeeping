@@ -18,6 +18,12 @@ GRANT SELECT, INSERT                  ON journal_entries, transactions, csv_impo
 GRANT SELECT, INSERT, UPDATE          ON users                                   TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON sessions                                TO :"app_role";
 
+-- Added by db/migrations (present once migrate-db.sh has run).
+GRANT SELECT, INSERT, UPDATE, DELETE  ON dashboard_items                         TO :"app_role";
+GRANT SELECT, INSERT, UPDATE          ON user_settings                           TO :"app_role";
+-- Read-only, so pg_dump (run as this role for backups) can include it.
+GRANT SELECT                          ON schema_migrations                       TO :"app_role";
+
 -- Identity columns draw from sequences (SELECT lets pg_dump read them for backups).
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO :"app_role";
 

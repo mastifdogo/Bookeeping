@@ -72,6 +72,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/sidebar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The current user's sidebar order and hidden entries */
+        get: operations["getSidebar"];
+        /**
+         * Save the current user's sidebar order and hidden entries
+         * @description Entries are listed in display order. Entries not listed (for example a
+         *     module installed later) are shown after the listed ones.
+         */
+        put: operations["putSidebar"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -225,6 +247,65 @@ export interface paths {
          * @description An entry can be reversed only once, and a reversal cannot itself be reversed.
          */
         post: operations["reverseJournalEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Financial summary, notifications and to-dos
+         * @description The summary is per currency (currencies are never added together):
+         *     net worth (assets minus liabilities) today, revenue, expenses and net
+         *     income for this month and year to date, and the largest expense
+         *     accounts this month. Notifications are the ones not dismissed or
+         *     expired; to-dos are the open ones, then those done in the last 7 days.
+         *     Modules post items with `ctx.dashboard` (see docs/MODULES.md).
+         */
+        get: operations["getDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/items/{itemId}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss a notification or mark a to-do done */
+        post: operations["closeDashboardItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dashboard/items/{itemId}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a to-do not done */
+        post: operations["reopenDashboardItem"];
         delete?: never;
         options?: never;
         head?: never;
@@ -888,6 +969,77 @@ export interface components {
             compatible: boolean;
             ledger_version: string;
         };
+        SidebarPrefs: {
+            items: {
+                /**
+                 * @description "core:<page>" (dashboard, journal, new-entry, accounts, reports, files) or "module:<id>"
+                 * @example core:journal
+                 */
+                id: string;
+                hidden: boolean;
+            }[];
+        };
+        PeriodSummary: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            revenue_cents: components["schemas"]["SignedCents"];
+            expenses_cents: components["schemas"]["SignedCents"];
+            net_income_cents: components["schemas"]["SignedCents"];
+        };
+        CurrencySummary: {
+            currency: components["schemas"]["Currency"];
+            assets_cents: components["schemas"]["SignedCents"];
+            liabilities_cents: components["schemas"]["SignedCents"];
+            /** @description Assets minus liabilities */
+            net_worth_cents: components["schemas"]["SignedCents"];
+            month: components["schemas"]["PeriodSummary"];
+            year: components["schemas"]["PeriodSummary"];
+            /** @description Up to five expense accounts, largest first, this month */
+            top_expenses: components["schemas"]["ReportLine"][];
+        };
+        DashboardItem: {
+            /** Format: int64 */
+            id: number;
+            /** @description Module id, or "ledger" */
+            source: string;
+            source_name: string;
+            /** @enum {string} */
+            kind: "notification" | "todo";
+            /** @description The poster's own id for the item */
+            key: string;
+            title: string;
+            body: string;
+            /** @enum {string} */
+            level: "info" | "success" | "warning" | "danger";
+            /** @description A path inside Ledger, or "" */
+            link: string;
+            /** Format: date */
+            due_date: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            expires_at: string | null;
+            /**
+             * Format: date-time
+             * @description Dismissed or done
+             */
+            closed_at: string | null;
+            /** @description Username */
+            closed_by: string | null;
+        };
+        Dashboard: {
+            summary: {
+                /** Format: date */
+                as_of: string;
+                currencies: components["schemas"]["CurrencySummary"][];
+            };
+            notifications: components["schemas"]["DashboardItem"][];
+            todos: components["schemas"]["DashboardItem"][];
+        };
         ModuleInfo: {
             repo: string | null;
             id: string | null;
@@ -928,6 +1080,7 @@ export interface components {
     };
     parameters: {
         AccountCode: components["schemas"]["AccountCode"];
+        ItemId: number;
         EntryId: number;
         Filename: components["schemas"]["CsvFilename"];
         /** @description Inclusive start date */
@@ -1033,6 +1186,53 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getSidebar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sidebar preferences (empty means the default order) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SidebarPrefs"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSidebar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SidebarPrefs"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SidebarPrefs"];
+                };
+            };
             422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
@@ -1353,6 +1553,75 @@ export interface operations {
             };
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dashboard */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dashboard"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    closeDashboardItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardItem"];
+                };
+            };
+            404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    reopenDashboardItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The to-do */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardItem"];
+                };
+            };
+            404: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

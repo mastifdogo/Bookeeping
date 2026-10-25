@@ -39,7 +39,7 @@ release: build runtime
 	rm -rf $(REL)
 	mkdir -p $(REL)/db
 	cp -R $(OUT)/bin $(OUT)/lib $(REL)/
-	cp db/schema.sql db/grants.sql $(REL)/db/
+	cp -R db/schema.sql db/grants.sql db/migrations $(REL)/db/
 	cp -R deploy docs README.md $(REL)/
 	tar -C dist -czf $(REL).tar.gz $(notdir $(REL))
 	@echo "$(REL).tar.gz"

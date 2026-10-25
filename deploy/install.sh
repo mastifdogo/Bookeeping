@@ -36,6 +36,20 @@ if ! id ledger >/dev/null 2>&1; then
 fi
 echo "    ledger uid=$(id -u ledger) gid=$(id -g ledger)"
 
+# Database migrations run first, from this release, while the old version
+# keeps running: if one fails nothing below is changed. (Skipped when the
+# database isn't set up yet; setup-db.sh applies them on first install.)
+db_url=$(sed -n 's/^DATABASE_URL=//p' /etc/ledger/ledger.env 2>/dev/null | tail -n1)
+if [ -n "$db_url" ] && command -v psql >/dev/null 2>&1; then
+	db_name=$(printf '%s' "$db_url" | sed -n 's#^[a-z]*://[^/]*/\([a-z0-9_]*\).*#\1#p')
+	app_role=$(printf '%s' "$db_url" | sed -n 's#^[a-z]*://\([a-z0-9_]*\)[:@].*#\1#p')
+	if [ -n "$db_name" ] && [ -n "$app_role" ] &&
+		runuser -u postgres -- psql -X -tA -d "$db_name" -c "SELECT to_regclass('public.journal_entries') IS NOT NULL" 2>/dev/null | grep -qx t; then
+		echo "==> database $db_name"
+		DB_NAME="$db_name" APP_ROLE="$app_role" SQL_DIR="$src/db" sh "$src/deploy/migrate-db.sh"
+	fi
+fi
+
 echo "==> files"
 # Replace the program directory as a whole, so files from an older release
 # never linger. The running service keeps its open files until restarted.
@@ -51,7 +65,11 @@ install -m 0755 "$src/deploy/ledger-backup.sh" /usr/local/bin/ledger-backup
 install -m 0755 "$src/deploy/ledger-user.sh" /usr/local/sbin/ledger-user
 install -d -m 0755 /usr/local/share/ledger
 install -m 0644 "$src/db/schema.sql" "$src/db/grants.sql" /usr/local/share/ledger/
+install -d -m 0755 /usr/local/share/ledger/migrations
+rm -f /usr/local/share/ledger/migrations/*.sql
+install -m 0644 "$src"/db/migrations/*.sql /usr/local/share/ledger/migrations/
 install -m 0755 "$src/deploy/setup-db.sh" /usr/local/share/ledger/setup-db.sh
+install -m 0755 "$src/deploy/migrate-db.sh" /usr/local/share/ledger/migrate-db.sh
 install -m 0644 "$src/deploy/postgresql-lowmem.conf" /usr/local/share/ledger/
 
 # Automatic updates: the app (user ledger) writes the schedule; the root

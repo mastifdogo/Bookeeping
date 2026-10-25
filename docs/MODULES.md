@@ -2,12 +2,14 @@
 
 A module adds a feature to Ledger: invoicing, a budget dashboard, a gateway
 to an LLM API, an integration with another service. It lives in its own
-GitHub repository. You install it from the **Modules** page by entering
+GitHub repository. You install it from **Settings → Modules** by entering
 `owner/name`. Ledger installs the repository's latest release and keeps it
 updated together with Ledger itself.
 
 `examples/modules/hello/` is a complete, working module. To start a new one,
-copy it into a new repository.
+copy it into a new repository. To have an LLM write one, paste
+[MODULE_LLM_CONTEXT.md](MODULE_LLM_CONTEXT.md) into the chat, followed by
+what the module should do.
 
 ## What a module can do (and cannot)
 
@@ -57,11 +59,11 @@ migrations/001_*.sql   database migrations (optional)
 | Field | Meaning |
 |---|---|
 | `id` | 2–32 lowercase letters, digits or `-`, starting with a letter. Fixed for the module's lifetime; its schema is `mod_<id>` (`-` becomes `_`). |
-| `name`, `version`, `description` | Shown on the Modules page. `version` is `x.y.z`. |
+| `name`, `version`, `description` | Shown under Settings → Modules. `version` is `x.y.z`. |
 | `ledger` | Optional minimum Ledger version, as `>=x.y.z`. |
 | `server` | Optional ES module exporting `default async function register(ctx)`. |
 | `ui` | Optional directory containing `index.html`. It is served at `/m/<id>/`. |
-| `nav` | Optional sidebar entry that opens the UI inside Ledger: `label` (up to 24 characters) and an optional `icon`, one of `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`. Other names show the generic module icon. Requires `ui`. |
+| `nav` | Optional sidebar entry that opens the UI inside Ledger (users can hide or move it under Settings → Sidebar): `label` (up to 24 characters) and an optional `icon`, one of `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`. Other names show the generic module icon. Requires `ui`. |
 | `migrations` | Optional directory of `NNN_name.sql` files. |
 
 Paths are relative to the repository root and cannot contain `..` or hidden
@@ -79,12 +81,12 @@ archive; no build artifacts are needed. To publish a version:
 
 Installed modules are updated:
 
-- on Ledger's update schedule (**Updates** page)
+- on Ledger's update schedule (**Settings → Updates**)
 - when you press **Check for updates now** there
-- when you press **Update modules now** on the Modules page
+- when you press **Update modules now** under Settings → Modules
 
 If Ledger fails to start after a module is installed or updated, the change
-is undone automatically and the Modules page shows the reason.
+is undone automatically and Settings → Modules shows the reason.
 
 ## The server API (`register(ctx)`)
 
@@ -98,7 +100,7 @@ export default async function register(ctx) {
 ```
 
 `register` runs once at startup and must finish within 15 seconds. If it
-throws, the module shows as *Failed to load* on the Modules page, and the
+throws, the module shows as *Failed to load* under Settings → Modules, and the
 rest of Ledger runs normally.
 
 | `ctx.` | |
@@ -108,6 +110,7 @@ rest of Ledger runs normally.
 | `route(method, path, handler)` | Adds `GET`/`POST`/`PUT`/`PATCH`/`DELETE` routes under `/api/v1/m/<id>`. Paths may contain `:params`. |
 | `db.query(sql, params)` | Runs SQL with Ledger's connection; returns `{ rows, rowCount }`. Use `$1` placeholders, never string concatenation of input. |
 | `ledger.*` | Ledger's own functions; see below. |
+| `dashboard.*` | Notifications and to-dos on Ledger's dashboard (Ledger 0.7.0 and later); see below. |
 | `HttpError` | `throw new ctx.HttpError(404, "no such invoice")` answers with that status and message. |
 | `response(status, body)` | Return this from a handler to choose the status, e.g. `201`. |
 | `log.info/warn/error(msg, attrs)` | Writes JSON lines to the service log (`journalctl -u ledger`). |
@@ -146,10 +149,43 @@ amounts can be numbers, bigints or digit strings.
 | `reverseJournalEntry(id, { entry_date, description }, req.user)` | |
 | `trialBalance({ asOf, currency })`, `balanceSheet({ asOf, currency })`, `incomeStatement({ from, to, currency })` | |
 
+**`ctx.dashboard`** puts notifications and to-dos on Ledger's dashboard,
+next to the financial summary. Each item belongs to your module and has a
+`key` of your choosing (1-100 characters). Posting the same key again
+updates the item instead of adding another one.
+
+```js
+// A notification: shown until dismissed (or until expiresAt).
+await ctx.dashboard.notify({
+	key: "overdue",                       // optional; without one, every call adds a new notification
+	title: "2 invoices are overdue",      // 1-200 characters
+	body: "Acme Corp (#28) and Globex (#30)", // optional, up to 2000 characters, plain text
+	level: "warning",                     // info (default), success, warning or danger
+	link: "/apps/invoicing",              // optional; a path inside Ledger
+	expiresAt: "2026-11-01T00:00:00Z",    // optional
+});
+
+// A to-do: the user ticks it off, or your module does.
+await ctx.dashboard.todo({ key: "q3-gst", title: "File the Q3 GST return", due: "2026-10-31", link: "/reports" });
+await ctx.dashboard.complete("q3-gst");   // done (false if there is no such to-do)
+await ctx.dashboard.reopen("q3-gst");     // not done again
+await ctx.dashboard.dismiss("overdue");   // hide a notification
+await ctx.dashboard.remove("q3-gst");     // delete; remove(key, "notification") for notifications
+await ctx.dashboard.list({ kind: "todo", open: true }); // your module's items
+```
+
+- A dismissed notification shows again only if you post it with a different
+  title or body. Updating a to-do keeps whether it is done.
+- Invalid items throw, and inside a route handler the API answers 422.
+- Dismissed notifications and done to-dos are deleted after 30 days, and
+  expired notifications a day after they expire.
+- Set `"ledger": ">=0.7.0"` in `ledger-module.json` when you use it.
+
 ## The UI
 
 `ui/` is served at `/m/<id>/`. The page is shown in a frame inside Ledger,
-next to the sidebar. It shares Ledger's login, so calls to
+next to the sidebar or in a side-by-side pane (so it should work from about
+260px wide). It shares Ledger's login, so calls to
 `/api/v1/m/<id>/...` with `fetch` just work.
 
 - Send JSON with `Content-Type: application/json`.

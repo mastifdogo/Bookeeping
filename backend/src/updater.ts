@@ -18,6 +18,7 @@ import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
+import pg from "pg";
 import { log } from "./log.ts";
 import { MODULES_RUN_NOW_FILE, modulesDir } from "./modules.ts";
 import { moduleOps, syncModules, type ModuleOps } from "./module-installer.ts";
@@ -69,6 +70,8 @@ export interface UpdaterOptions {
 	sys: SystemOps;
 	/** Module syncing (omitted: modules are left alone). */
 	modules?: { dir: string; ops: ModuleOps };
+	/** Posts the outcome of a Ledger update to the dashboard (best effort). */
+	notify?: (n: { title: string; body: string; level: "success" | "danger" }) => Promise<void>;
 }
 
 export interface UpdateOutcome {
@@ -255,7 +258,12 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 		}
 	}
 
+	const notify = async (n: { title: string; body: string; level: "success" | "danger" }) => {
+		await o.notify?.(n).catch((err: Error) => log.warn("could not post the update to the dashboard", { err: err.message }));
+	};
+	if (result && !result.ok) await notify({ title: "Update failed", body: result.status.message, level: "danger" });
 	if (!result || !result.ok) return { ran: true, installed: null, rebooted: false };
+	if (installed) await notify({ title: `Ledger updated to ${installed}`, body: result.status.message, level: "success" });
 	// Manual checks reboot only to finish an install; scheduled runs follow the policy.
 	const reboot = schedule.reboot === "always" ? !manual || installed !== null : schedule.reboot === "after_update" && installed !== null;
 	await result.save({
@@ -355,5 +363,24 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 		currentVersion,
 		sys,
 		modules: databaseUrl ? { dir: modulesDir(), ops: moduleOps(databaseUrl, { restart: sys.restart, healthy: sys.healthy }) } : undefined,
+		notify: databaseUrl ? (n) => postUpdateNotice(databaseUrl, n) : undefined,
 	});
+}
+
+/** One notification, key "update", replaced by each outcome. */
+async function postUpdateNotice(databaseUrl: string, n: { title: string; body: string; level: string }): Promise<void> {
+	const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 });
+	await client.connect();
+	try {
+		await client.query(
+			`INSERT INTO dashboard_items (source, kind, key, title, body, level, link)
+			 VALUES ('ledger', 'notification', 'update', $1, $2, $3, '/settings/updates')
+			 ON CONFLICT (source, kind, key) DO UPDATE
+			    SET title = EXCLUDED.title, body = EXCLUDED.body, level = EXCLUDED.level,
+			        created_at = now(), updated_at = now(), closed_at = NULL, closed_by = NULL`,
+			[n.title.slice(0, 200), n.body.slice(0, 2000), n.level],
+		);
+	} finally {
+		await client.end();
+	}
 }

@@ -1,6 +1,4 @@
-import { api, unwrapLoad } from '#lib/api/client.ts';
-import type { PageLoad } from './$types';
+import { redirect } from '@sveltejs/kit';
 
-export const load: PageLoad = async ({ fetch }) => {
-	return { info: unwrapLoad(await api(fetch).GET('/modules')) };
-};
+// Moved under Settings.
+export const load = () => redirect(308, '/settings/modules');

@@ -46,6 +46,8 @@ import { createJournalEntry, getJournalEntry, listJournalEntries, reverseJournal
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { CSV_FILENAME_RE, MAX_FILE_BYTES, exportGeneralLedger, listCsvFiles, openCsvFile, saveUploadedCsv } from "./files.ts";
 import { importJournalEntries } from "./import.ts";
+import { getDashboard, setItemClosed } from "./dashboard.ts";
+import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
 import { changePassword, login, logout, normalizeUsername, sessionUser, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS } from "./auth.ts";
 import { MultipartError, formDataBoundary, parseHeaderParams, parseMultipart } from "./multipart.ts";
 import { CONTENT_TYPES, staticHandler } from "./static.ts";
@@ -359,6 +361,15 @@ async function handleMe(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, publicUser(c.user!));
 }
 
+async function handleGetSidebar(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await getSidebar(c.app, c.user!.id));
+}
+
+async function handlePutSidebar(c: Ctx): Promise<void> {
+	const items = await decodeBody(c, true, decodeSidebar);
+	writeJSON(c.res, 200, await putSidebar(c.app, c.user!.id, items));
+}
+
 async function handleChangePassword(c: Ctx): Promise<void> {
 	const input = await decodeBody(c, true, decodePasswordChange);
 	await changePassword(c.app, c.user!, c.token, input);
@@ -449,6 +460,18 @@ async function handleIncomeStatement(c: Ctx): Promise<void> {
 	const [from, to] = queryDateRange(c.query);
 	const currency = queryCurrency(c.query);
 	writeJSON(c.res, 200, await getIncomeStatement(c.app, from, to, currency));
+}
+
+async function handleGetDashboard(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await getDashboard(c.app));
+}
+
+async function handleCloseDashboardItem(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await setItemClosed(c.app, pathId(c, "itemId"), true, c.user!.id));
+}
+
+async function handleReopenDashboardItem(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await setItemClosed(c.app, pathId(c, "itemId"), false, null));
 }
 
 async function handleExportGeneralLedger(c: Ctx): Promise<void> {
@@ -756,6 +779,8 @@ const ROUTES: Route[] = [
 	// Everything else requires a logged-in user.
 	route("GET", "/auth/me", true, handleMe),
 	route("POST", "/auth/password", true, handleChangePassword),
+	route("GET", "/settings/sidebar", true, handleGetSidebar),
+	route("PUT", "/settings/sidebar", true, handlePutSidebar),
 	route("GET", "/currencies", true, handleListCurrencies),
 
 	route("GET", "/accounts", true, handleListAccounts),
@@ -768,6 +793,10 @@ const ROUTES: Route[] = [
 	route("POST", "/journal-entries", true, handleCreateJournalEntry),
 	route("GET", "/journal-entries/:entryId", true, handleGetJournalEntry),
 	route("POST", "/journal-entries/:entryId/reverse", true, handleReverseJournalEntry),
+
+	route("GET", "/dashboard", true, handleGetDashboard),
+	route("POST", "/dashboard/items/:itemId/close", true, handleCloseDashboardItem),
+	route("POST", "/dashboard/items/:itemId/reopen", true, handleReopenDashboardItem),
 
 	route("GET", "/reports/trial-balance", true, handleTrialBalance),
 	route("GET", "/reports/balance-sheet", true, handleBalanceSheet),
@@ -866,7 +895,9 @@ export function createHandler(app: App): (req: IncomingMessage, res: ServerRespo
 		});
 
 		res.setHeader("X-Content-Type-Options", "nosniff");
-		res.setHeader("X-Frame-Options", "DENY");
+		// Ledger may frame itself (side-by-side panes, module UIs), nothing else may.
+		res.setHeader("X-Frame-Options", "SAMEORIGIN");
+		res.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
 		res.setHeader("Referrer-Policy", "same-origin");
 
 		const c: Ctx = { app, req, res, params: {}, query: new URLSearchParams(q < 0 ? "" : rawUrl.slice(q + 1)), user: null, token: "" };
