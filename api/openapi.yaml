@@ -1220,9 +1220,13 @@ components:
         nav:
           type: object
           nullable: true
-          required: [label]
+          required: [label, icon]
           properties:
             label: { type: string }
+            icon:
+              type: string
+              nullable: true
+              description: Name of a sidebar icon (see docs/MODULES.md); unknown names show the generic module icon
         migrations: { type: string, nullable: true }
     ModulePreview:
       type: object
@@ -1264,7 +1268,8 @@ components:
           description: Sidebar entries of running modules
           items:
             type: object
-            required: [id, label]
+            required: [id, label, icon]
             properties:
               id: { type: string }
               label: { type: string }
+              icon: { type: string, nullable: true }

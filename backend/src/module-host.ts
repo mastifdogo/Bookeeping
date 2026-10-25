@@ -272,9 +272,9 @@ export class ModuleHost {
 	}
 
 	/** Sidebar entries for running modules with a UI. */
-	nav(): { id: string; label: string }[] {
+	nav(): { id: string; label: string; icon: string | null }[] {
 		return [...this.modules.values()]
 			.filter((m) => !m.error && m.manifest.ui && m.manifest.nav)
-			.map((m) => ({ id: m.manifest.id, label: m.manifest.nav!.label }));
+			.map((m) => ({ id: m.manifest.id, label: m.manifest.nav!.label, icon: m.manifest.nav!.icon }));
 	}
 }

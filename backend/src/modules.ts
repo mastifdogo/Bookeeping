@@ -41,8 +41,8 @@ export interface ModuleManifest {
 	server: string | null;
 	/** Directory with index.html, served at /m/<id>/ (optional). */
 	ui: string | null;
-	/** Sidebar entry opening the UI (optional; needs ui). */
-	nav: { label: string } | null;
+	/** Sidebar entry opening the UI (optional; needs ui). `icon` names one of Ledger's sidebar icons. */
+	nav: { label: string; icon: string | null } | null;
 	/** Directory of NNN_name.sql files, applied in the module's own schema (optional). */
 	migrations: string | null;
 }
@@ -76,15 +76,24 @@ export function validateManifest(v: unknown): ModuleManifest {
 	const server = str("server", REL_PATH_RE, 200, false);
 	const ui = str("ui", REL_PATH_RE, 200, false);
 	const migrations = str("migrations", REL_PATH_RE, 200, false);
-	let nav: { label: string } | null = null;
+	let nav: { label: string; icon: string | null } | null = null;
 	if (o.nav !== undefined && o.nav !== null) {
 		const n = o.nav as Record<string, unknown>;
-		if (typeof n !== "object" || typeof n.label !== "string" || !/^[^\u0000-\u001f]{1,24}$/.test(n.label) || Object.keys(n).some((k) => k !== "label")) {
-			err.add("nav", 'must be {"label": "..."} with a label of at most 24 characters');
+		// An icon name Ledger doesn't know is accepted and shown as the generic module icon,
+		// so a module can name icons added in later Ledger versions.
+		const icon = n.icon === undefined || n.icon === null ? null : n.icon;
+		if (
+			typeof n !== "object" ||
+			typeof n.label !== "string" ||
+			!/^[^\u0000-\u001f]{1,24}$/.test(n.label) ||
+			(icon !== null && (typeof icon !== "string" || !/^[a-z][a-z0-9-]{0,23}$/.test(icon))) ||
+			Object.keys(n).some((k) => k !== "label" && k !== "icon")
+		) {
+			err.add("nav", 'must be {"label": "...", "icon": "..."} with a label of at most 24 characters and an optional icon name');
 		} else if (ui === null) {
 			err.add("nav", "needs ui");
 		} else {
-			nav = { label: n.label };
+			nav = { label: n.label, icon: icon as string | null };
 		}
 	}
 	err.throwIfAny();

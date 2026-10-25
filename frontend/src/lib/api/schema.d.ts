@@ -876,6 +876,8 @@ export interface components {
             ui: string | null;
             nav: {
                 label: string;
+                /** @description Name of a sidebar icon (see docs/MODULES.md); unknown names show the generic module icon */
+                icon: string | null;
             } | null;
             migrations: string | null;
         };
@@ -909,6 +911,7 @@ export interface components {
             nav: {
                 id: string;
                 label: string;
+                icon: string | null;
             }[];
         };
     };
