@@ -720,7 +720,7 @@ test("modules: runtime, UI and management API", async (t) => {
 	// Management API: preview and add through (fake) GitHub, then remove.
 	r = await call("GET", "/modules");
 	expectStatus(r, 200);
-	assert.deepEqual(r.json().nav, [{ id: "hello", label: "Hello" }]);
+	assert.deepEqual(r.json().nav, [{ id: "hello", label: "Hello", icon: null }]);
 	assert.equal(r.json().installer_available, false);
 	const names = r.json().modules.map((m: { id: string; state: string }) => `${m.id}:${m.state}`).sort();
 	assert.deepEqual(names, ["broken:removing", "hello:removing", "poster:removing"]); // installed but not on the wanted list
