@@ -48,7 +48,7 @@ The script will:
 - create an unprivileged container (`nesting=1`) with the CSV directory
   bind-mounted at `/app/csv_data`, owned by the mapped service UID (100990)
 - install PostgreSQL (tuned for a small container), Ledger, the systemd service
-  and nightly backups to `/app/csv_data/backups`
+  and nightly backups to `/app/csv_data/backups` (change them under Settings → Backups)
 - create the database with a restricted app role, plus the admin user
 - start everything and check `/api/v1/health` and that the share is writable
 
@@ -162,6 +162,9 @@ backend/src/import.ts     All-or-nothing CSV import of journal entries
 backend/src/auth.ts       Users, bcrypt passwords, sessions
 backend/src/reports.ts    Balance sheet and income statement
 backend/src/dashboard.ts  Dashboard summary, notifications and to-dos
+backend/src/reconcile.ts  Reconciling accounts against statements
+backend/src/backup.ts     `ledger backup run`: dumps to TrueNAS and/or Google Drive
+backend/src/module-settings.ts  Module settings declared in ledger-module.json
 backend/src/cli.ts        `ledger user add|passwd|disable|enable|list`
 backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
 backend/src/updater.ts    `ledger update run`: the root updater (GitHub Releases, verify, install, rollback, reboot)
@@ -275,10 +278,26 @@ the largest expenses this month. Below that are **notifications** and
 installed or fails). Dismiss a notification with ✕; tick a to-do to mark it
 done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)).
 
+### Reconciliation
+
+**Reconcile** (sidebar) checks an account against a bank or card statement.
+Enter the statement's closing date and balance, then tick each transaction
+that appears on it. When the cleared balance matches (difference 0.00),
+finish. The next statement starts from there. Only the most recent
+reconciliation of an account can be undone. Posted entries never change;
+reconciliations only mark lines as cleared.
+
+### Backups
+
+**Settings → Backups** sends database backups to a TrueNAS share, Google
+Drive, or both, on a schedule you choose, with **Back up now** and the result
+of the last run. Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#8-backups-and-restore).
+
 ### Sidebar, settings and panes
 
-The sidebar's gear opens **Settings**: Account (password), Sidebar, Modules
-and Updates. Under **Sidebar** each user chooses which bookkeeping pages and
+The sidebar's gear opens **Settings**: Account (password), Sidebar, Backups,
+Import & export (CSV upload, General Ledger export and the files on the
+share), Modules and Updates, plus a tab for each module that has settings. Under **Sidebar** each user chooses which bookkeeping pages and
 modules appear and in what order (saved per user, on the server).
 
 On a wide screen, hover a sidebar entry and click its split icon to **open

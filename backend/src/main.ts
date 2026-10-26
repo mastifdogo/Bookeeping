@@ -10,6 +10,7 @@
 //
 // Pass --password-stdin to add/passwd to read the password from stdin.
 
+import { runBackupCommand } from "./backup.ts";
 import { createServer } from "node:http";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -96,6 +97,15 @@ async function main(): Promise<void> {
 	if (command === "update") {
 		try {
 			await runUpdateCommand(args, installedVersion(programDir), updateDirs());
+		} catch (err) {
+			process.stderr.write(`error: ${(err as Error).message}\n`);
+			process.exitCode = 1;
+		}
+		return;
+	}
+	if (command === "backup") {
+		try {
+			await runBackupCommand(args);
 		} catch (err) {
 			process.stderr.write(`error: ${(err as Error).message}\n`);
 			process.exitCode = 1;

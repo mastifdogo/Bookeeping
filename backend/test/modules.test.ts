@@ -102,7 +102,7 @@ async function world(t: import("node:test").TestContext) {
 	for (const d of [dirs.config, dirs.status]) await mkdir(d);
 	const gh = await fakeGitHub(t);
 	const ops = fakeOps();
-	const opts = { dirs, modulesDir: path.join(root, "modules"), cacheDir: path.join(root, "cache"), apiBase: gh.base, ledgerVersion: "v0.7.0", ops };
+	const opts = { dirs, modulesDir: path.join(root, "modules"), cacheDir: path.join(root, "cache"), apiBase: gh.base, ledgerVersion: "v0.9.0", ops };
 	return { root, dirs, gh, ops, opts };
 }
 
@@ -132,13 +132,13 @@ test("syncModules installs, updates and removes", async (t) => {
 	await gh.publish("o/hello", "v1.1.0", HELLO, async (stage) => {
 		await writeFile(path.join(stage, "migrations", "002_more.sql"), "ALTER TABLE notes ADD COLUMN pinned boolean NOT NULL DEFAULT false;");
 		const m = JSON.parse(await readFile(path.join(stage, "ledger-module.json"), "utf8"));
-		await writeFile(path.join(stage, "ledger-module.json"), JSON.stringify({ ...m, version: "1.1.0" }));
+		await writeFile(path.join(stage, "ledger-module.json"), JSON.stringify({ ...m, version: "1.3.0" }));
 	});
 	r = await syncModules(opts);
 	assert.equal(r.results[0]!.state, "updated");
 	assert.deepEqual(ops.calls, ["migrate hello 002_more.sql", "restart"]);
 	installed = await scanInstalled(opts.modulesDir);
-	assert.equal(installed[0]!.manifest.version, "1.1.0");
+	assert.equal(installed[0]!.manifest.version, "1.3.0");
 
 	// Taken off the list: removed (no hidden leftovers).
 	ops.calls.length = 0;
@@ -166,7 +166,7 @@ test("syncModules undoes a change Ledger cannot start with", async (t) => {
 	assert.match(r.results[0]!.message, /undone/);
 	assert.deepEqual(ops.calls, ["restart", "restart"]);
 	const installed = await scanInstalled(opts.modulesDir);
-	assert.equal(installed[0]!.manifest.version, "1.1.0"); // the previous copy (the example as published) is back
+	assert.equal(installed[0]!.manifest.version, "1.2.0"); // the previous copy (the example as published) is back
 	assert.equal(installed[0]!.source?.tag, "v1.0.0");
 });
 
@@ -212,4 +212,48 @@ test("two repositories cannot install the same module id", async (t) => {
 	const r = await syncModules(opts);
 	assert.equal(r.results[1]!.state, "error");
 	assert.match(r.results[1]!.message, /already used by o\/hello/);
+});
+
+test("manifest settings are validated", () => {
+	const base = { id: "llm", name: "LLM", version: "1.0.0" };
+	const m = validateManifest({
+		...base,
+		ui: "ui",
+		settings: {
+			page: "settings.html",
+			fields: [
+				{ key: "api_key", label: "API key", type: "secret", required: true },
+				{ key: "model", type: "select", options: ["a", { value: "b", label: "Bee" }], default: "b" },
+				{ key: "temp", type: "number", min: 0, max: 2, default: 0.7 },
+				{ key: "notes", type: "textarea" },
+			],
+		},
+	});
+	assert.equal(m.settings!.page, "settings.html");
+	assert.deepEqual(
+		m.settings!.fields.map((f) => [f.key, f.type, f.default]),
+		[
+			["api_key", "secret", null],
+			["model", "select", "b"],
+			["temp", "number", 0.7],
+			["notes", "textarea", null],
+		],
+	);
+	assert.equal(validateManifest(base).settings, null);
+	for (const settings of [
+		{ fields: [{ key: "Bad Key" }] },
+		{ fields: [{ key: "a" }, { key: "a" }] },
+		{ fields: [{ key: "a", type: "colour" }] },
+		{ fields: [{ key: "a", type: "select" }] },
+		{ fields: [{ key: "a", type: "select", options: ["x"], default: "y" }] },
+		{ fields: [{ key: "a", type: "number", min: 5, default: 1 }] },
+		{ fields: [{ key: "a", type: "secret", default: "sk" }] },
+		{ fields: [{ key: "a", min: 1 }] },
+		{ fields: [{ key: "a", extra: 1 }] },
+		{ page: "settings.html" }, // needs ui
+		{ page: "../x.html" },
+		"nope",
+	]) {
+		assert.throws(() => validateManifest({ ...base, settings }), /validation failed/, JSON.stringify(settings));
+	}
 });

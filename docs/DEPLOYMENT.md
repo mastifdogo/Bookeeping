@@ -18,14 +18,15 @@ What runs where:
 | `/usr/local/bin/ledger` | launcher for the server and the `ledger user` CLI |
 | `/usr/local/lib/ledger/` | the server (`ledger.mjs`), the web UI (`web/`) and its Node.js runtime (`node`) |
 | `/usr/local/sbin/ledger-user` | root wrapper: runs `ledger user …` with the service config |
-| `/usr/local/bin/ledger-backup` | nightly `pg_dump` (run by `ledger-backup.timer`) |
+| `ledger-backup.service` / `.timer` | database backups (`ledger backup run`) to TrueNAS and/or Google Drive on the schedule set in the app (see step 8) |
+| `/var/lib/ledger/backup/` | backup settings, Google credentials and the last result (user `ledger`, 0700) |
 | `ledger-update.timer` / `.path` | automatic updates from GitHub Releases on the schedule set in the app (see step 9) |
 | `/var/lib/ledger/update-config/` | the update schedule, written by the app (user `ledger`) |
 | `/var/lib/ledger/update-status/` | the updater's last result, written by root, shown in the app |
 | `/var/lib/ledger/modules/` | installed modules (root-owned; see [MODULES.md](MODULES.md)) |
 | `/etc/ledger/ledger.env` | configuration, including the DB password (root:ledger, 0640) |
 | `/usr/local/share/ledger/` | `schema.sql`, `grants.sql`, `setup-db.sh`, PostgreSQL tuning |
-| `/app/csv_data/` | CSV uploads/exports; `backups/` holds database dumps |
+| `/app/csv_data/` | the TrueNAS share: CSV uploads/exports; `backups/` holds database dumps (by default) |
 
 ---
 
@@ -290,17 +291,36 @@ Any proxy works (Nginx Proxy Manager, Traefik, OPNsense/HAProxy) as long as it:
 
 ## 8. Backups and restore
 
-`ledger-backup.timer` runs nightly at about 02:30. It writes
-`/app/csv_data/backups/ledger-<UTC timestamp>.dump` (PostgreSQL custom format,
-checked with `pg_restore --list` before keeping it). It also deletes dumps
-older than `BACKUP_KEEP_DAYS` (default 30). Because the files land on TrueNAS,
-your ZFS snapshots and replication cover them too.
+Backups are set up in the app under **Settings → Backups**:
+
+- **Schedule**: days, time and time zone (default: every day at 02:30).
+  `ledger-backup.timer` checks every 15 minutes whether one is due. Ledger
+  also backs up before installing an update.
+- **TrueNAS share**: a folder in the container (default
+  `/app/csv_data/backups`, the bind mount from step 3; anything under
+  `/app/csv_data` or `/mnt` works). Dumps older than the number of days you
+  set are deleted. ZFS snapshots and replication cover them too.
+- **Google Drive**: uploads to a "Ledger backups" folder and keeps the newest
+  N. Ledger uses the `drive.file` permission, so it sees only the files it
+  created. You need your own OAuth client (type *TVs and Limited Input
+  devices*) from console.cloud.google.com; the page walks you through it.
+  Publish the OAuth app ("In production"), or Google disconnects it after 7
+  days.
+
+Each backup is `ledger-<UTC timestamp>.dump` (PostgreSQL custom format,
+checked with `pg_restore --list` before it is sent). If a destination fails,
+the dashboard says so. Settings and the Google credentials are kept in
+`/var/lib/ledger/backup/` (not in the database, so not inside the dumps).
 
 ```sh
-systemctl start ledger-backup        # back up now
-journalctl -u ledger-backup          # see results
+systemctl start ledger-backup        # back up now (or "Back up now" in the app)
+journalctl -u ledger-backup -u ledger-backup-scheduled   # see results
 systemctl list-timers ledger-backup.timer
 ```
+
+From Google Drive, download the dump and copy it into the container
+(`pct push <ctid> ledger-….dump /root/ledger.dump` on the Proxmox host)
+before restoring.
 
 **Restore** (keeps the current database as `ledger_old`):
 

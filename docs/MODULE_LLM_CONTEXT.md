@@ -40,18 +40,27 @@ README.md              what it does and how to use it
   "name": "Invoicing",
   "version": "1.0.0",
   "description": "Customers and invoices; paid invoices post to the ledger.",
-  "ledger": ">=0.7.0",
+  "ledger": ">=0.9.0",
   "server": "server.mjs",
   "ui": "ui",
   "nav": { "label": "Invoices", "icon": "invoice" },
-  "migrations": "migrations"
+  "migrations": "migrations",
+  "settings": {
+    "fields": [
+      { "key": "company_name", "label": "Company name", "type": "text", "required": true },
+      { "key": "receivable_account", "label": "Receivable account code", "type": "text", "default": "1200" },
+      { "key": "payment_days", "label": "Payment terms (days)", "type": "number", "min": 0, "max": 365, "default": 30 },
+      { "key": "currency", "type": "select", "options": ["CAD", "USD"], "default": "CAD" },
+      { "key": "smtp_password", "label": "SMTP password", "type": "secret", "help": "For emailing invoices." }
+    ]
+  }
 }
 ```
 
 - `id`: 2–32 chars, `^[a-z][a-z0-9-]{1,31}$`, permanent. DB schema is
   `mod_<id>` with `-` → `_` (e.g. `mod_invoicing`).
-- `version`: `x.y.z`. `ledger`: optional `>=x.y.z`; use `>=0.7.0` (needed
-  for `ctx.dashboard`).
+- `version`: `x.y.z`. `ledger`: optional `>=x.y.z`; use `>=0.9.0` (needed
+  for `settings`; `ctx.dashboard` needs 0.8.0).
 - `nav`: optional sidebar entry (requires `ui`); `label` ≤ 24 chars; `icon`
   one of `hammer wrench invoice cart chart users mail calendar box dollar`.
 - Users can hide or reorder sidebar entries under Settings → Sidebar.
@@ -89,6 +98,7 @@ export default async function register(ctx) {
 | `db.query(sql, params?)` | → `{ rows, rowCount }`. Ledger's pooled connection (restricted role). Always use `$1, $2` placeholders. Full access to your own schema; read access to Ledger's tables (but use `ctx.ledger` instead of raw SQL for the books). No transactions spanning calls (each query may use a different pooled connection); keep multi-statement writes in one SQL statement (CTEs) when atomicity matters. |
 | `ledger.*` | Ledger's own functions, below. |
 | `dashboard.*` | Notifications and to-dos on Ledger's dashboard, below. |
+| `settings.*` | `get()`, `set(values)`, `onChange(fn)` for the manifest's settings, below. |
 | `HttpError` | `throw new ctx.HttpError(status, message)` → that status with JSON error body. |
 | `response(status, body?)` | Return it to choose the status (e.g. 201). |
 | `log.info/warn/error(msg, attrs?)` | JSON log lines (journalctl -u ledger). |
@@ -142,7 +152,31 @@ Dates are `"YYYY-MM-DD"` strings. `ReportLine = { account_code, account_name, am
 
 `JournalEntry = { id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, posted_at, totals: [{ currency, amount_cents }], lines: [{ id, line_number, account_code, account_name, currency, debit_cents, credit_cents, memo }] }`
 
-### ctx.dashboard (Ledger ≥ 0.7.0)
+### Settings (manifest `settings`, Ledger ≥ 0.9.0)
+
+Put all configuration (API keys, account codes, options) in the manifest's
+`settings.fields`; Ledger renders a form on the module's own tab under
+Settings, validates and stores it. Don't build your own settings screen.
+
+- Field: `{ key, label?, type?, help?, required?, default?, options?, min?, max? }`.
+  `key` `^[a-z][a-z0-9_]{0,39}$`; `type` one of `text` (≤500, one line),
+  `textarea` (≤10000), `secret` (≤2000, write-only in the UI, no default),
+  `number` (`min`/`max`), `boolean`, `select` (`options`: strings or
+  `{ value, label }`). At most 50 fields.
+- Optional `settings.page`: a file in `ui/` shown in an iframe below the
+  form, only for things a form can't do.
+
+```js
+const s = await ctx.settings.get();        // { company_name: "...", payment_days: 30, smtp_password: "..." } (defaults filled in; may be null/"" if unset)
+await ctx.settings.set({ payment_days: 15 }); // validated; throws on bad values
+ctx.settings.onChange((values) => { /* react to the user saving */ });
+```
+
+Read settings on each request (cheap) rather than caching at startup, or use
+`onChange`. Handle missing required values gracefully (return 409 with "Set
+the company name under Settings → <module name>").
+
+### ctx.dashboard (Ledger ≥ 0.8.0)
 
 Items belong to the module; `key` (1-100 chars) is your own id; posting the
 same key again updates instead of duplicating.
@@ -225,9 +259,9 @@ const api = (path, opts = {}) =>
   `${ctx.schema}` may be interpolated.
 - Validate every request body field (type, length, range) and answer 422
   with a clear message.
-- Secrets (API keys for external services): store in a settings table in the
-  module's schema, set through the module's UI; never return them in full
-  from GET endpoints; never log them.
+- Secrets (API keys for external services): declare a `secret` settings
+  field; read it with `ctx.settings.get()`; never return it from your own
+  endpoints; never log it.
 - Outbound calls with global `fetch` and a timeout
   (`AbortSignal.timeout(10_000)`).
 - Never write to the filesystem outside `os.tmpdir()`.
@@ -243,7 +277,8 @@ const api = (path, opts = {}) =>
 
 ## 8. Checklist for your answer
 
-- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.7.0"`
+- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.0"`
+- [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries
 - [ ] money as integer cents, per currency, entries balanced per currency

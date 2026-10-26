@@ -253,3 +253,24 @@ export async function getDashboard(app: App) {
 		.sort((a, b) => Number(a.closed_at !== null) - Number(b.closed_at !== null) || (a.due_date ?? "9999").localeCompare(b.due_date ?? "9999"));
 	return { summary, notifications: items.filter((i) => i.kind === "notification"), todos };
 }
+
+/**
+ * A notification from Ledger itself (updates, backups), for code without an
+ * App such as the root updater and `ledger backup run`. Posting again
+ * replaces it and shows it again even if it was dismissed.
+ */
+export async function postLedgerNotice(db: Queryable, n: { key: string; title: string; body: string; level: ItemLevel; link: string }): Promise<void> {
+	await db.query(
+		`INSERT INTO dashboard_items (source, kind, key, title, body, level, link)
+		 VALUES ('ledger', 'notification', $1, $2, $3, $4, $5)
+		 ON CONFLICT (source, kind, key) DO UPDATE
+		    SET title = EXCLUDED.title, body = EXCLUDED.body, level = EXCLUDED.level, link = EXCLUDED.link,
+		        created_at = now(), updated_at = now(), closed_at = NULL, closed_by = NULL`,
+		[n.key, n.title.slice(0, 200), n.body.slice(0, 2000), n.level, n.link],
+	);
+}
+
+/** Hides a Ledger notification (e.g. a backup warning once backups work again). */
+export async function closeLedgerNotice(db: Queryable, key: string): Promise<void> {
+	await db.query(`UPDATE dashboard_items SET closed_at = now() WHERE source = 'ledger' AND kind = 'notification' AND key = $1 AND closed_at IS NULL`, [key]);
+}

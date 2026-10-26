@@ -1,7 +1,4 @@
-import { api, unwrapLoad } from '#lib/api/client.ts';
-import type { PageLoad } from './$types';
+import { redirect } from '@sveltejs/kit';
 
-export const load: PageLoad = async ({ fetch }) => {
-	const res = await api(fetch).GET('/files');
-	return { files: unwrapLoad(res).data };
-};
+// Moved under Settings.
+export const load = () => redirect(308, '/settings/import-export');

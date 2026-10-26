@@ -312,6 +312,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reconciliations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reconciliations, in progress first, then newest statement first */
+        get: operations["listReconciliations"];
+        put?: never;
+        /**
+         * Start reconciling an account against a statement
+         * @description One reconciliation per account can be in progress. The statement date
+         *     can't be before the account's last finished reconciliation. The
+         *     balance is in the account's natural sign (what the statement shows:
+         *     money in the bank, or the amount owed on a card).
+         */
+        post: operations["createReconciliation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reconciliations/{reconciliationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A reconciliation with its lines and balances */
+        get: operations["getReconciliation"];
+        put?: never;
+        post?: never;
+        /** Discard a reconciliation in progress */
+        delete: operations["deleteReconciliation"];
+        options?: never;
+        head?: never;
+        /** Change the statement date or balance (in progress only) */
+        patch: operations["updateReconciliation"];
+        trace?: never;
+    };
+    "/reconciliations/{reconciliationId}/cleared": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tick or untick lines */
+        post: operations["changeCleared"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reconciliations/{reconciliationId}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish (the difference must be 0) */
+        post: operations["finishReconciliation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reconciliations/{reconciliationId}/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen the account's most recent finished reconciliation */
+        post: operations["undoReconciliation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reports/trial-balance": {
         parameters: {
             query?: never;
@@ -483,6 +577,132 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Backup settings, the last run and the newest dumps on the share */
+        get: operations["getBackups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save backup settings
+         * @description `google.client_secret` omitted or null keeps the saved secret.
+         *     Changing the client ID disconnects the Google account.
+         */
+        put: operations["putBackupConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Back up now (runs in the background) */
+        post: operations["runBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/truenas/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check that a directory exists and is writable */
+        post: operations["testBackupShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/google/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start connecting Google Drive (OAuth device flow)
+         * @description Show the user `user_code` and `verification_url`, then call /backups/google/poll every `interval` seconds.
+         */
+        post: operations["connectGoogle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/google/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Whether the user has approved access yet */
+        post: operations["pollGoogle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/google/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect Google Drive (revokes Ledger's access) */
+        post: operations["disconnectGoogle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/system/update": {
         parameters: {
             query?: never;
@@ -585,6 +805,32 @@ export interface paths {
         put?: never;
         /** Update all modules to their latest releases now */
         post: operations["syncModules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/modules/{moduleId}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A running module's declared settings and their values
+         * @description Secret fields are never returned; `secrets_set` says whether each one has a value.
+         */
+        get: operations["getModuleSettings"];
+        /**
+         * Save a module's settings
+         * @description Keys left out keep their value; null resets a field to its default.
+         *     For secret fields, null or leaving the key out keeps the stored value
+         *     and "" clears it.
+         */
+        put: operations["putModuleSettings"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -969,6 +1215,52 @@ export interface components {
             compatible: boolean;
             ledger_version: string;
         };
+        Reconciliation: {
+            /** Format: int64 */
+            id: number;
+            account_code: components["schemas"]["AccountCode"];
+            account_name: string;
+            account_type: components["schemas"]["AccountType"];
+            currency: components["schemas"]["Currency"];
+            /** Format: date */
+            statement_date: string;
+            statement_balance_cents: components["schemas"]["SignedCents"];
+            /** @enum {string} */
+            status: "open" | "finished";
+            created_by: string | null;
+            /** Format: date-time */
+            created_at: string;
+            finished_by: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+            cleared_count: number;
+        };
+        ReconciliationLine: {
+            /** Format: int64 */
+            transaction_id: number;
+            /** Format: int64 */
+            journal_entry_id: number;
+            /** Format: date */
+            entry_date: string;
+            description: string;
+            reference: string;
+            memo: string;
+            debit_cents: components["schemas"]["Cents"];
+            credit_cents: components["schemas"]["Cents"];
+            /** @description In the account's natural sign */
+            amount_cents: components["schemas"]["SignedCents"];
+            cleared: boolean;
+        };
+        ReconciliationDetail: {
+            reconciliation: components["schemas"]["Reconciliation"];
+            /** @description Cleared on earlier statements */
+            opening_balance_cents: components["schemas"]["SignedCents"];
+            cleared_balance_cents: components["schemas"]["SignedCents"];
+            /** @description Statement balance minus cleared balance; 0 to finish */
+            difference_cents: components["schemas"]["SignedCents"];
+            /** @description Uncleared lines dated on or before the statement, plus the lines cleared on this statement */
+            lines: components["schemas"]["ReconciliationLine"][];
+        };
         SidebarPrefs: {
             items: {
                 /**
@@ -1047,6 +1339,8 @@ export interface components {
             version: string | null;
             description: string;
             nav_label: string | null;
+            /** @description The module declares settings (it gets a Settings tab) */
+            has_settings: boolean;
             /**
              * @description running; failed (installed but would not load: see message);
              *     pending (waiting for the installer); error (the installer could
@@ -1055,6 +1349,108 @@ export interface components {
              */
             state: "running" | "failed" | "pending" | "error" | "removing";
             message: string;
+        };
+        SettingValue: (string | number | boolean) | null;
+        SettingsField: {
+            key: string;
+            label: string;
+            /** @enum {string} */
+            type: "text" | "textarea" | "secret" | "number" | "boolean" | "select";
+            help: string;
+            required: boolean;
+            default: components["schemas"]["SettingValue"];
+            options: {
+                value: string;
+                label: string;
+            }[];
+            min: number | null;
+            max: number | null;
+        };
+        ModuleSettings: {
+            fields: components["schemas"]["SettingsField"][];
+            values: {
+                [key: string]: components["schemas"]["SettingValue"];
+            };
+            secrets_set: {
+                [key: string]: boolean;
+            };
+            /** @description URL of an extra settings page from the module, shown below the form */
+            page: string | null;
+        };
+        BackupSchedule: {
+            enabled: boolean;
+            days: number[];
+            /** @example 02:30 */
+            time: string;
+            /** @example America/Toronto */
+            timezone: string;
+        };
+        TrueNasTarget: {
+            enabled: boolean;
+            /** @description Directory inside the container (under /app/csv_data or /mnt) */
+            path: string;
+            keep_days: number;
+        };
+        BackupConfigChange: {
+            schedule?: components["schemas"]["BackupSchedule"];
+            truenas?: components["schemas"]["TrueNasTarget"];
+            google?: {
+                enabled: boolean;
+                client_id: string;
+                client_secret?: string | null;
+                keep_count: number;
+            };
+        };
+        BackupInfo: {
+            /** @description Backups are set up on this server */
+            available: boolean;
+            config: {
+                schedule: components["schemas"]["BackupSchedule"];
+                truenas: components["schemas"]["TrueNasTarget"];
+                google: {
+                    enabled: boolean;
+                    client_id: string;
+                    has_client_secret: boolean;
+                    connected: boolean;
+                    account: string;
+                    keep_count: number;
+                };
+            };
+            status: {
+                /** @enum {string} */
+                state: "idle" | "running" | "ok" | "warning" | "error";
+                /** @enum {string|null} */
+                trigger: "manual" | "scheduled" | null;
+                /** Format: date-time */
+                started_at: string | null;
+                /** Format: date-time */
+                finished_at: string | null;
+                message: string;
+                file: string | null;
+                size_bytes: number | null;
+                results: {
+                    /** @enum {string} */
+                    target: "truenas" | "google";
+                    ok: boolean;
+                    message: string;
+                }[];
+                /** Format: date-time */
+                last_scheduled_for: string | null;
+                last_ok: {
+                    /** Format: date-time */
+                    truenas: string | null;
+                    /** Format: date-time */
+                    google: string | null;
+                };
+            };
+            /** Format: date-time */
+            next_run: string | null;
+            share_files: {
+                name: string;
+                size_bytes: number;
+                /** Format: date-time */
+                modified_at: string;
+            }[];
         };
         ModulesInfo: {
             installer_available: boolean;
@@ -1080,6 +1476,7 @@ export interface components {
     };
     parameters: {
         AccountCode: components["schemas"]["AccountCode"];
+        ReconciliationId: number;
         ItemId: number;
         EntryId: number;
         Filename: components["schemas"]["CsvFilename"];
@@ -1625,6 +2022,222 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listReconciliations: {
+        parameters: {
+            query?: {
+                account_code?: components["schemas"]["AccountCode"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reconciliations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Reconciliation"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    account_code: components["schemas"]["AccountCode"];
+                    /** Format: date */
+                    statement_date: string;
+                    statement_balance_cents: components["schemas"]["SignedCents"];
+                };
+            };
+        };
+        responses: {
+            /** @description Started */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDetail"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reconciliationId: components["parameters"]["ReconciliationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reconciliation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDetail"];
+                };
+            };
+            404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reconciliationId: components["parameters"]["ReconciliationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    updateReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reconciliationId: components["parameters"]["ReconciliationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: date */
+                    statement_date?: string;
+                    statement_balance_cents?: components["schemas"]["SignedCents"];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDetail"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    changeCleared: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reconciliationId: components["parameters"]["ReconciliationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    clear?: number[];
+                    unclear?: number[];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDetail"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    finishReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reconciliationId: components["parameters"]["ReconciliationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Finished */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDetail"];
+                };
+            };
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    undoReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reconciliationId: components["parameters"]["ReconciliationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reopened */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDetail"];
+                };
+            };
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
     getTrialBalance: {
         parameters: {
             query?: {
@@ -1836,6 +2449,183 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backups */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putBackupConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupConfigChange"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    runBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    testBackupShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    path: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        message: string;
+                        free_bytes: number | null;
+                    };
+                };
+            };
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    connectGoogle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Code for the user */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        user_code: string;
+                        verification_url: string;
+                        /** Format: date-time */
+                        expires_at: string;
+                        interval: number;
+                    };
+                };
+            };
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    pollGoogle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description State */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        state: "pending" | "connected" | "denied" | "expired";
+                        account: string;
+                    };
+                };
+            };
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    disconnectGoogle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getUpdate: {
         parameters: {
             query?: never;
@@ -2006,6 +2796,63 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getModuleSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModuleSettings"];
+                };
+            };
+            404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putModuleSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    values: {
+                        [key: string]: components["schemas"]["SettingValue"];
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModuleSettings"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

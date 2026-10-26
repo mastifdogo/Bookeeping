@@ -84,6 +84,7 @@ tags:
   - name: Accounts
   - name: Journal Entries
   - name: Reports
+  - name: Reconciliation
   - name: Files
   - name: Modules
 
@@ -468,6 +469,173 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /reconciliations:
+    get:
+      tags: [Reconciliation]
+      operationId: listReconciliations
+      summary: Reconciliations, in progress first, then newest statement first
+      parameters:
+        - name: account_code
+          in: query
+          schema: { $ref: '#/components/schemas/AccountCode' }
+      responses:
+        '200':
+          description: Reconciliations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Reconciliation' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Reconciliation]
+      operationId: createReconciliation
+      summary: Start reconciling an account against a statement
+      description: |
+        One reconciliation per account can be in progress. The statement date
+        can't be before the account's last finished reconciliation. The
+        balance is in the account's natural sign (what the statement shows:
+        money in the bank, or the amount owed on a card).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [account_code, statement_date, statement_balance_cents]
+              properties:
+                account_code: { $ref: '#/components/schemas/AccountCode' }
+                statement_date: { type: string, format: date }
+                statement_balance_cents: { $ref: '#/components/schemas/SignedCents' }
+      responses:
+        '201':
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationDetail' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /reconciliations/{reconciliationId}:
+    get:
+      tags: [Reconciliation]
+      operationId: getReconciliation
+      summary: A reconciliation with its lines and balances
+      parameters:
+        - { $ref: '#/components/parameters/ReconciliationId' }
+      responses:
+        '200':
+          description: Reconciliation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationDetail' }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Reconciliation]
+      operationId: updateReconciliation
+      summary: Change the statement date or balance (in progress only)
+      parameters:
+        - { $ref: '#/components/parameters/ReconciliationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                statement_date: { type: string, format: date }
+                statement_balance_cents: { $ref: '#/components/schemas/SignedCents' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationDetail' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Reconciliation]
+      operationId: deleteReconciliation
+      summary: Discard a reconciliation in progress
+      parameters:
+        - { $ref: '#/components/parameters/ReconciliationId' }
+      responses:
+        '204': { description: Deleted }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /reconciliations/{reconciliationId}/cleared:
+    post:
+      tags: [Reconciliation]
+      operationId: changeCleared
+      summary: Tick or untick lines
+      parameters:
+        - { $ref: '#/components/parameters/ReconciliationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                clear:
+                  type: array
+                  items: { type: integer, format: int64 }
+                unclear:
+                  type: array
+                  items: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationDetail' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /reconciliations/{reconciliationId}/finish:
+    post:
+      tags: [Reconciliation]
+      operationId: finishReconciliation
+      summary: Finish (the difference must be 0)
+      parameters:
+        - { $ref: '#/components/parameters/ReconciliationId' }
+      responses:
+        '200':
+          description: Finished
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationDetail' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /reconciliations/{reconciliationId}/undo:
+    post:
+      tags: [Reconciliation]
+      operationId: undoReconciliation
+      summary: Reopen the account's most recent finished reconciliation
+      parameters:
+        - { $ref: '#/components/parameters/ReconciliationId' }
+      responses:
+        '200':
+          description: Reopened
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationDetail' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /reports/trial-balance:
     get:
       tags: [Reports]
@@ -682,6 +850,139 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /backups:
+    get:
+      tags: [System]
+      operationId: getBackups
+      summary: Backup settings, the last run and the newest dumps on the share
+      responses:
+        '200':
+          description: Backups
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupInfo' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/config:
+    put:
+      tags: [System]
+      operationId: putBackupConfig
+      summary: Save backup settings
+      description: |
+        `google.client_secret` omitted or null keeps the saved secret.
+        Changing the client ID disconnects the Google account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupConfigChange' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupInfo' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/run:
+    post:
+      tags: [System]
+      operationId: runBackup
+      summary: Back up now (runs in the background)
+      responses:
+        '202':
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupInfo' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/truenas/test:
+    post:
+      tags: [System]
+      operationId: testBackupShare
+      summary: Check that a directory exists and is writable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, message, free_bytes]
+                properties:
+                  ok: { type: boolean }
+                  message: { type: string }
+                  free_bytes: { type: integer, nullable: true }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/google/connect:
+    post:
+      tags: [System]
+      operationId: connectGoogle
+      summary: Start connecting Google Drive (OAuth device flow)
+      description: Show the user `user_code` and `verification_url`, then call /backups/google/poll every `interval` seconds.
+      responses:
+        '200':
+          description: Code for the user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_code, verification_url, expires_at, interval]
+                properties:
+                  user_code: { type: string }
+                  verification_url: { type: string }
+                  expires_at: { type: string, format: date-time }
+                  interval: { type: integer }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/google/poll:
+    post:
+      tags: [System]
+      operationId: pollGoogle
+      summary: Whether the user has approved access yet
+      responses:
+        '200':
+          description: State
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, account]
+                properties:
+                  state: { type: string, enum: [pending, connected, denied, expired] }
+                  account: { type: string }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/google/disconnect:
+    post:
+      tags: [System]
+      operationId: disconnectGoogle
+      summary: Disconnect Google Drive (revokes Ledger's access)
+      responses:
+        '200':
+          description: Disconnected
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupInfo' }
+        default: { $ref: '#/components/responses/Error' }
+
   /system/update:
     get:
       tags: [System]
@@ -804,6 +1105,53 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /modules/{moduleId}/settings:
+    get:
+      tags: [Modules]
+      operationId: getModuleSettings
+      summary: A running module's declared settings and their values
+      description: Secret fields are never returned; `secrets_set` says whether each one has a value.
+      parameters:
+        - { name: moduleId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleSettings' }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Modules]
+      operationId: putModuleSettings
+      summary: Save a module's settings
+      description: |
+        Keys left out keep their value; null resets a field to its default.
+        For secret fields, null or leaving the key out keeps the stored value
+        and "" clears it.
+      parameters:
+        - { name: moduleId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [values]
+              properties:
+                values:
+                  type: object
+                  additionalProperties: { $ref: '#/components/schemas/SettingValue' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleSettings' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /modules/{moduleId}:
     delete:
       tags: [Modules]
@@ -838,6 +1186,11 @@ components:
       in: path
       required: true
       schema: { $ref: '#/components/schemas/AccountCode' }
+    ReconciliationId:
+      name: reconciliationId
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
     ItemId:
       name: itemId
       in: path
@@ -1328,6 +1681,55 @@ components:
         manifest: { $ref: '#/components/schemas/ModuleManifest' }
         compatible: { type: boolean }
         ledger_version: { type: string }
+    Reconciliation:
+      type: object
+      required: [id, account_code, account_name, account_type, currency, statement_date, statement_balance_cents, status, created_by, created_at, finished_by, finished_at, cleared_count]
+      properties:
+        id: { type: integer, format: int64 }
+        account_code: { $ref: '#/components/schemas/AccountCode' }
+        account_name: { type: string }
+        account_type: { $ref: '#/components/schemas/AccountType' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        statement_date: { type: string, format: date }
+        statement_balance_cents: { $ref: '#/components/schemas/SignedCents' }
+        status: { type: string, enum: [open, finished] }
+        created_by: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        finished_by: { type: string, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        cleared_count: { type: integer }
+    ReconciliationLine:
+      type: object
+      required: [transaction_id, journal_entry_id, entry_date, description, reference, memo, debit_cents, credit_cents, amount_cents, cleared]
+      properties:
+        transaction_id: { type: integer, format: int64 }
+        journal_entry_id: { type: integer, format: int64 }
+        entry_date: { type: string, format: date }
+        description: { type: string }
+        reference: { type: string }
+        memo: { type: string }
+        debit_cents: { $ref: '#/components/schemas/Cents' }
+        credit_cents: { $ref: '#/components/schemas/Cents' }
+        amount_cents:
+          allOf: [{ $ref: '#/components/schemas/SignedCents' }]
+          description: In the account's natural sign
+        cleared: { type: boolean }
+    ReconciliationDetail:
+      type: object
+      required: [reconciliation, opening_balance_cents, cleared_balance_cents, difference_cents, lines]
+      properties:
+        reconciliation: { $ref: '#/components/schemas/Reconciliation' }
+        opening_balance_cents:
+          allOf: [{ $ref: '#/components/schemas/SignedCents' }]
+          description: Cleared on earlier statements
+        cleared_balance_cents: { $ref: '#/components/schemas/SignedCents' }
+        difference_cents:
+          allOf: [{ $ref: '#/components/schemas/SignedCents' }]
+          description: Statement balance minus cleared balance; 0 to finish
+        lines:
+          type: array
+          description: Uncleared lines dated on or before the statement, plus the lines cleared on this statement
+          items: { $ref: '#/components/schemas/ReconciliationLine' }
     SidebarPrefs:
       type: object
       required: [items]
@@ -1408,7 +1810,7 @@ components:
           items: { $ref: '#/components/schemas/DashboardItem' }
     ModuleInfo:
       type: object
-      required: [repo, id, name, version, description, nav_label, state, message]
+      required: [repo, id, name, version, description, nav_label, has_settings, state, message]
       properties:
         repo: { type: string, nullable: true }
         id: { type: string, nullable: true }
@@ -1416,6 +1818,7 @@ components:
         version: { type: string, nullable: true }
         description: { type: string }
         nav_label: { type: string, nullable: true }
+        has_settings: { type: boolean, description: The module declares settings (it gets a Settings tab) }
         state:
           type: string
           enum: [running, failed, pending, error, removing]
@@ -1424,6 +1827,132 @@ components:
             pending (waiting for the installer); error (the installer could
             not install it: see message); removing (taken off the list).
         message: { type: string }
+    SettingValue:
+      nullable: true
+      oneOf:
+        - { type: string }
+        - { type: number }
+        - { type: boolean }
+    SettingsField:
+      type: object
+      required: [key, label, type, help, required, default, options, min, max]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        type: { type: string, enum: [text, textarea, secret, number, boolean, select] }
+        help: { type: string }
+        required: { type: boolean }
+        default: { $ref: '#/components/schemas/SettingValue' }
+        options:
+          type: array
+          items:
+            type: object
+            required: [value, label]
+            properties:
+              value: { type: string }
+              label: { type: string }
+        min: { type: number, nullable: true }
+        max: { type: number, nullable: true }
+    ModuleSettings:
+      type: object
+      required: [fields, values, secrets_set, page]
+      properties:
+        fields:
+          type: array
+          items: { $ref: '#/components/schemas/SettingsField' }
+        values:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/SettingValue' }
+        secrets_set:
+          type: object
+          additionalProperties: { type: boolean }
+        page: { type: string, nullable: true, description: 'URL of an extra settings page from the module, shown below the form' }
+    BackupSchedule:
+      type: object
+      required: [enabled, days, time, timezone]
+      properties:
+        enabled: { type: boolean }
+        days: { type: array, items: { type: integer, minimum: 0, maximum: 6 } }
+        time: { type: string, example: '02:30' }
+        timezone: { type: string, example: America/Toronto }
+    TrueNasTarget:
+      type: object
+      required: [enabled, path, keep_days]
+      properties:
+        enabled: { type: boolean }
+        path: { type: string, description: Directory inside the container (under /app/csv_data or /mnt) }
+        keep_days: { type: integer, minimum: 1, maximum: 3650 }
+    BackupConfigChange:
+      type: object
+      properties:
+        schedule: { $ref: '#/components/schemas/BackupSchedule' }
+        truenas: { $ref: '#/components/schemas/TrueNasTarget' }
+        google:
+          type: object
+          required: [enabled, client_id, keep_count]
+          properties:
+            enabled: { type: boolean }
+            client_id: { type: string }
+            client_secret: { type: string, nullable: true }
+            keep_count: { type: integer, minimum: 1, maximum: 1000 }
+    BackupInfo:
+      type: object
+      required: [available, config, status, next_run, share_files]
+      properties:
+        available: { type: boolean, description: Backups are set up on this server }
+        config:
+          type: object
+          required: [schedule, truenas, google]
+          properties:
+            schedule: { $ref: '#/components/schemas/BackupSchedule' }
+            truenas: { $ref: '#/components/schemas/TrueNasTarget' }
+            google:
+              type: object
+              required: [enabled, client_id, has_client_secret, connected, account, keep_count]
+              properties:
+                enabled: { type: boolean }
+                client_id: { type: string }
+                has_client_secret: { type: boolean }
+                connected: { type: boolean }
+                account: { type: string }
+                keep_count: { type: integer }
+        status:
+          type: object
+          required: [state, trigger, started_at, finished_at, message, file, size_bytes, results, last_scheduled_for, last_ok]
+          properties:
+            state: { type: string, enum: [idle, running, ok, warning, error] }
+            trigger: { type: string, enum: [manual, scheduled], nullable: true }
+            started_at: { type: string, format: date-time, nullable: true }
+            finished_at: { type: string, format: date-time, nullable: true }
+            message: { type: string }
+            file: { type: string, nullable: true }
+            size_bytes: { type: integer, nullable: true }
+            results:
+              type: array
+              items:
+                type: object
+                required: [target, ok, message]
+                properties:
+                  target: { type: string, enum: [truenas, google] }
+                  ok: { type: boolean }
+                  message: { type: string }
+            last_scheduled_for: { type: string, format: date-time, nullable: true }
+            last_ok:
+              type: object
+              required: [truenas, google]
+              properties:
+                truenas: { type: string, format: date-time, nullable: true }
+                google: { type: string, format: date-time, nullable: true }
+        next_run: { type: string, format: date-time, nullable: true }
+        share_files:
+          type: array
+          items:
+            type: object
+            required: [name, size_bytes, modified_at]
+            properties:
+              name: { type: string }
+              size_bytes: { type: integer }
+              modified_at: { type: string, format: date-time }
     ModulesInfo:
       type: object
       required: [installer_available, modules, nav]

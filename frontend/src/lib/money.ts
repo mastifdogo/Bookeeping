@@ -57,3 +57,11 @@ export function isDebitNormal(type: string): boolean {
 export function naturalBalance(type: string, debitPositiveCents: number): number {
 	return isDebitNormal(type) ? debitPositiveCents : -debitPositiveCents;
 }
+
+/** Like parseAmount, but allows a leading minus sign ("-12.50"). */
+export function parseSignedAmount(input: string): number | null {
+	const s = input.trim();
+	if (!s.startsWith('-')) return parseAmount(s);
+	const v = parseAmount(s.slice(1));
+	return v === null || v === 0 ? null : -v;
+}

@@ -9,7 +9,9 @@ export default async function register(ctx) {
 	ctx.route("GET", "/summary", async () => {
 		const accounts = await ctx.ledger.listAccounts();
 		const tb = await ctx.ledger.trialBalance();
+		const { greeting } = await ctx.settings.get(); // Settings → Hello module
 		return {
+			greeting,
 			accounts: accounts.length,
 			// Money is integer cents (bigint); it is sent as exact JSON numbers.
 			totals: tb.totals.map((t) => ({ currency: t.currency, debit_cents: t.debit_cents })),
@@ -33,7 +35,7 @@ export default async function register(ctx) {
 		// Tick off the to-do posted below, and tell the dashboard. The same key
 		// replaces the previous notification instead of piling them up.
 		await ctx.dashboard.complete("first-note");
-		await ctx.dashboard.notify({ key: "latest-note", title: `${req.user.username} wrote a note`, body, link: "/apps/hello" });
+		if ((await ctx.settings.get()).notify_on_note) await ctx.dashboard.notify({ key: "latest-note", title: `${req.user.username} wrote a note`, body, link: "/apps/hello" });
 		return ctx.response(201, rows[0]);
 	});
 

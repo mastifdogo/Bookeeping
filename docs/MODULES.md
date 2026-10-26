@@ -65,6 +65,7 @@ migrations/001_*.sql   database migrations (optional)
 | `ui` | Optional directory containing `index.html`. It is served at `/m/<id>/`. |
 | `nav` | Optional sidebar entry that opens the UI inside Ledger (users can hide or move it under Settings → Sidebar): `label` (up to 24 characters) and an optional `icon`, one of `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`. Other names show the generic module icon. Requires `ui`. |
 | `migrations` | Optional directory of `NNN_name.sql` files. |
+| `settings` | Optional settings form, shown on the module's own tab under Settings (Ledger 0.9.0 and later). See [Settings](#settings). |
 
 Paths are relative to the repository root and cannot contain `..` or hidden
 (`.name`) parts.
@@ -110,7 +111,8 @@ rest of Ledger runs normally.
 | `route(method, path, handler)` | Adds `GET`/`POST`/`PUT`/`PATCH`/`DELETE` routes under `/api/v1/m/<id>`. Paths may contain `:params`. |
 | `db.query(sql, params)` | Runs SQL with Ledger's connection; returns `{ rows, rowCount }`. Use `$1` placeholders, never string concatenation of input. |
 | `ledger.*` | Ledger's own functions; see below. |
-| `dashboard.*` | Notifications and to-dos on Ledger's dashboard (Ledger 0.7.0 and later); see below. |
+| `dashboard.*` | Notifications and to-dos on Ledger's dashboard (Ledger 0.8.0 and later); see below. |
+| `settings.*` | Values of the settings the manifest declares (Ledger 0.9.0 and later); see below. |
 | `HttpError` | `throw new ctx.HttpError(404, "no such invoice")` answers with that status and message. |
 | `response(status, body)` | Return this from a handler to choose the status, e.g. `201`. |
 | `log.info/warn/error(msg, attrs)` | Writes JSON lines to the service log (`journalctl -u ledger`). |
@@ -179,7 +181,48 @@ await ctx.dashboard.list({ kind: "todo", open: true }); // your module's items
 - Invalid items throw, and inside a route handler the API answers 422.
 - Dismissed notifications and done to-dos are deleted after 30 days, and
   expired notifications a day after they expire.
-- Set `"ledger": ">=0.7.0"` in `ledger-module.json` when you use it.
+- Set `"ledger": ">=0.8.0"` in `ledger-module.json` when you use it.
+
+## Settings
+
+Declare settings in the manifest and Ledger gives the module a tab under
+**Settings**, with a form, validation and storage. The module reads the
+values with `ctx.settings`.
+
+```json
+"settings": {
+  "fields": [
+    { "key": "api_key", "label": "API key", "type": "secret", "required": true, "help": "From your provider's dashboard." },
+    { "key": "model", "label": "Model", "type": "select", "options": ["small", { "value": "large", "label": "Large (slower)" }], "default": "small" },
+    { "key": "max_tokens", "label": "Max tokens", "type": "number", "min": 1, "max": 100000, "default": 1000 },
+    { "key": "enabled", "label": "Turn it on", "type": "boolean", "default": true },
+    { "key": "prompt", "label": "System prompt", "type": "textarea" }
+  ],
+  "page": "settings.html"
+}
+```
+
+| Field member | |
+|---|---|
+| `key` | Lowercase letters, digits and `_`, up to 40, starting with a letter. |
+| `type` | `text` (one line, 500 chars), `textarea` (10,000), `secret` (2,000; never shown again after saving), `number` (`min`/`max`), `boolean`, `select` (`options`: strings or `{ "value", "label" }`). Default `text`. |
+| `label`, `help` | Shown in the form (60 / 300 characters). |
+| `required` | The form can't be saved without a value. |
+| `default` | Used until the user sets a value (not for secrets). |
+
+`page` (optional) is a file in the module's `ui` directory, shown in a frame
+below the form, for settings a simple form can't express (e.g. connecting an
+account). At most 50 fields.
+
+```js
+const { api_key, model } = await ctx.settings.get(); // defaults filled in; secrets included
+await ctx.settings.set({ model: "large" });         // validated like the form
+ctx.settings.onChange((values) => { /* reconnect, reschedule… */ });
+```
+
+Values are stored in Ledger's database (`module_settings`), so they are in
+backups, secrets included. Set `"ledger": ">=0.9.0"` when you use settings:
+older Ledger versions refuse the manifest.
 
 ## The UI
 

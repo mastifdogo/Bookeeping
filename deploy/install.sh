@@ -61,7 +61,8 @@ chmod -R u=rwX,go=rX /usr/local/lib/ledger.new
 mv /usr/local/lib/ledger.new /usr/local/lib/ledger
 rm -rf /usr/local/lib/ledger.old
 install -m 0755 "$src/bin/ledger" /usr/local/bin/ledger
-install -m 0755 "$src/deploy/ledger-backup.sh" /usr/local/bin/ledger-backup
+# Backups now run as `ledger backup run` (settings in the app).
+rm -f /usr/local/bin/ledger-backup
 install -m 0755 "$src/deploy/ledger-user.sh" /usr/local/sbin/ledger-user
 install -d -m 0755 /usr/local/share/ledger
 install -m 0644 "$src/db/schema.sql" "$src/db/grants.sql" /usr/local/share/ledger/
@@ -80,6 +81,7 @@ install -d -m 0750 -o root -g ledger /var/lib/ledger/update-status
 install -d -m 0700 -o root -g root /var/cache/ledger-update
 # Modules: installed by the root updater, read-only to the service.
 install -d -m 0755 -o root -g root /var/lib/ledger/modules
+install -d -m 0700 -o ledger -g ledger /var/lib/ledger/backup
 
 install -d -m 0750 -o root -g ledger /etc/ledger
 if [ ! -f /etc/ledger/ledger.env ]; then
@@ -92,12 +94,15 @@ fi
 if command -v systemctl >/dev/null 2>&1; then
 	echo "==> systemd units"
 	install -m 0644 "$src/deploy/ledger.service" "$src/deploy/ledger-backup.service" \
+		"$src/deploy/ledger-backup-scheduled.service" \
 		"$src/deploy/ledger-backup.timer" "$src/deploy/ledger-update.service" \
 		"$src/deploy/ledger-update.timer" "$src/deploy/ledger-update.path" /etc/systemd/system/
 	# The updater only acts when the schedule (off by default) or the app asks.
 	systemctl enable ledger-update.timer ledger-update.path >/dev/null 2>&1 || true
 	if systemctl daemon-reload 2>/dev/null; then
 		systemctl start ledger-update.timer ledger-update.path 2>/dev/null || true
+		# Pick up the timer's new schedule (every 15 minutes) if it is running.
+		systemctl try-restart ledger-backup.timer 2>/dev/null || true
 	else
 		echo "    (systemd not running; run systemctl daemon-reload later)"
 	fi

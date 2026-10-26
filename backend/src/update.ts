@@ -282,8 +282,11 @@ function zonedDate(t: number, tz: string): { y: number; m: number; d: number } {
 	return { y, m: m - 1, d };
 }
 
+/** The parts of a schedule that decide when it runs (updates and backups share them). */
+export type Slots = Pick<UpdateSchedule, "enabled" | "days" | "time" | "timezone">;
+
 /** The most recent scheduled instant at or before now (within the last 8 days), or null. */
-export function lastScheduledTime(s: UpdateSchedule, now: number): number | null {
+export function lastScheduledTime(s: Slots, now: number): number | null {
 	const [hh, mm] = s.time.split(":").map(Number) as [number, number];
 	for (let back = 0; back <= 8; back++) {
 		const { y, m, d } = zonedDate(now - back * 86_400_000, s.timezone);
@@ -296,7 +299,7 @@ export function lastScheduledTime(s: UpdateSchedule, now: number): number | null
 }
 
 /** The next scheduled instant after now, or null when disabled. */
-export function nextScheduledTime(s: UpdateSchedule, now: number): number | null {
+export function nextScheduledTime(s: Slots, now: number): number | null {
 	if (!s.enabled) return null;
 	const [hh, mm] = s.time.split(":").map(Number) as [number, number];
 	for (let ahead = 0; ahead <= 8; ahead++) {
@@ -317,7 +320,7 @@ export const CATCH_UP_MS = 6 * 3600_000;
  * after it has passed, if no run was recorded for it, and if it was missed
  * by less than CATCH_UP_MS.
  */
-export function dueSlot(s: UpdateSchedule, now: number, lastScheduledFor: string | null): number | null {
+export function dueSlot(s: Slots, now: number, lastScheduledFor: string | null): number | null {
 	if (!s.enabled) return null;
 	const slot = lastScheduledTime(s, now);
 	if (slot === null || now - slot > CATCH_UP_MS) return null;

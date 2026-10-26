@@ -1,11 +1,30 @@
 {
   "id": "hello",
   "name": "Hello module",
-  "version": "1.1.0",
-  "description": "A minimal example: a summary of your books and a notes list stored in the module's own table, with a to-do and notifications on the dashboard.",
-  "ledger": ">=0.7.0",
+  "version": "1.2.0",
+  "description": "A minimal example: a summary of your books, a notes list in the module's own table, a to-do and notifications on the dashboard, and a setting on its own Settings tab.",
+  "ledger": ">=0.9.0",
   "server": "server.mjs",
   "ui": "ui",
-  "nav": { "label": "Hello" },
-  "migrations": "migrations"
+  "nav": {
+    "label": "Hello"
+  },
+  "migrations": "migrations",
+  "settings": {
+    "fields": [
+      {
+        "key": "greeting",
+        "label": "Greeting",
+        "type": "text",
+        "default": "Hello from a module",
+        "help": "The heading of the Hello page."
+      },
+      {
+        "key": "notify_on_note",
+        "label": "Post a dashboard notification for each new note",
+        "type": "boolean",
+        "default": true
+      }
+    ]
+  }
 }

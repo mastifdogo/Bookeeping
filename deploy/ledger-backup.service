@@ -1,20 +1,25 @@
-# /etc/systemd/system/ledger-backup.service — run by ledger-backup.timer
+# /etc/systemd/system/ledger-backup.service — back up now
+# (`systemctl start ledger-backup`; the updater runs it before installing a
+# release). Destinations and schedule are set in the app: Settings → Backups.
 [Unit]
-Description=Ledger database backup to /app/csv_data/backups
-After=postgresql.service
-RequiresMountsFor=/app/csv_data
+Description=Ledger database backup
+After=postgresql.service network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=ledger
 Group=ledger
 EnvironmentFile=/etc/ledger/ledger.env
-ExecStart=/usr/local/bin/ledger-backup
-UMask=0027
+ExecStart=/usr/local/bin/ledger backup run
+UMask=0077
 Nice=10
 IOSchedulingClass=idle
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/app/csv_data
+# Settings and the temporary dump, plus where a TrueNAS share may be mounted.
+ReadWritePaths=/var/lib/ledger/backup
+ReadWritePaths=-/app/csv_data
+ReadWritePaths=-/mnt
 ProtectHome=yes
 PrivateTmp=yes

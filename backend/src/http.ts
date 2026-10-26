@@ -29,6 +29,9 @@ import {
 	decodeLoginRequest,
 	decodePasswordChange,
 	decodeReverseRequest,
+	decodeReconciliationCreate,
+	decodeReconciliationUpdate,
+	decodeClearedChange,
 	parseJson,
 	plainJson,
 } from "./decode.ts";
@@ -48,6 +51,33 @@ import { CSV_FILENAME_RE, MAX_FILE_BYTES, exportGeneralLedger, listCsvFiles, ope
 import { importJournalEntries } from "./import.ts";
 import { getDashboard, setItemClosed } from "./dashboard.ts";
 import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
+import {
+	applyConfigChange,
+	backupsInstalled,
+	listShareDumps,
+	nextBackupTime,
+	pollDeviceFlow,
+	publicConfig,
+	readBackupStatus,
+	readConfig,
+	revokeGoogle,
+	runBackup,
+	startDeviceFlow,
+	testShare,
+	writeConfig,
+} from "./backup.ts";
+import { publicSettings, saveSettings } from "./module-settings.ts";
+import { notifySettings } from "./module-host.ts";
+import {
+	changeCleared,
+	createReconciliation,
+	deleteReconciliation,
+	finishReconciliation,
+	getReconciliation,
+	listReconciliations,
+	undoReconciliation,
+	updateReconciliation,
+} from "./reconcile.ts";
 import { changePassword, login, logout, normalizeUsername, sessionUser, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS } from "./auth.ts";
 import { MultipartError, formDataBoundary, parseHeaderParams, parseMultipart } from "./multipart.ts";
 import { CONTENT_TYPES, staticHandler } from "./static.ts";
@@ -462,6 +492,131 @@ async function handleIncomeStatement(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await getIncomeStatement(c.app, from, to, currency));
 }
 
+async function handleListReconciliations(c: Ctx): Promise<void> {
+	const code = c.query.get("account_code");
+	writeJSON(c.res, 200, { data: await listReconciliations(c.app, code || null) });
+}
+
+async function handleCreateReconciliation(c: Ctx): Promise<void> {
+	const input = await decodeBody(c, true, decodeReconciliationCreate);
+	writeJSON(c.res, 201, await createReconciliation(c.app, input, c.user!.id));
+}
+
+async function handleGetReconciliation(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await getReconciliation(c.app, pathId(c, "reconciliationId")));
+}
+
+async function handleUpdateReconciliation(c: Ctx): Promise<void> {
+	const input = await decodeBody(c, true, decodeReconciliationUpdate);
+	writeJSON(c.res, 200, await updateReconciliation(c.app, pathId(c, "reconciliationId"), input));
+}
+
+async function handleChangeCleared(c: Ctx): Promise<void> {
+	const input = await decodeBody(c, true, decodeClearedChange);
+	writeJSON(c.res, 200, await changeCleared(c.app, pathId(c, "reconciliationId"), input));
+}
+
+async function handleFinishReconciliation(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await finishReconciliation(c.app, pathId(c, "reconciliationId"), c.user!.id));
+}
+
+async function handleUndoReconciliation(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await undoReconciliation(c.app, pathId(c, "reconciliationId")));
+}
+
+async function handleDeleteReconciliation(c: Ctx): Promise<void> {
+	await deleteReconciliation(c.app, pathId(c, "reconciliationId"));
+	c.res.writeHead(204).end();
+}
+
+async function requireBackups(c: Ctx): Promise<void> {
+	if (!(await backupsInstalled(c.app.backup.dir))) {
+		throw new ConflictError(`backups are not set up on this server (${c.app.backup.dir} is missing); install from a release with deploy/install.sh`);
+	}
+}
+
+async function backupsInfo(c: Ctx) {
+	const available = await backupsInstalled(c.app.backup.dir);
+	const config = await readConfig(c.app.backup.dir);
+	const status = await readBackupStatus(c.app.backup.dir);
+	// A run that died without finishing (container restarted) is not running any more.
+	if (status.state === "running" && !c.app.backup.running && Date.now() - Date.parse(status.started_at ?? "") > 3 * 3600_000) {
+		Object.assign(status, { state: "error", message: "The last backup did not finish (the server may have restarted)." });
+	}
+	return {
+		available,
+		config: publicConfig(config),
+		status,
+		next_run: nextBackupTime(config),
+		share_files: available && config.truenas.enabled ? await listShareDumps(config.truenas.path) : [],
+	};
+}
+
+async function handleGetBackups(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await backupsInfo(c));
+}
+
+async function handlePutBackupConfig(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const body = await decodeBody(c, true, (v) => plainJson(v));
+	const next = applyConfigChange(await readConfig(c.app.backup.dir), body);
+	await writeConfig(c.app.backup.dir, next);
+	writeJSON(c.res, 200, await backupsInfo(c));
+}
+
+async function handleRunBackup(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	if (!c.app.backup.databaseUrl) throw new ConflictError("DATABASE_URL is not known to the app");
+	if (c.app.backup.running) throw new ConflictError("a backup is already running");
+	const job = runBackup({ dir: c.app.backup.dir, databaseUrl: c.app.backup.databaseUrl, trigger: "manual", google: c.app.backup.google })
+		.catch((err: Error) => log.error("backup failed", { err: err.message }))
+		.finally(() => {
+			c.app.backup.running = null;
+		});
+	c.app.backup.running = job;
+	// Give it a moment to record that it started, so the page shows "running".
+	await Promise.race([job, new Promise((r) => setTimeout(r, 300))]);
+	writeJSON(c.res, 202, await backupsInfo(c));
+}
+
+async function handleTestShare(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const body = await decodeBody(c, true, (v) => plainJson(v) as { path?: unknown });
+	writeJSON(c.res, 200, await testShare(typeof body?.path === "string" ? body.path : ""));
+}
+
+async function handleGoogleConnect(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const config = await readConfig(c.app.backup.dir);
+	const code = await startDeviceFlow(config.google, c.app.backup.google);
+	c.app.backup.device = code;
+	writeJSON(c.res, 200, { user_code: code.user_code, verification_url: code.verification_url, expires_at: new Date(code.expires_at).toISOString(), interval: code.interval });
+}
+
+async function handleGooglePoll(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const code = c.app.backup.device;
+	if (!code) throw new ConflictError("start connecting first");
+	const config = await readConfig(c.app.backup.dir);
+	const r = await pollDeviceFlow(config.google, code, c.app.backup.google);
+	if (r.state === "connected") {
+		await writeConfig(c.app.backup.dir, { ...config, google: { ...r.google, enabled: true } });
+		c.app.backup.device = null;
+		writeJSON(c.res, 200, { state: "connected", account: r.google.account });
+		return;
+	}
+	if (r.state !== "pending") c.app.backup.device = null;
+	writeJSON(c.res, 200, { state: r.state, account: "" });
+}
+
+async function handleGoogleDisconnect(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const config = await readConfig(c.app.backup.dir);
+	await revokeGoogle(config.google, c.app.backup.google);
+	await writeConfig(c.app.backup.dir, { ...config, google: { ...config.google, enabled: false, refresh_token: "", folder_id: "", account: "" } });
+	writeJSON(c.res, 200, await backupsInfo(c));
+}
+
 async function handleGetDashboard(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await getDashboard(c.app));
 }
@@ -612,6 +767,7 @@ async function modulesInfo(c: Ctx) {
 			version: m?.manifest.version ?? null,
 			description: m?.manifest.description ?? "",
 			nav_label: m && !m.error ? (m.manifest.nav?.label ?? null) : null,
+			has_settings: !!m && !m.error && !!m.manifest.settings,
 			state: m ? (m.error ? "failed" : "running") : last?.state === "error" ? "error" : "pending",
 			message: m?.error ?? (last?.state === "error" ? last.message : m ? "" : "Waiting for the installer…"),
 		});
@@ -625,11 +781,37 @@ async function modulesInfo(c: Ctx) {
 			version: m.manifest.version,
 			description: m.manifest.description,
 			nav_label: null,
+			// Still running until the next sync (or, in development, loaded from MODULES_DIR).
+			has_settings: !m.error && !!m.manifest.settings,
 			state: "removing",
 			message: "Removed from the list; uninstalls at the next sync.",
 		});
 	}
 	return { installer_available: await updaterInstalled(c.app.update), modules: list, nav: c.app.modules.nav() };
+}
+
+/** A running module that declares settings, or 404. */
+function settingsModule(c: Ctx) {
+	const m = c.app.modules.modules.get(c.params.id ?? "");
+	if (!m || m.error || !m.manifest.settings) throw new NotFoundError();
+	return { m, spec: m.manifest.settings };
+}
+
+async function handleGetModuleSettings(c: Ctx): Promise<void> {
+	const { m, spec } = settingsModule(c);
+	writeJSON(c.res, 200, await publicSettings(c.app.db, m.manifest.id, spec));
+}
+
+async function handlePutModuleSettings(c: Ctx): Promise<void> {
+	const { m, spec } = settingsModule(c);
+	const body = await decodeBody(c, true, (v) => {
+		const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
+		if (!o || Object.keys(o).some((k) => k !== "values")) throw new DecodeError('expected {"values": {...}}');
+		return o.values;
+	});
+	await saveSettings(c.app.db, m.manifest.id, spec, body, c.user!.id);
+	await notifySettings(c.app, m);
+	writeJSON(c.res, 200, await publicSettings(c.app.db, m.manifest.id, spec));
 }
 
 async function handleListModules(c: Ctx): Promise<void> {
@@ -798,6 +980,15 @@ const ROUTES: Route[] = [
 	route("POST", "/dashboard/items/:itemId/close", true, handleCloseDashboardItem),
 	route("POST", "/dashboard/items/:itemId/reopen", true, handleReopenDashboardItem),
 
+	route("GET", "/reconciliations", true, handleListReconciliations),
+	route("POST", "/reconciliations", true, handleCreateReconciliation),
+	route("GET", "/reconciliations/:reconciliationId", true, handleGetReconciliation),
+	route("PATCH", "/reconciliations/:reconciliationId", true, handleUpdateReconciliation),
+	route("DELETE", "/reconciliations/:reconciliationId", true, handleDeleteReconciliation),
+	route("POST", "/reconciliations/:reconciliationId/cleared", true, handleChangeCleared),
+	route("POST", "/reconciliations/:reconciliationId/finish", true, handleFinishReconciliation),
+	route("POST", "/reconciliations/:reconciliationId/undo", true, handleUndoReconciliation),
+
 	route("GET", "/reports/trial-balance", true, handleTrialBalance),
 	route("GET", "/reports/balance-sheet", true, handleBalanceSheet),
 	route("GET", "/reports/income-statement", true, handleIncomeStatement),
@@ -808,6 +999,14 @@ const ROUTES: Route[] = [
 	route("GET", "/files/:filename", true, handleDownloadFile),
 	route("POST", "/imports/journal-entries", true, handleImportJournalEntries),
 
+	route("GET", "/backups", true, handleGetBackups),
+	route("PUT", "/backups/config", true, handlePutBackupConfig),
+	route("POST", "/backups/run", true, handleRunBackup),
+	route("POST", "/backups/truenas/test", true, handleTestShare),
+	route("POST", "/backups/google/connect", true, handleGoogleConnect),
+	route("POST", "/backups/google/poll", true, handleGooglePoll),
+	route("POST", "/backups/google/disconnect", true, handleGoogleDisconnect),
+
 	route("GET", "/system/update", true, handleGetUpdate),
 	route("PUT", "/system/update/schedule", true, handlePutUpdateSchedule),
 	route("POST", "/system/update/check", true, handleCheckUpdate),
@@ -817,6 +1016,8 @@ const ROUTES: Route[] = [
 	route("POST", "/modules/preview", true, handlePreviewModule),
 	route("POST", "/modules/sync", true, handleSyncModules),
 	route("DELETE", "/modules/:id", true, handleRemoveModule),
+	route("GET", "/modules/:id/settings", true, handleGetModuleSettings),
+	route("PUT", "/modules/:id/settings", true, handlePutModuleSettings),
 ];
 
 /** Matches a path relative to /api/v1 against a route; returns its decoded params. */
