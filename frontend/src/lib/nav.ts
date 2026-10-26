@@ -8,7 +8,7 @@ export const ICONS = {
 	new: 'M12 5v14M5 12h14',
 	accounts: 'M3 6h6l2 2h10v11H3z',
 	reports: 'M5 20V10M12 20V4M19 20v-7',
-	files: 'M6 3h8l4 4v14H6zM14 3v4h4',
+	reconcile: 'M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9',
 	settings:
 		'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
 	logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
@@ -85,19 +85,19 @@ const CORE: Omit<NavItem, 'hidden'>[] = [
 		kind: 'core'
 	},
 	{
+		id: 'core:reconcile',
+		href: '/reconcile',
+		label: 'Reconcile',
+		exact: false,
+		icon: ICONS.reconcile,
+		kind: 'core'
+	},
+	{
 		id: 'core:reports',
 		href: '/reports',
 		label: 'Reports',
 		exact: false,
 		icon: ICONS.reports,
-		kind: 'core'
-	},
-	{
-		id: 'core:files',
-		href: '/files',
-		label: 'Files',
-		exact: false,
-		icon: ICONS.files,
 		kind: 'core'
 	}
 ];

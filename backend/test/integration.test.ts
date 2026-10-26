@@ -13,6 +13,8 @@ import { ModuleHost } from "../src/module-host.ts";
 import { fakeGitHub } from "./fake-github.ts";
 import { today } from "../src/date.ts";
 import { postItem } from "../src/dashboard.ts";
+import { readBackupStatus, runBackup } from "../src/backup.ts";
+import { fakeGoogle } from "./fake-google.ts";
 
 type Line = { account_code: string; debit_cents: number; credit_cents: number; memo?: string };
 const dr = (code: string, cents: number): Line => ({ account_code: code, debit_cents: cents, credit_cents: 0 });
@@ -668,6 +670,33 @@ test("modules: runtime, UI and management API", async (t) => {
 			ctx.route("GET", "/boom", () => { throw new ctx.HttpError(418, "teapot"); });
 		}`,
 	);
+	await mkdir(path.join(modules, "configured"), { recursive: true });
+	await writeFile(
+		path.join(modules, "configured", "ledger-module.json"),
+		JSON.stringify({
+			id: "configured",
+			name: "Configured",
+			version: "1.0.0",
+			server: "server.mjs",
+			settings: {
+				fields: [
+					{ key: "api_key", label: "API key", type: "secret", required: true },
+					{ key: "model", type: "select", options: ["small", { value: "large", label: "Large model" }], default: "small" },
+					{ key: "max_tokens", type: "number", min: 1, max: 1000, default: 100 },
+					{ key: "enabled", type: "boolean", default: true },
+				],
+			},
+		}),
+	);
+	await writeFile(
+		path.join(modules, "configured", "server.mjs"),
+		`let seen = null;
+		export default function (ctx) {
+			ctx.settings.onChange((v) => { seen = v; });
+			ctx.route("GET", "/values", async () => ({ now: await ctx.settings.get(), seen }));
+			ctx.route("POST", "/bump", async () => { await ctx.settings.set({ max_tokens: 999 }); return ctx.settings.get(); });
+		}`,
+	);
 	await mkdir(path.join(modules, "broken"), { recursive: true });
 	await writeFile(path.join(modules, "broken", "ledger-module.json"), JSON.stringify({ id: "broken", name: "Broken", version: "1.0.0", server: "server.mjs" }));
 	await writeFile(path.join(modules, "broken", "server.mjs"), `export default function () { throw new Error("cannot start"); }`);
@@ -678,6 +707,35 @@ test("modules: runtime, UI and management API", async (t) => {
 	await app.modules.loadAll(app);
 	assert.equal(app.modules.modules.get("broken")!.error, "cannot start");
 	assert.equal(app.modules.modules.get("hello")!.error, null);
+
+	let r0;
+	// Module settings: declared fields, secrets never sent back, validated.
+	let ms = await call("GET", "/modules/configured/settings");
+	expectStatus(ms, 200);
+	assert.deepEqual(ms.json().values, { api_key: null, model: "small", max_tokens: 100, enabled: true });
+	assert.deepEqual(ms.json().secrets_set, { api_key: false });
+	assert.equal(ms.json().fields[1].options[1].label, "Large model");
+	expectStatus(await call("GET", "/modules/poster/settings"), 404); // declares none
+	expectStatus(await call("PUT", "/modules/configured/settings", { values: { model: "large" } }), 422); // api_key required
+	expectStatus(await call("PUT", "/modules/configured/settings", { values: { api_key: "sk-1", max_tokens: 5000 } }), 422);
+	expectStatus(await call("PUT", "/modules/configured/settings", { values: { api_key: "sk-1", nope: 1 } }), 422);
+	ms = await call("PUT", "/modules/configured/settings", { values: { api_key: "sk-1", model: "large", enabled: false } });
+	expectStatus(ms, 200);
+	assert.deepEqual(ms.json().values, { api_key: null, model: "large", max_tokens: 100, enabled: false });
+	assert.deepEqual(ms.json().secrets_set, { api_key: true });
+	let mv = (await call("GET", "/m/configured/values")).json();
+	assert.equal(mv.now.api_key, "sk-1"); // the module sees the secret
+	assert.equal(mv.seen.model, "large"); // and was told about the change
+	// Leaving a secret out keeps it; null resets other fields to their default.
+	await call("PUT", "/modules/configured/settings", { values: { model: null } });
+	mv = (await call("GET", "/m/configured/values")).json();
+	assert.deepEqual([mv.now.api_key, mv.now.model], ["sk-1", "small"]);
+	assert.equal((await call("POST", "/m/configured/bump")).json().max_tokens, 999);
+	r0 = await call("GET", "/modules");
+	assert.deepEqual(
+		r0.json().modules.filter((m: any) => m.has_settings).map((m: any) => m.id).sort(),
+		["configured", "hello"],
+	);
 
 	// The example module's API.
 	await createAccount(ta, "1000", "Bank CAD", "asset", "CAD");
@@ -737,7 +795,7 @@ test("modules: runtime, UI and management API", async (t) => {
 	assert.deepEqual(r.json().nav, [{ id: "hello", label: "Hello", icon: null }]);
 	assert.equal(r.json().installer_available, false);
 	const names = r.json().modules.map((m: { id: string; state: string }) => `${m.id}:${m.state}`).sort();
-	assert.deepEqual(names, ["broken:removing", "hello:removing", "poster:removing"]); // installed but not on the wanted list
+	assert.deepEqual(names, ["broken:removing", "configured:removing", "hello:removing", "poster:removing"]); // installed but not on the wanted list
 
 	const gh = await fakeGitHub(t);
 	process.env.LEDGER_UPDATE_API = gh.base;
@@ -880,4 +938,209 @@ test("sidebar preferences are per user", async (t) => {
 	expectStatus(await call("PUT", "/settings/sidebar", { items: [] }), 200);
 	assert.deepEqual((await call("GET", "/settings/sidebar")).json(), { items: [] });
 	expectStatus(await ta.request("GET", "/api/v1/settings/sidebar"), 401);
+});
+
+test("reconciliation", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "2000", "Visa", "liability", "CAD");
+	await createAccount(ta, "3000", "Equity", "equity", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	const post = async (date: string, ...lines: Line[]) => {
+		const r = await call("POST", "/journal-entries", entry(date, "x", ...lines));
+		expectStatus(r, 201);
+		return r.json();
+	};
+	await post("2026-09-01", dr("1000", 100000), cr("3000", 100000)); // +1000.00
+	await post("2026-09-10", dr("6100", 2500), cr("1000", 2500)); // -25.00
+	await post("2026-09-20", dr("6100", 4000), cr("2000", 4000)); // card +40.00 owed
+	await post("2026-10-05", dr("6100", 1000), cr("1000", 1000)); // after the statement
+
+	// Statement: Sept 30, balance 975.00.
+	let r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-09-30", statement_balance_cents: 97500 });
+	expectStatus(r, 201);
+	let d = r.json();
+	const id = d.reconciliation.id;
+	assert.equal(d.reconciliation.status, "open");
+	assert.equal(d.lines.length, 2); // the October line is after the statement
+	assert.deepEqual(d.lines.map((l: any) => l.amount_cents), [100000, -2500]);
+	assert.equal(d.difference_cents, 97500);
+	expectStatus(await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-09-30", statement_balance_cents: 0 }), 409);
+
+	// Tick the first line: not balanced yet, can't finish.
+	const [l1, l2] = d.lines.map((l: any) => l.transaction_id);
+	r = await call("POST", `/reconciliations/${id}/cleared`, { clear: [l1] });
+	expectStatus(r, 200);
+	assert.equal(r.json().difference_cents, -2500);
+	expectStatus(await call("POST", `/reconciliations/${id}/finish`), 409);
+	r = await call("POST", `/reconciliations/${id}/cleared`, { clear: [l2] });
+	assert.equal(r.json().difference_cents, 0);
+	assert.equal(r.json().cleared_balance_cents, 97500);
+	// Lines of other accounts or after the statement date are refused.
+	const visa = (await call("GET", "/accounts/2000/ledger")).json().lines[0].line_id;
+	expectStatus(await call("POST", `/reconciliations/${id}/cleared`, { clear: [visa] }), 422);
+	r = await call("POST", `/reconciliations/${id}/finish`);
+	expectStatus(r, 200);
+	assert.equal(r.json().reconciliation.status, "finished");
+	assert.equal(r.json().reconciliation.finished_by, "tester");
+	expectStatus(await call("POST", `/reconciliations/${id}/cleared`, { unclear: [l1] }), 409);
+	expectStatus(await call("DELETE", `/reconciliations/${id}`), 409);
+
+	// Next statement starts from the reconciled balance; cleared lines are gone.
+	expectStatus(await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-09-15", statement_balance_cents: 0 }), 422);
+	r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-10-31", statement_balance_cents: 96500 });
+	expectStatus(r, 201);
+	d = r.json();
+	assert.equal(d.opening_balance_cents, 97500);
+	assert.equal(d.lines.length, 1);
+	assert.equal(d.difference_cents, -1000);
+	// The earlier one can't be undone while this one is open; delete this one, then undo.
+	expectStatus(await call("POST", `/reconciliations/${id}/undo`), 409);
+	expectStatus(await call("DELETE", `/reconciliations/${d.reconciliation.id}`), 204);
+	r = await call("POST", `/reconciliations/${id}/undo`);
+	expectStatus(r, 200);
+	assert.equal(r.json().reconciliation.status, "open");
+	r = await call("PATCH", `/reconciliations/${id}`, { statement_date: "2026-09-05" });
+	expectStatus(r, 422); // a cleared line is dated after it
+	r = await call("PATCH", `/reconciliations/${id}`, { statement_balance_cents: 100000 });
+	assert.equal(r.json().difference_cents, 2500);
+
+	// Liability: natural sign (amount owed is positive).
+	r = await call("POST", "/reconciliations", { account_code: "2000", statement_date: "2026-09-30", statement_balance_cents: 4000 });
+	d = r.json();
+	assert.equal(d.lines[0].amount_cents, 4000);
+	r = await call("POST", `/reconciliations/${d.reconciliation.id}/cleared`, { clear: [d.lines[0].transaction_id] });
+	assert.equal(r.json().difference_cents, 0);
+
+	r = await call("GET", "/reconciliations?account_code=1000");
+	assert.equal(r.json().data.length, 1);
+	assert.equal((await call("GET", "/reconciliations")).json().data.length, 2);
+	expectStatus(await call("GET", "/reconciliations/999"), 404);
+	expectStatus(await call("POST", "/reconciliations", { account_code: "nope", statement_date: "2026-09-30", statement_balance_cents: 0 }), 422);
+	expectStatus(await call("POST", "/reconciliations", { account_code: "1000" }), 422);
+});
+
+test("backups: settings, TrueNAS and Google Drive", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const g = await fakeGoogle(t);
+	app.backup.google = { oauth: g.oauth, api: g.api };
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-bk-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const prevRoots = process.env.BACKUP_SHARE_ROOTS;
+	process.env.BACKUP_SHARE_ROOTS = root;
+	t.after(() => (prevRoots === undefined ? delete process.env.BACKUP_SHARE_ROOTS : (process.env.BACKUP_SHARE_ROOTS = prevRoots)));
+
+	// Not set up on this server until the state directory exists.
+	let r = await call("GET", "/backups");
+	expectStatus(r, 200);
+	assert.equal(r.json().available, false);
+	expectStatus(await call("POST", "/backups/run"), 409);
+	await mkdir(app.backup.dir, { mode: 0o700 });
+
+	const share = path.join(root, "share", "backups");
+	await mkdir(path.dirname(share));
+	const settings = {
+		schedule: { enabled: true, days: [1, 3, 5], time: "01:15", timezone: "America/Winnipeg" },
+		truenas: { enabled: true, path: share, keep_days: 7 },
+		google: { enabled: false, client_id: "123-abc.apps.googleusercontent.com", client_secret: "secret-1", keep_count: 2 },
+	};
+	r = await call("PUT", "/backups/config", settings);
+	expectStatus(r, 200);
+	let info = r.json();
+	assert.equal(info.available, true);
+	assert.deepEqual(info.config.google, { enabled: false, client_id: settings.google.client_id, has_client_secret: true, connected: false, account: "", keep_count: 2 });
+	assert.ok(info.next_run);
+	assert.equal(JSON.stringify(info).includes("secret-1"), false); // secrets stay on the server
+	// Invalid settings.
+	for (const bad of [
+		{ ...settings, truenas: { ...settings.truenas, path: "/etc/backups" } },
+		{ ...settings, truenas: { ...settings.truenas, path: "relative" } },
+		{ ...settings, schedule: { ...settings.schedule, days: [] } },
+		{ ...settings, google: { ...settings.google, enabled: true, client_id: "" } },
+		{ ...settings, google: { ...settings.google, client_id: "nope" } },
+		{ extra: 1 },
+	]) {
+		expectStatus(await call("PUT", "/backups/config", bad), 422);
+	}
+	r = await call("POST", "/backups/truenas/test", { path: share });
+	assert.equal(r.json().ok, true, r.text);
+	r = await call("POST", "/backups/truenas/test", { path: path.join(root, "missing", "dir") });
+	assert.equal(r.json().ok, false);
+	assert.match(r.json().message, /mounted/);
+
+	// A backup to TrueNAS (pg_dump replaced by a stub file).
+	const dump = async (f: string) => writeFile(f, "PGDMP fake dump");
+	let out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump });
+	assert.equal(out.status.state, "ok", out.status.message);
+	const files = await readdir(share);
+	assert.equal(files.length, 1);
+	assert.match(files[0]!, /^ledger-\d{8}T\d{6}Z\.dump$/);
+	assert.equal((await readdir(path.join(app.backup.dir, "tmp"))).length, 0); // the local copy is removed
+	info = (await call("GET", "/backups")).json();
+	assert.equal(info.status.state, "ok");
+	assert.equal(info.share_files.length, 1);
+	assert.ok(info.status.last_ok.truenas);
+	// A scheduled run only happens when due.
+	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "scheduled", dump, now: () => Date.parse("2026-10-27T12:00:00Z") });
+	assert.equal(out.ran, false); // a Tuesday
+	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "scheduled", dump, now: () => Date.parse("2026-10-28T06:20:00Z") });
+	assert.equal(out.ran, true); // Wednesday 01:20 in Winnipeg
+	assert.equal((await readBackupStatus(app.backup.dir)).last_scheduled_for, "2026-10-28T06:15:00.000Z");
+
+	// Connect Google Drive with the device flow.
+	r = await call("POST", "/backups/google/connect");
+	expectStatus(r, 200);
+	assert.equal(r.json().user_code, "ABCD-EFGH");
+	r = await call("POST", "/backups/google/poll");
+	assert.equal(r.json().state, "pending");
+	r = await call("POST", "/backups/google/poll");
+	assert.deepEqual(r.json(), { state: "connected", account: "me@example.com" });
+	info = (await call("GET", "/backups")).json();
+	assert.equal(info.config.google.connected, true);
+	assert.equal(info.config.google.enabled, true);
+
+	// Both destinations; Drive keeps the newest 2.
+	for (let i = 0; i < 3; i++) {
+		out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump, now: () => Date.parse(`2026-11-0${i + 1}T10:00:00Z`) });
+		assert.equal(out.status.state, "ok", out.status.message);
+	}
+	assert.deepEqual(g.files.map((f) => f.name).sort(), ["ledger-20261102T100000Z.dump", "ledger-20261103T100000Z.dump"]);
+	assert.equal(g.files[0]!.parents[0], "folder-1");
+
+	// Drive access revoked: TrueNAS still works, so a warning, posted to the dashboard.
+	g.revokedGrant = true;
+	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump });
+	assert.equal(out.status.state, "warning");
+	assert.equal(out.ok, true);
+	assert.match(out.status.message, /revoked or expired/);
+	let dash = (await call("GET", "/dashboard")).json();
+	assert.deepEqual(
+		dash.notifications.map((n: any) => [n.key, n.level, n.link]),
+		[["backup", "warning", "/settings/backups"]],
+	);
+	g.revokedGrant = false;
+	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump });
+	assert.equal(out.status.state, "ok");
+	dash = (await call("GET", "/dashboard")).json();
+	assert.deepEqual(dash.notifications, []); // cleared by the successful backup
+
+	// Nothing turned on: an error.
+	r = await call("PUT", "/backups/config", { ...settings, truenas: { ...settings.truenas, enabled: false } });
+	expectStatus(r, 200);
+	await call("POST", "/backups/google/disconnect");
+	assert.deepEqual(g.revoked, ["refresh-1"]);
+	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump });
+	assert.equal(out.status.state, "error");
+	assert.match(out.status.message, /no backup destination/);
+	info = (await call("GET", "/backups")).json();
+	assert.equal(info.config.google.connected, false);
+	// Changing the client ID forgets the connection; the secret is kept only for the same client.
+	r = await call("PUT", "/backups/config", { ...settings, google: { enabled: false, client_id: "999-zzz.apps.googleusercontent.com", keep_count: 2 } });
+	assert.equal(r.json().config.google.has_client_secret, false);
+	expectStatus(await call("GET", "/backups"), 200);
+	expectStatus(await ta.request("GET", "/api/v1/backups"), 401);
 });

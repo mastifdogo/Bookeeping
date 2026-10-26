@@ -26,9 +26,15 @@ export type UpdateSchedule = Schemas['UpdateSchedule'];
 export type ModulesInfo = Schemas['ModulesInfo'];
 export type ModuleInfo = Schemas['ModuleInfo'];
 export type ModulePreview = Schemas['ModulePreview'];
+export type ModuleSettings = Schemas['ModuleSettings'];
+export type BackupInfo = Schemas['BackupInfo'];
+export type SettingsField = Schemas['SettingsField'];
 export type Dashboard = Schemas['Dashboard'];
 export type DashboardItem = Schemas['DashboardItem'];
 export type CurrencySummary = Schemas['CurrencySummary'];
+export type Reconciliation = Schemas['Reconciliation'];
+export type ReconciliationDetail = Schemas['ReconciliationDetail'];
+export type ReconciliationLine = Schemas['ReconciliationLine'];
 
 export const API_BASE = '/api/v1';
 export const ACCOUNT_TYPES: AccountType[] = ['asset', 'liability', 'equity', 'revenue', 'expense'];

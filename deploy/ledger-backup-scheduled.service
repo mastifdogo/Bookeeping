@@ -1,0 +1,25 @@
+# /etc/systemd/system/ledger-backup-scheduled.service — started every 15
+# minutes by ledger-backup.timer; backs up only when the schedule set in the
+# app (Settings → Backups) says a backup is due.
+[Unit]
+Description=Ledger scheduled database backup (if due)
+After=postgresql.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ledger
+Group=ledger
+EnvironmentFile=/etc/ledger/ledger.env
+ExecStart=/usr/local/bin/ledger backup run --if-due
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=strict
+# Settings and the temporary dump, plus where a TrueNAS share may be mounted.
+ReadWritePaths=/var/lib/ledger/backup
+ReadWritePaths=-/app/csv_data
+ReadWritePaths=-/mnt
+ProtectHome=yes
+PrivateTmp=yes

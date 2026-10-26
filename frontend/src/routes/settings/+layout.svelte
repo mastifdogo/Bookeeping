@@ -2,20 +2,25 @@
 	import { page } from '$app/state';
 	import type { LayoutProps } from './$types';
 
-	let { children }: LayoutProps = $props();
+	let { children, data }: LayoutProps = $props();
 
-	const tabs = [
+	// Ledger's own tabs, then one per module that has settings.
+	let tabs = $derived([
 		{ href: '/settings/account', label: 'Account' },
 		{ href: '/settings/sidebar', label: 'Sidebar' },
+		{ href: '/settings/backups', label: 'Backups' },
+		{ href: '/settings/import-export', label: 'Import & export' },
 		{ href: '/settings/modules', label: 'Modules' },
-		{ href: '/settings/updates', label: 'Updates' }
-	];
+		{ href: '/settings/updates', label: 'Updates' },
+		...data.moduleSettings.map((m) => ({ href: `/settings/m/${m.id}`, label: m.name }))
+	]);
 </script>
 
 <h1>Settings</h1>
 
 <nav class="tabs" aria-label="Settings">
-	{#each tabs as t (t.href)}
+	{#each tabs as t, i (t.href)}
+		{#if i === 6}<span class="sep" aria-hidden="true"></span>{/if}
 		<a href={t.href} aria-current={page.url.pathname === t.href ? 'page' : undefined}>{t.label}</a>
 	{/each}
 </nav>
@@ -29,6 +34,12 @@
 		border-bottom: 1px solid var(--border);
 		margin-bottom: 1.25rem;
 		overflow-x: auto;
+	}
+	.sep {
+		width: 1px;
+		margin: 0.5rem 0.35rem;
+		background: var(--border);
+		flex: none;
 	}
 	.tabs a {
 		padding: 0.5rem 0.9rem;

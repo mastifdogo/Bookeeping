@@ -76,7 +76,14 @@ export async function setupTestApp(t: TestContext): Promise<TestApp | null> {
 		await db.query(await readFile(path.join(migrations, f), "utf8"));
 	}
 
-	const app = newApp(db, { csvDir, cookieSecure: "auto", webDir: path.join(repo, "frontend", "build") });
+	const app = newApp(db, {
+		csvDir,
+		cookieSecure: "auto",
+		webDir: path.join(repo, "frontend", "build"),
+		databaseUrl: url.toString(),
+		// Backups are "not set up" until a test creates this directory.
+		backupDir: path.join(csvDir, "backup-state"),
+	});
 	await createUser(app, "tester", "correct horse battery");
 	const { token } = await login(app, "tester", "correct horse battery");
 

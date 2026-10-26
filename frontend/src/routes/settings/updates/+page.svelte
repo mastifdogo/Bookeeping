@@ -152,7 +152,7 @@
 		<div><button class="primary" disabled={busy || !info.updater_installed || form.days.length === 0}>Save schedule</button></div>
 	</div>
 	<p class="muted small" style="margin-bottom:0">
-		Before installing, the server backs up the database to <code>/app/csv_data/backups</code>. If the new version doesn't
-		start, it puts the previous one back.
+		Before installing, the server backs up the database to the destinations under
+		<a href="/settings/backups">Backups</a>. If the new version doesn't start, it puts the previous one back.
 	</p>
 </form>

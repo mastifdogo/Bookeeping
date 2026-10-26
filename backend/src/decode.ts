@@ -181,3 +181,32 @@ export function decodePasswordChange(v: unknown): { current_password: string; ne
 	const p = "PasswordChange.";
 	return { current_password: str(o, "current_password", p) ?? "", new_password: str(o, "new_password", p) ?? "" };
 }
+
+function int64List(o: Record<string, unknown>, key: string, path: string): bigint[] {
+	const v = o[key];
+	if (v === undefined || v === null) return [];
+	if (!Array.isArray(v)) throw mismatch(v, `${path}${key}`, "array");
+	return v.map((x, i) => int64({ x }, "x", `${path}${key}[${i}]`)!).filter((x) => x !== undefined);
+}
+
+export function decodeReconciliationCreate(v: unknown): { account_code: string; statement_date: string; statement_balance_cents: bigint | undefined } {
+	const o = object(v, "ReconciliationCreate", ["account_code", "statement_date", "statement_balance_cents"]);
+	const p = "ReconciliationCreate.";
+	return { account_code: str(o, "account_code", p) ?? "", statement_date: date(o, "statement_date") ?? "", statement_balance_cents: int64(o, "statement_balance_cents", p) };
+}
+
+export function decodeReconciliationUpdate(v: unknown): { statement_date?: string; statement_balance_cents?: bigint } {
+	const o = object(v, "ReconciliationUpdate", ["statement_date", "statement_balance_cents"]);
+	const out: { statement_date?: string; statement_balance_cents?: bigint } = {};
+	const d = date(o, "statement_date");
+	const b = int64(o, "statement_balance_cents", "ReconciliationUpdate.");
+	if (d !== undefined) out.statement_date = d;
+	if (b !== undefined) out.statement_balance_cents = b;
+	return out;
+}
+
+export function decodeClearedChange(v: unknown): { clear: bigint[]; unclear: bigint[] } {
+	const o = object(v, "ClearedChange", ["clear", "unclear"]);
+	const p = "ClearedChange.";
+	return { clear: int64List(o, "clear", p), unclear: int64List(o, "unclear", p) };
+}

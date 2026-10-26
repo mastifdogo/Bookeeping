@@ -1,11 +1,11 @@
-# /etc/systemd/system/ledger-backup.timer
+# /etc/systemd/system/ledger-backup.timer — checks the backup schedule (set
+# in the app under Settings → Backups) every 15 minutes.
 [Unit]
-Description=Nightly Ledger database backup
+Description=Ledger backup schedule check
 
 [Timer]
-OnCalendar=*-*-* 02:30:00
-RandomizedDelaySec=15min
-Persistent=true
+OnCalendar=*:0/15
+Unit=ledger-backup-scheduled.service
 
 [Install]
 WantedBy=timers.target

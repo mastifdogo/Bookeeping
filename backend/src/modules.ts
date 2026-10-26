@@ -10,6 +10,7 @@
 // A module is a repository with a ledger-module.json manifest at its root,
 // published as GitHub Releases. See docs/MODULES.md.
 
+import { parseSettingsSpec, type SettingsSpec } from "./module-settings.ts";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { ValidationError } from "./errors.ts";
@@ -45,6 +46,8 @@ export interface ModuleManifest {
 	nav: { label: string; icon: string | null } | null;
 	/** Directory of NNN_name.sql files, applied in the module's own schema (optional). */
 	migrations: string | null;
+	/** Settings shown on the module's Settings tab (optional). */
+	settings: SettingsSpec | null;
 }
 
 /** A path inside the module: relative, no "..", no hidden segments. */
@@ -54,7 +57,7 @@ const REL_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.)[A-Za-z0-9_.\/-]{1,200}$/;
 export function validateManifest(v: unknown): ModuleManifest {
 	const err = new ValidationError();
 	const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
-	const allowed = ["id", "name", "version", "description", "ledger", "server", "ui", "nav", "migrations"];
+	const allowed = ["id", "name", "version", "description", "ledger", "server", "ui", "nav", "migrations", "settings"];
 	for (const k of Object.keys(o)) if (!allowed.includes(k)) err.add(k, "unknown field");
 	const str = (k: string, re: RegExp | null, max: number, required: boolean): string | null => {
 		const x = o[k];
@@ -96,8 +99,9 @@ export function validateManifest(v: unknown): ModuleManifest {
 			nav = { label: n.label, icon: icon as string | null };
 		}
 	}
+	const settings = parseSettingsSpec(o.settings, err, ui !== null);
 	err.throwIfAny();
-	return { id: id!, name: name!, version: version!, description, ledger, server, ui, nav, migrations };
+	return { id: id!, name: name!, version: version!, description, ledger, server, ui, nav, migrations, settings };
 }
 
 /** Whether this Ledger version satisfies a manifest's "ledger" requirement. Dev builds accept everything. */

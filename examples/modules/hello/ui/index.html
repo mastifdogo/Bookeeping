@@ -38,6 +38,7 @@
 
 	async function load() {
 		const s = await api("/summary");
+		document.querySelector("h1").textContent = s.greeting;
 		document.getElementById("summary").textContent =
 			`${s.accounts} accounts. ` + (s.totals.map((t) => `${t.currency} ${fmt(t.debit_cents)} total debits`).join(", ") || "No postings yet.");
 		const { data } = await api("/notes");

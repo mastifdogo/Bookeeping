@@ -29,6 +29,9 @@ ProtectSystem=strict
 ReadWritePaths=/app/csv_data
 # The update schedule set in the app (the root updater reads it).
 ReadWritePaths=-/var/lib/ledger/update-config
+# Backup settings and "Back up now" (which writes to the TrueNAS share).
+ReadWritePaths=-/var/lib/ledger/backup
+ReadWritePaths=-/mnt
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

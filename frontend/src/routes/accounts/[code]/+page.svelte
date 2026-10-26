@@ -61,6 +61,7 @@
 		{#if !account.is_active}<span class="badge warn">inactive</span>{/if}
 	</h1>
 	<span class="spacer"></span>
+	<a class="button" href="/reconcile?account={encodeURIComponent(account.code)}">Reconcile</a>
 	<button onclick={startEdit} disabled={busy}>Edit</button>
 	<button onclick={() => update({ is_active: !account.is_active })} disabled={busy}>
 		{account.is_active ? 'Deactivate' : 'Reactivate'}

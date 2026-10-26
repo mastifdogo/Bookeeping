@@ -16,7 +16,7 @@ function getTypeParser(oid: number, format?: string): (value: string) => unknown
 }
 
 export type Pool = pg.Pool;
-export type Queryable = pg.Pool | pg.PoolClient;
+export type Queryable = pg.Pool | pg.PoolClient | pg.Client;
 
 /** Every request's SQL must finish within this time (HTTP handlers' budget). */
 export const STATEMENT_TIMEOUT_MS = 60_000;

@@ -17,6 +17,7 @@ import { compatible, scanInstalled, type InstalledModule, type ModuleManifest } 
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
+import { moduleValues, saveSettings, type SettingValue } from "./module-settings.ts";
 import { listBySource, postItem, removeByKey, setClosedByKey, type ItemInput, type ItemKind } from "./dashboard.ts";
 import { isCurrency, publicUser, type AccountCreate, type Currency, type JournalEntryCreate, type User } from "./types.ts";
 
@@ -62,6 +63,8 @@ export interface LoadedModule {
 	routes: ModuleRoute[];
 	/** Why the module is not running (load error, incompatible version); null when it runs. */
 	error: string | null;
+	/** ctx.settings.onChange listeners. */
+	settingsListeners: ((values: Record<string, SettingValue>) => unknown)[];
 }
 
 /** Amounts from modules may be numbers, bigints or digit strings; they become exact bigint cents. */
@@ -135,6 +138,20 @@ function makeContext(app: App, m: LoadedModule) {
 			if (typeof handler !== "function") throw new Error("route: handler must be a function");
 			m.routes.push({ method, segments: routePath.split("/").slice(1), handler });
 		},
+		/** The values of the settings declared in ledger-module.json (defaults filled in, secrets included). */
+		settings: {
+			get: () => moduleValues(app.db, id, m.manifest.settings ?? { fields: [], page: null }),
+			/** Saves some values (validated like the form); other keys keep theirs. */
+			set: async (values: Record<string, SettingValue>) => {
+				await saveSettings(app.db, id, m.manifest.settings ?? { fields: [], page: null }, values, null);
+				await notifySettings(app, m);
+			},
+			/** Called with the new values after they change (the user saved the form, or set()). */
+			onChange(fn: (values: Record<string, SettingValue>) => unknown) {
+				if (typeof fn !== "function") throw new Error("settings.onChange: expected a function");
+				m.settingsListeners.push(fn);
+			},
+		},
 		/** Notifications and to-dos on Ledger's dashboard, owned by this module. */
 		dashboard: {
 			/** Posts a notification. Posting the same key again updates it (and shows it again if its text changed). */
@@ -182,6 +199,19 @@ function makeContext(app: App, m: LoadedModule) {
 
 export type ModuleContext = ReturnType<typeof makeContext>;
 
+/** Tells a module its settings changed. A failing listener is logged, never fatal. */
+export async function notifySettings(app: App, m: LoadedModule): Promise<void> {
+	if (!m.settingsListeners.length || !m.manifest.settings) return;
+	const values = await moduleValues(app.db, m.manifest.id, m.manifest.settings);
+	for (const fn of m.settingsListeners) {
+		try {
+			await fn({ ...values });
+		} catch (err) {
+			log.error("module settings listener failed", { module: m.manifest.id, err: (err as Error).message });
+		}
+	}
+}
+
 const REGISTER_TIMEOUT_MS = 15_000;
 
 export class ModuleHost {
@@ -205,6 +235,7 @@ export class ModuleHost {
 			tag: inst.source?.tag ?? null,
 			routes: [],
 			error: null,
+			settingsListeners: [],
 		};
 		this.modules.set(m.manifest.id, m);
 		if (!compatible(m.manifest, app.version)) {

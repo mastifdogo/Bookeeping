@@ -20,6 +20,7 @@ import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import pg from "pg";
 import { log } from "./log.ts";
+import { postLedgerNotice } from "./dashboard.ts";
 import { MODULES_RUN_NOW_FILE, modulesDir } from "./modules.ts";
 import { moduleOps, syncModules, type ModuleOps } from "./module-installer.ts";
 import { parseListenAddr } from "./config.ts";
@@ -368,18 +369,11 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 }
 
 /** One notification, key "update", replaced by each outcome. */
-async function postUpdateNotice(databaseUrl: string, n: { title: string; body: string; level: string }): Promise<void> {
+async function postUpdateNotice(databaseUrl: string, n: { title: string; body: string; level: "success" | "danger" }): Promise<void> {
 	const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 });
 	await client.connect();
 	try {
-		await client.query(
-			`INSERT INTO dashboard_items (source, kind, key, title, body, level, link)
-			 VALUES ('ledger', 'notification', 'update', $1, $2, $3, '/settings/updates')
-			 ON CONFLICT (source, kind, key) DO UPDATE
-			    SET title = EXCLUDED.title, body = EXCLUDED.body, level = EXCLUDED.level,
-			        created_at = now(), updated_at = now(), closed_at = NULL, closed_by = NULL`,
-			[n.title.slice(0, 200), n.body.slice(0, 2000), n.level],
-		);
+		await postLedgerNotice(client, { key: "update", ...n, link: "/settings/updates" });
 	} finally {
 		await client.end();
 	}
