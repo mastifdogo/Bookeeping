@@ -1,13 +1,16 @@
 {
   "id": "hello",
   "name": "Hello module",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "A minimal example: a summary of your books, a notes list in the module's own table, a to-do and notifications on the dashboard, and a setting on its own Settings tab.",
-  "ledger": ">=0.9.0",
+  "ledger": ">=0.10.0",
   "server": "server.mjs",
   "ui": "ui",
   "nav": {
-    "label": "Hello"
+    "label": "Hello",
+    "icon": {
+      "path": "M4 5h16v11H10l-5 4v-4H4z M8 10h.01 M12 10h.01 M16 10h.01"
+    }
   },
   "migrations": "migrations",
   "settings": {

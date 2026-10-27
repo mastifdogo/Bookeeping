@@ -1,18 +1,25 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { arrangeNav } from '#lib/nav.ts';
 	import type { LayoutProps } from './$types';
 
 	let { children, data }: LayoutProps = $props();
 
-	// Ledger's own tabs, then one per module that has settings.
+	const OWN = [
+		{ href: '/settings/account', label: 'Account', title: '' },
+		{ href: '/settings/sidebar', label: 'Sidebar', title: '' },
+		{ href: '/settings/backups', label: 'Backups', title: '' },
+		{ href: '/settings/import-export', label: 'Import & export', title: '' },
+		{ href: '/settings/modules', label: 'Modules', title: '' },
+		{ href: '/settings/updates', label: 'Updates', title: '' }
+	];
+	// Pages hidden from the sidebar stay reachable here; modules always get a
+	// tab of their own (which shows a hidden module's page too).
+	let hidden = $derived(arrangeNav(data.sidebar, data.modules).filter((i) => i.hidden && i.kind === 'core'));
 	let tabs = $derived([
-		{ href: '/settings/account', label: 'Account' },
-		{ href: '/settings/sidebar', label: 'Sidebar' },
-		{ href: '/settings/backups', label: 'Backups' },
-		{ href: '/settings/import-export', label: 'Import & export' },
-		{ href: '/settings/modules', label: 'Modules' },
-		{ href: '/settings/updates', label: 'Updates' },
-		...data.moduleSettings.map((m) => ({ href: `/settings/m/${m.id}`, label: m.name }))
+		...OWN,
+		...hidden.map((i) => ({ href: `/settings/page/${i.id.slice(5)}`, label: i.label, title: 'Hidden from the sidebar' })),
+		...data.installedModules.map((m) => ({ href: `/settings/m/${m.id}`, label: m.name, title: 'Module' }))
 	]);
 </script>
 
@@ -20,8 +27,8 @@
 
 <nav class="tabs" aria-label="Settings">
 	{#each tabs as t, i (t.href)}
-		{#if i === 6}<span class="sep" aria-hidden="true"></span>{/if}
-		<a href={t.href} aria-current={page.url.pathname === t.href ? 'page' : undefined}>{t.label}</a>
+		{#if i === OWN.length || (i > OWN.length && t.title !== tabs[i - 1]!.title)}<span class="sep" aria-hidden="true"></span>{/if}
+		<a href={t.href} title={t.title || undefined} aria-current={page.url.pathname === t.href ? 'page' : undefined}>{t.label}</a>
 	{/each}
 </nav>
 

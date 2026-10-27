@@ -1,12 +1,16 @@
 <script lang="ts">
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, unwrap, type ModuleSettings } from '#lib/api/client.ts';
+	import { goto, invalidate } from '$app/navigation';
+	import { page } from '$app/state';
+	import { arrangeNav } from '#lib/nav.ts';
+	import NavIcon from '#lib/components/NavIcon.svelte';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
 	type Value = string | number | boolean | null;
-	let settings = $state<ModuleSettings>(undefined!);
+	let settings = $state<ModuleSettings | null>(null);
 	// Form values; secret inputs start empty (blank keeps the stored secret).
 	let form = $state<Record<string, Value>>({});
 	let clearSecret = $state<Record<string, boolean>>({});
@@ -17,8 +21,35 @@
 	let error: unknown = $state(null);
 	let saved = $state(false);
 
-	function reset(s: ModuleSettings) {
+	let mod = $derived(data.mod);
+	// The module's sidebar entry, if it has one, and whether the user hid it.
+	let navItem = $derived(arrangeNav(page.data.sidebar ?? [], page.data.modules ?? []).find((i) => i.id === `module:${data.id}`));
+	const stateLabel: Record<string, [string, string]> = {
+		running: ['ok', 'Running'],
+		failed: ['danger', 'Failed to load'],
+		error: ['danger', 'Install failed'],
+		pending: ['warn', 'Installing'],
+		removing: ['warn', 'Removing']
+	};
+
+	async function remove() {
+		if (!confirm(`Remove ${mod.name}? Its data stays in the database and comes back if you add it again.`)) return;
+		error = null;
+		busy = true;
+		try {
+			unwrap(await api().DELETE('/modules/{moduleId}', { params: { path: { moduleId: data.id } } }));
+			await invalidate('app:modules');
+			await goto('/settings/modules');
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+
+	function reset(s: ModuleSettings | null) {
 		settings = s;
+		if (!s) return;
 		form = Object.fromEntries(s.fields.map((f) => [f.key, f.type === 'secret' ? '' : (s.values[f.key] ?? (f.type === 'boolean' ? false : ''))]));
 		clearSecret = {};
 	}
@@ -28,6 +59,7 @@
 		error = null;
 		saved = false;
 		const values: Record<string, Value> = {};
+		if (!settings) return;
 		for (const f of settings.fields) {
 			const v = form[f.key];
 			if (f.type === 'secret') {
@@ -53,7 +85,24 @@
 	}
 </script>
 
-{#if settings.fields.length > 0}
+<div class="card about">
+	<div class="head">
+		{#if navItem}<NavIcon d={navItem.icon} fill={navItem.iconFill} url={navItem.iconUrl} size={28} />{/if}
+		<div style="flex:1; min-width:0">
+			<strong class="name">{mod.name}</strong>
+			{#if mod.version}<span class="muted small">v{mod.version}</span>{/if}
+			{#if mod.state in stateLabel}<span class="badge {stateLabel[mod.state]![0]}">{stateLabel[mod.state]![1]}</span>{/if}
+			{#if mod.description}<div class="muted small">{mod.description}</div>{/if}
+			{#if mod.repo}<div class="small"><a href="https://github.com/{mod.repo}" target="_blank" rel="noopener noreferrer">github.com/{mod.repo}</a></div>{/if}
+		</div>
+		{#if navItem}<a class="button" href={navItem.href}>Open</a>{/if}
+		{#if data.installerAvailable && mod.state !== 'removing'}<button onclick={remove} disabled={busy}>Remove</button>{/if}
+	</div>
+	{#if mod.message}<p class="small" class:err={mod.state === 'failed' || mod.state === 'error'}>{mod.message}</p>{/if}
+	{#if !settings}<p class="muted small" style="margin-bottom:0">This module has no settings of its own.</p>{/if}
+</div>
+
+{#if settings && settings.fields.length > 0}
 	<form class="card" style="max-width:640px" onsubmit={save}>
 		{#if saved}<div class="notice ok">Saved.</div>{/if}
 		<ErrorNotice {error} />
@@ -99,11 +148,39 @@
 	</form>
 {/if}
 
-{#if settings.page}
+{#if settings?.page}
 	<iframe class="card module-page" src={settings.page} title="Module settings"></iframe>
 {/if}
 
+{#if navItem?.hidden}
+	<h2>{navItem.label}</h2>
+	<p class="muted small" style="margin-top:0">
+		Hidden from the sidebar, so it's shown here. Show it again under <a href="/settings/sidebar">Sidebar</a>.
+	</p>
+	<iframe class="card module-app" src="/m/{data.id}/" title={navItem.label}></iframe>
+{/if}
+
 <style>
+	.about .head {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+	.name {
+		font-size: 1.1rem;
+		margin-right: 0.4rem;
+	}
+	.err {
+		color: var(--danger);
+	}
+	.module-app {
+		display: block;
+		width: 100%;
+		height: calc(100vh - 14rem);
+		min-height: 420px;
+		padding: 0;
+	}
 	.fields {
 		display: flex;
 		flex-direction: column;

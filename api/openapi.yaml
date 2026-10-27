@@ -1966,8 +1966,11 @@ components:
           description: Sidebar entries of running modules
           items:
             type: object
-            required: [id, label, icon]
+            required: [id, label, icon, icon_path, icon_fill, icon_url]
             properties:
               id: { type: string }
               label: { type: string }
-              icon: { type: string, nullable: true }
+              icon: { type: string, nullable: true, description: One of Ledger's named icons }
+              icon_path: { type: string, nullable: true, description: 'A 24x24 SVG path drawn by the module' }
+              icon_fill: { type: boolean, description: Fill icon_path instead of stroking it }
+              icon_url: { type: string, nullable: true, description: 'An SVG file from the module, used as a mask' }

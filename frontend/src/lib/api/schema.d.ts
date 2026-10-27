@@ -1459,7 +1459,14 @@ export interface components {
             nav: {
                 id: string;
                 label: string;
+                /** @description One of Ledger's named icons */
                 icon: string | null;
+                /** @description A 24x24 SVG path drawn by the module */
+                icon_path: string | null;
+                /** @description Fill icon_path instead of stroking it */
+                icon_fill: boolean;
+                /** @description An SVG file from the module, used as a mask */
+                icon_url: string | null;
             }[];
         };
     };

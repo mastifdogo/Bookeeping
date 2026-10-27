@@ -297,7 +297,9 @@ of the last run. Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#8-backups-and-
 
 The sidebar's gear opens **Settings**: Account (password), Sidebar, Backups,
 Import & export (CSV upload, General Ledger export and the files on the
-share), Modules and Updates, plus a tab for each module that has settings. Under **Sidebar** each user chooses which bookkeeping pages and
+share), Modules and Updates, plus a tab for each installed module (its
+details, settings and, if hidden from the sidebar, its page) and for each
+page hidden from the sidebar. Under **Sidebar** each user chooses which bookkeeping pages and
 modules appear and in what order (saved per user, on the server).
 
 On a wide screen, hover a sidebar entry and click its split icon to **open

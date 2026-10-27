@@ -1,12 +1,11 @@
 import { api } from '#lib/api/client.ts';
 import type { LayoutLoad } from './$types';
 
-// Running modules that declare settings get a tab (none if the request fails).
+// Every installed module gets a tab (none if the request fails).
 export const load: LayoutLoad = async ({ fetch, depends }) => {
 	depends('app:modules');
 	const res = await api(fetch).GET('/modules');
-	const moduleSettings = (res.data?.modules ?? [])
-		.filter((m) => m.has_settings && m.id)
-		.map((m) => ({ id: m.id!, name: m.name }));
-	return { moduleSettings };
+	const seen = new Set<string>();
+	const installedModules = (res.data?.modules ?? []).filter((m) => m.id && !seen.has(m.id) && seen.add(m.id));
+	return { installedModules, installerAvailable: res.data?.installer_available ?? false };
 };

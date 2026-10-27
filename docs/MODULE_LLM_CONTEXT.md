@@ -40,10 +40,10 @@ README.md              what it does and how to use it
   "name": "Invoicing",
   "version": "1.0.0",
   "description": "Customers and invoices; paid invoices post to the ledger.",
-  "ledger": ">=0.9.0",
+  "ledger": ">=0.10.0",
   "server": "server.mjs",
   "ui": "ui",
-  "nav": { "label": "Invoices", "icon": "invoice" },
+  "nav": { "label": "Invoices", "icon": { "path": "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3" } },
   "migrations": "migrations",
   "settings": {
     "fields": [
@@ -59,11 +59,18 @@ README.md              what it does and how to use it
 
 - `id`: 2–32 chars, `^[a-z][a-z0-9-]{1,31}$`, permanent. DB schema is
   `mod_<id>` with `-` → `_` (e.g. `mod_invoicing`).
-- `version`: `x.y.z`. `ledger`: optional `>=x.y.z`; use `>=0.9.0` (needed
-  for `settings`; `ctx.dashboard` needs 0.8.0).
-- `nav`: optional sidebar entry (requires `ui`); `label` ≤ 24 chars; `icon`
-  one of `hammer wrench invoice cart chart users mail calendar box dollar`.
-- Users can hide or reorder sidebar entries under Settings → Sidebar.
+- `version`: `x.y.z`. `ledger`: optional `>=x.y.z`; use `>=0.10.0` (needed
+  for drawn icons; `settings` needs 0.9.0, `ctx.dashboard` 0.8.0).
+- `nav`: optional sidebar entry (requires `ui`); `label` ≤ 24 chars; `icon`:
+  - a name: `hammer wrench invoice cart chart users mail calendar box dollar bank wallet piggy receipt tag truck home briefcase clock globe key lock star heart bell file folder cloud database link send phone printer gift bot sparkles pie target scale percent calculator`; or
+  - your own drawing (Ledger ≥ 0.10.0): `{"path": "<SVG path data on a 24x24 grid>", "fill": false}`.
+    It is stroked 1.8px with round caps in the sidebar colour (or filled with `"fill": true`); only
+    path commands and numbers, ≤ 4000 chars, keep ~2px margin. Draw something
+    that says what the module does; or
+  - an SVG file in `ui/` (Ledger ≥ 0.10.0): `{"file": "icon.svg"}`, used as a mask (shape only).
+- Users can hide or reorder sidebar entries under Settings → Sidebar. Every
+  module also has a tab under Settings (info, its settings form, and its page
+  when hidden from the sidebar).
 
 ## 3. server.mjs: `export default async function register(ctx)`
 
@@ -277,7 +284,7 @@ const api = (path, opts = {}) =>
 
 ## 8. Checklist for your answer
 
-- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.0"`
+- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.10.0"`, with a drawn `nav.icon` that fits the module
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries

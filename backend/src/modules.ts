@@ -42,12 +42,67 @@ export interface ModuleManifest {
 	server: string | null;
 	/** Directory with index.html, served at /m/<id>/ (optional). */
 	ui: string | null;
-	/** Sidebar entry opening the UI (optional; needs ui). `icon` names one of Ledger's sidebar icons. */
-	nav: { label: string; icon: string | null } | null;
+	/** Sidebar entry opening the UI (optional; needs ui). */
+	nav: ModuleNav | null;
 	/** Directory of NNN_name.sql files, applied in the module's own schema (optional). */
 	migrations: string | null;
 	/** Settings shown on the module's Settings tab (optional). */
 	settings: SettingsSpec | null;
+}
+
+/**
+ * A sidebar entry. The icon is one of Ledger's named icons, a drawn 24x24 SVG
+ * path (stroked like Ledger's own, or filled), or an SVG file in the ui
+ * directory (used as a mask, so it takes the sidebar's colour).
+ */
+export interface ModuleNav {
+	label: string;
+	icon: string | null;
+	icon_path: string | null;
+	icon_fill: boolean;
+	/** Relative to the ui directory. */
+	icon_file: string | null;
+}
+
+const ICON_NAME_RE = /^[a-z][a-z0-9-]{0,23}$/;
+/** SVG path data only: commands, numbers, separators. */
+const ICON_PATH_RE = /^[Mm][MmLlHhVvCcSsQqTtAaZz0-9.,\s+-]{0,3999}$/;
+
+function parseNav(v: unknown, ui: string | null, err: ValidationError): ModuleNav | null {
+	if (v === undefined || v === null) return null;
+	const bad = (msg: string) => {
+		err.add("nav", msg);
+		return null;
+	};
+	const n = (typeof v === "object" && !Array.isArray(v) ? v : null) as Record<string, unknown> | null;
+	if (!n || Object.keys(n).some((k) => k !== "label" && k !== "icon")) return bad('must be {"label": "...", "icon": ...}');
+	if (typeof n.label !== "string" || !/^[^\u0000-\u001f]{1,24}$/.test(n.label)) return bad("label must be 1-24 characters");
+	if (ui === null) return bad("needs ui");
+	const nav: ModuleNav = { label: n.label, icon: null, icon_path: null, icon_fill: false, icon_file: null };
+	const icon = n.icon;
+	if (icon === undefined || icon === null) return nav;
+	// A name Ledger doesn't know shows the generic module icon, so modules can
+	// name icons added in later Ledger versions.
+	if (typeof icon === "string") {
+		if (!ICON_NAME_RE.test(icon)) return bad("icon must be an icon name, {\"path\": \"M...\"} or {\"file\": \"icon.svg\"}");
+		nav.icon = icon;
+		return nav;
+	}
+	const o = (typeof icon === "object" && !Array.isArray(icon) ? icon : null) as Record<string, unknown> | null;
+	if (!o || Object.keys(o).some((k) => !["path", "fill", "file"].includes(k)) || (o.path === undefined) === (o.file === undefined)) {
+		return bad('icon must be a name, {"path": "M...", "fill": false} or {"file": "icon.svg"}');
+	}
+	if (o.path !== undefined) {
+		if (typeof o.path !== "string" || !ICON_PATH_RE.test(o.path)) return bad("icon.path must be SVG path data (24x24) starting with M, up to 4000 characters");
+		if (o.fill !== undefined && typeof o.fill !== "boolean") return bad("icon.fill must be true or false");
+		nav.icon_path = o.path;
+		nav.icon_fill = o.fill === true;
+	} else {
+		if (o.fill !== undefined) return bad("icon.fill is for drawn (path) icons");
+		if (typeof o.file !== "string" || !REL_PATH_RE.test(o.file) || !o.file.toLowerCase().endsWith(".svg")) return bad("icon.file must be an .svg file inside the ui directory");
+		nav.icon_file = o.file;
+	}
+	return nav;
 }
 
 /** A path inside the module: relative, no "..", no hidden segments. */
@@ -79,26 +134,7 @@ export function validateManifest(v: unknown): ModuleManifest {
 	const server = str("server", REL_PATH_RE, 200, false);
 	const ui = str("ui", REL_PATH_RE, 200, false);
 	const migrations = str("migrations", REL_PATH_RE, 200, false);
-	let nav: { label: string; icon: string | null } | null = null;
-	if (o.nav !== undefined && o.nav !== null) {
-		const n = o.nav as Record<string, unknown>;
-		// An icon name Ledger doesn't know is accepted and shown as the generic module icon,
-		// so a module can name icons added in later Ledger versions.
-		const icon = n.icon === undefined || n.icon === null ? null : n.icon;
-		if (
-			typeof n !== "object" ||
-			typeof n.label !== "string" ||
-			!/^[^\u0000-\u001f]{1,24}$/.test(n.label) ||
-			(icon !== null && (typeof icon !== "string" || !/^[a-z][a-z0-9-]{0,23}$/.test(icon))) ||
-			Object.keys(n).some((k) => k !== "label" && k !== "icon")
-		) {
-			err.add("nav", 'must be {"label": "...", "icon": "..."} with a label of at most 24 characters and an optional icon name');
-		} else if (ui === null) {
-			err.add("nav", "needs ui");
-		} else {
-			nav = { label: n.label, icon: icon as string | null };
-		}
-	}
+	const nav = parseNav(o.nav, ui, err);
 	const settings = parseSettingsSpec(o.settings, err, ui !== null);
 	err.throwIfAny();
 	return { id: id!, name: name!, version: version!, description, ledger, server, ui, nav, migrations, settings };
