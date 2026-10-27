@@ -5,6 +5,7 @@
 	import { afterNavigate, goto, invalidateAll } from '$app/navigation';
 	import { api } from '#lib/api/client.ts';
 	import { ICONS, arrangeNav, pageTitle } from '#lib/nav.ts';
+	import NavIcon from '#lib/components/NavIcon.svelte';
 	import { MAIN_ID, MIN_PANE_PX, panes, type Pane } from '#lib/panes.svelte.ts';
 	import type { LayoutProps } from './$types';
 
@@ -179,7 +180,7 @@
 						{#each visible as l (l.id)}
 							<li>
 								<a href={l.href} title={l.label} aria-current={active(l.href, l.exact) ? 'page' : undefined}>
-									{@render icon(l.icon)}<span class="label">{l.label}</span>
+									<NavIcon d={l.icon} fill={l.iconFill} url={l.iconUrl} /><span class="label">{l.label}</span>
 								</a>
 								{#if wide && !collapsed && !panes.full}
 									<button class="icon-button beside" title="Open {l.label} beside" onclick={() => panes.open(l.href)}>

@@ -13,15 +13,42 @@ const HELLO = path.join(repoRoot, "examples", "modules", "hello");
 test("the example module's manifest is valid", async () => {
 	const m = validateManifest(JSON.parse(await readFile(path.join(HELLO, "ledger-module.json"), "utf8")));
 	assert.equal(m.id, "hello");
-	assert.deepEqual(m.nav, { label: "Hello", icon: null });
+	assert.equal(m.nav!.label, "Hello");
+	assert.match(m.nav!.icon_path!, /^M4 5h16/);
 });
 
 test("nav icons", () => {
 	const base = { id: "sales", name: "Sales", version: "0.1.0", ui: "ui" };
-	assert.deepEqual(validateManifest({ ...base, nav: { label: "Sales", icon: "hammer" } }).nav, { label: "Sales", icon: "hammer" });
+	const nav = (icon: unknown) => validateManifest({ ...base, nav: { label: "Sales", icon } }).nav;
+	const none = { label: "Sales", icon: null, icon_path: null, icon_fill: false, icon_file: null };
+	assert.deepEqual(nav("hammer"), { ...none, icon: "hammer" });
 	// Names from newer Ledger versions are accepted (and shown as the generic icon).
-	assert.deepEqual(validateManifest({ ...base, nav: { label: "Sales", icon: "rocket-ship" } }).nav, { label: "Sales", icon: "rocket-ship" });
-	assert.deepEqual(validateManifest({ ...base, nav: { label: "Sales" } }).nav, { label: "Sales", icon: null });
+	assert.deepEqual(nav("rocket-ship"), { ...none, icon: "rocket-ship" });
+	assert.deepEqual(validateManifest({ ...base, nav: { label: "Sales" } }).nav, none);
+	// Drawn: a 24x24 path, stroked or filled.
+	assert.deepEqual(nav({ path: "M4 4h16v16H4z" }), { ...none, icon_path: "M4 4h16v16H4z" });
+	assert.deepEqual(nav({ path: "m12 2 3 7h7l-6 5 2 8-6-5-6 5 2-8-6-5h7z", fill: true }), {
+		...none,
+		icon_path: "m12 2 3 7h7l-6 5 2 8-6-5-6 5 2-8-6-5h7z",
+		icon_fill: true,
+	});
+	// From a file in ui/.
+	assert.deepEqual(nav({ file: "img/icon.svg" }), { ...none, icon_file: "img/icon.svg" });
+	for (const bad of [
+		{ path: "<script>" },
+		{ path: "M1 1\" onload=\"x" },
+		{ path: "" },
+		{ path: "M1 1", file: "a.svg" },
+		{ file: "icon.png" },
+		{ file: "../icon.svg" },
+		{ file: "a.svg", fill: true },
+		{ path: "M1 1", colour: "red" },
+		"Not A Name",
+		42,
+	]) {
+		assert.throws(() => nav(bad), /validation failed/, JSON.stringify(bad));
+	}
+	assert.throws(() => validateManifest({ ...base, ui: undefined, nav: { label: "Sales" } }), /validation failed/);
 });
 
 test("validateManifest rejects bad manifests", () => {
@@ -102,7 +129,7 @@ async function world(t: import("node:test").TestContext) {
 	for (const d of [dirs.config, dirs.status]) await mkdir(d);
 	const gh = await fakeGitHub(t);
 	const ops = fakeOps();
-	const opts = { dirs, modulesDir: path.join(root, "modules"), cacheDir: path.join(root, "cache"), apiBase: gh.base, ledgerVersion: "v0.9.0", ops };
+	const opts = { dirs, modulesDir: path.join(root, "modules"), cacheDir: path.join(root, "cache"), apiBase: gh.base, ledgerVersion: "v0.10.0", ops };
 	return { root, dirs, gh, ops, opts };
 }
 
@@ -132,13 +159,13 @@ test("syncModules installs, updates and removes", async (t) => {
 	await gh.publish("o/hello", "v1.1.0", HELLO, async (stage) => {
 		await writeFile(path.join(stage, "migrations", "002_more.sql"), "ALTER TABLE notes ADD COLUMN pinned boolean NOT NULL DEFAULT false;");
 		const m = JSON.parse(await readFile(path.join(stage, "ledger-module.json"), "utf8"));
-		await writeFile(path.join(stage, "ledger-module.json"), JSON.stringify({ ...m, version: "1.3.0" }));
+		await writeFile(path.join(stage, "ledger-module.json"), JSON.stringify({ ...m, version: "1.4.0" }));
 	});
 	r = await syncModules(opts);
 	assert.equal(r.results[0]!.state, "updated");
 	assert.deepEqual(ops.calls, ["migrate hello 002_more.sql", "restart"]);
 	installed = await scanInstalled(opts.modulesDir);
-	assert.equal(installed[0]!.manifest.version, "1.3.0");
+	assert.equal(installed[0]!.manifest.version, "1.4.0");
 
 	// Taken off the list: removed (no hidden leftovers).
 	ops.calls.length = 0;
@@ -166,7 +193,7 @@ test("syncModules undoes a change Ledger cannot start with", async (t) => {
 	assert.match(r.results[0]!.message, /undone/);
 	assert.deepEqual(ops.calls, ["restart", "restart"]);
 	const installed = await scanInstalled(opts.modulesDir);
-	assert.equal(installed[0]!.manifest.version, "1.2.0"); // the previous copy (the example as published) is back
+	assert.equal(installed[0]!.manifest.version, "1.3.0"); // the previous copy (the example as published) is back
 	assert.equal(installed[0]!.source?.tag, "v1.0.0");
 });
 

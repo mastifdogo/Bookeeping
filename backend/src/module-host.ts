@@ -321,9 +321,19 @@ export class ModuleHost {
 	}
 
 	/** Sidebar entries for running modules with a UI. */
-	nav(): { id: string; label: string; icon: string | null }[] {
+	nav(): { id: string; label: string; icon: string | null; icon_path: string | null; icon_fill: boolean; icon_url: string | null }[] {
 		return [...this.modules.values()]
 			.filter((m) => !m.error && m.manifest.ui && m.manifest.nav)
-			.map((m) => ({ id: m.manifest.id, label: m.manifest.nav!.label, icon: m.manifest.nav!.icon }));
+			.map((m) => {
+				const n = m.manifest.nav!;
+				return {
+					id: m.manifest.id,
+					label: n.label,
+					icon: n.icon,
+					icon_path: n.icon_path,
+					icon_fill: n.icon_fill,
+					icon_url: n.icon_file ? `/m/${m.manifest.id}/${n.icon_file}` : null,
+				};
+			});
 	}
 }

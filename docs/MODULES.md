@@ -63,12 +63,29 @@ migrations/001_*.sql   database migrations (optional)
 | `ledger` | Optional minimum Ledger version, as `>=x.y.z`. |
 | `server` | Optional ES module exporting `default async function register(ctx)`. |
 | `ui` | Optional directory containing `index.html`. It is served at `/m/<id>/`. |
-| `nav` | Optional sidebar entry that opens the UI inside Ledger (users can hide or move it under Settings → Sidebar): `label` (up to 24 characters) and an optional `icon`, one of `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`. Other names show the generic module icon. Requires `ui`. |
+| `nav` | Optional sidebar entry that opens the UI inside Ledger (users can hide or move it under Settings → Sidebar; a hidden module stays reachable from its tab under Settings): `label` (up to 24 characters) and an optional `icon`. See [Icons](#icons). Requires `ui`. |
 | `migrations` | Optional directory of `NNN_name.sql` files. |
 | `settings` | Optional settings form, shown on the module's own tab under Settings (Ledger 0.9.0 and later). See [Settings](#settings). |
 
 Paths are relative to the repository root and cannot contain `..` or hidden
 (`.name`) parts.
+
+### Icons
+
+`nav.icon` is one of:
+
+- **A name** from Ledger's set: `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`, `bank`, `wallet`, `piggy`, `receipt`, `tag`, `truck`, `home`, `briefcase`, `clock`, `globe`, `key`, `lock`, `star`, `heart`, `bell`, `file`, `folder`, `cloud`, `database`, `link`, `send`, `phone`, `printer`, `gift`, `bot`, `sparkles`, `pie`, `target`, `scale`, `percent`, `calculator`.
+  Unknown names show the generic module icon.
+- **Your own drawing** (Ledger 0.10.0 and later): `{"path": "M4 5h16v11H10l-5 4v-4H4z"}`,
+  SVG path data on a 24×24 grid. It is stroked like Ledger's icons (1.8px,
+  round caps); add `"fill": true` for a solid shape. Up to 4,000 characters,
+  path commands and numbers only.
+- **An SVG file** (Ledger 0.10.0 and later): `{"file": "icon.svg"}`, inside
+  the `ui` directory. Ledger uses its shape as a mask, so it takes the
+  sidebar's colour in light and dark mode; colours in the file are ignored.
+
+Draw on a 24×24 grid with about 2px of margin. Use
+`"ledger": ">=0.10.0"` for drawn or file icons: older versions refuse them.
 
 ## Publishing
 

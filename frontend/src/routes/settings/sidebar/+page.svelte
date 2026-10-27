@@ -2,6 +2,7 @@
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, unwrap } from '#lib/api/client.ts';
 	import { ICONS, arrangeNav, type NavItem } from '#lib/nav.ts';
+	import NavIcon from '#lib/components/NavIcon.svelte';
 	import { invalidate } from '$app/navigation';
 	import type { PageProps } from './$types';
 
@@ -49,7 +50,7 @@
 
 <p class="muted" style="margin-top:0">
 	Choose which pages and modules appear in the sidebar, and in what order: drag them or use the arrows. Hidden pages
-	still work from links. Settings and Log out always stay at the bottom. Saved for your user on every device.
+	get a tab under Settings (modules always have one), so they stay one click away. Settings and Log out always stay at the bottom. Saved for your user on every device.
 </p>
 
 <ErrorNotice {error} />
@@ -76,7 +77,7 @@
 				<span class="grip" title="Drag to reorder">{@render icon(ICONS.grip)}</span>
 				<label>
 					<input type="checkbox" checked={!item.hidden} disabled={saving} onchange={() => toggle(i)} />
-					{@render icon(item.icon)}
+					<NavIcon d={item.icon} fill={item.iconFill} url={item.iconUrl} size={18} />
 					<span>{item.label}</span>
 				</label>
 				<span class="badge">{item.kind === 'module' ? 'Module' : 'Bookkeeping'}</span>
