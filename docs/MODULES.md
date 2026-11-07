@@ -130,6 +130,9 @@ rest of Ledger runs normally.
 | `ledger.*` | Ledger's own functions; see below. |
 | `dashboard.*` | Notifications and to-dos on Ledger's dashboard (Ledger 0.8.0 and later); see below. |
 | `settings.*` | Values of the settings the manifest declares (Ledger 0.9.0 and later); see below. |
+| `llm.*` | The AI provider set up under Settings → AI (Ledger 0.10.0 and later); see below. |
+| `gmail.*` | The Gmail account connected under Settings → Gmail (Ledger 0.10.0 and later); see below. |
+| `search.provide(fn)` | Adds your results to Ledger's search bar (Ledger 0.10.0 and later); see below. |
 | `HttpError` | `throw new ctx.HttpError(404, "no such invoice")` answers with that status and message. |
 | `response(status, body)` | Return this from a handler to choose the status, e.g. `201`. |
 | `log.info/warn/error(msg, attrs)` | Writes JSON lines to the service log (`journalctl -u ledger`). |
@@ -141,7 +144,10 @@ rest of Ledger runs normally.
 - `params`: the decoded `:params`
 - `query`: a `URLSearchParams`
 - `body`: the parsed JSON body, if any
-- `user`: `{ username }` of the logged-in user
+- `user`: `{ username, role }` of the logged-in user. `role` is `admin`,
+  `bookkeeper` or `viewer` (Ledger 0.10.0 and later). Ledger already refuses
+  non-GET requests from viewers; check the role yourself for anything
+  stricter (e.g. only admins may change the module's setup).
 
 Every module route requires a login, and Ledger's cross-site request
 protection applies.
@@ -199,6 +205,74 @@ await ctx.dashboard.list({ kind: "todo", open: true }); // your module's items
 - Dismissed notifications and done to-dos are deleted after 30 days, and
   expired notifications a day after they expire.
 - Set `"ledger": ">=0.8.0"` in `ledger-module.json` when you use it.
+
+## AI (`ctx.llm`)
+
+An admin chooses one AI provider under **Settings → AI**: Claude (Anthropic
+API), Ollama, or any OpenAI-compatible server, and ticks the modules allowed
+to use it. Modules never see the API key. Every call is logged per module.
+
+```js
+const s = await ctx.llm.status(); // { configured, allowed, provider, model, readsPdf }
+
+// Plain text
+const { text } = await ctx.llm.complete({ system: "You are a bookkeeper.", prompt: "Summarise: …", maxTokens: 500 });
+
+// JSON that matches a schema
+const { data } = await ctx.llm.json({
+	system: "Pick the best account for each transaction.",
+	prompt: JSON.stringify({ accounts, transactions }),
+	schema: { type: "object", properties: { picks: { type: "array", items: { type: "object", properties: { id: { type: "string" }, account_code: { type: "string" } }, required: ["id", "account_code"] } } }, required: ["picks"] },
+});
+
+// A conversation, and PDFs (read by Claude; others get the text only)
+await ctx.llm.complete({ messages: [{ role: "user", content: "…" }, { role: "assistant", content: "…" }, { role: "user", content: "…" }] });
+await ctx.llm.json({ prompt: "Read this bill", schema, documents: [{ media_type: "application/pdf", data: base64, name: "bill.pdf" }] });
+```
+
+Results: `{ text, data?, model, usage: { input_tokens, output_tokens } }`.
+Errors throw an `HttpError`, which a route handler can let through: 409 when
+no provider is set up, 403 when the module isn't allowed, 502 when the
+provider fails, 422 when the model declines. The messages say where to fix
+it. `maxTokens` is capped by the admin's limit.
+
+## Gmail (`ctx.gmail`)
+
+An admin connects one Gmail account under **Settings → Gmail** (Google
+OAuth, read and optionally send) and allows modules separately to **read**
+and to **send**.
+
+```js
+const s = await ctx.gmail.status(); // { connected, account, canRead, canSend } for this module
+
+const { messages, nextPageToken } = await ctx.gmail.search("from:billing@ newer_than:30d has:attachment", { max: 25 });
+// messages: [{ id, threadId, date, from, to, subject, snippet, labels }], newest first
+
+const m = await ctx.gmail.message(messages[0].id);   // { …summary, cc, text, html, attachments: [{ attachmentId, filename, mimeType, size }] }
+const pdf = await ctx.gmail.attachment(m.id, m.attachments[0].attachmentId); // Buffer
+const raw = await ctx.gmail.raw(m.id);                // Buffer: RFC 822 source
+
+await ctx.gmail.send({
+	to: "client@example.com", subject: "Invoice 31", text: "Attached.", html: "<p>Attached.</p>",
+	attachments: [{ filename: "invoice-31.pdf", contentType: "application/pdf", content: pdfBuffer }],
+}); // → { id, threadId }
+```
+
+Search uses Gmail's own query syntax. Errors are `HttpError`s like `ctx.llm`'s
+(409 not connected, 403 not allowed, 422 bad input, 502 Gmail failed).
+
+## Search (`ctx.search`)
+
+```js
+ctx.search.provide(async (query, { limit, user }) => {
+	const { rows } = await ctx.db.query(`SELECT id, number, customer FROM ${ctx.schema}.invoices WHERE number ILIKE $1 OR customer ILIKE $1 LIMIT $2`, [`%${query}%`, limit]);
+	return rows.map((r) => ({ title: `Invoice ${r.number}`, subtitle: r.customer, href: `/apps/${ctx.id}?invoice=${r.id}` }));
+});
+```
+
+Your results appear under your module's name in Ledger's search bar. `href`
+must be a path inside Ledger. Answer within 2 seconds; slow or failing
+providers are skipped.
 
 ## Settings
 

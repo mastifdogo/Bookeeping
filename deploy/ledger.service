@@ -31,6 +31,8 @@ ReadWritePaths=/app/csv_data
 ReadWritePaths=-/var/lib/ledger/update-config
 # Backup settings and "Back up now" (which writes to the TrueNAS share).
 ReadWritePaths=-/var/lib/ledger/backup
+# AI and Gmail settings (API keys, OAuth tokens): Settings → AI / Gmail.
+ReadWritePaths=-/var/lib/ledger/integrations
 ReadWritePaths=-/mnt
 ProtectHome=yes
 PrivateTmp=yes

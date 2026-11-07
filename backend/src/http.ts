@@ -18,7 +18,7 @@ import {
 } from "./errors.ts";
 import { parseDate } from "./date.ts";
 import { log } from "./log.ts";
-import { ACCOUNT_CODE_RE, isCurrency, publicUser, type Currency, type User } from "./types.ts";
+import { ACCOUNT_CODE_RE, isCurrency, publicUser, roleAtLeast, ROLES, type Currency, type Role, type User } from "./types.ts";
 import {
 	DecodeError,
 	decodeAccountCreate,
@@ -50,6 +50,10 @@ import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { CSV_FILENAME_RE, MAX_FILE_BYTES, exportGeneralLedger, listCsvFiles, openCsvFile, saveUploadedCsv } from "./files.ts";
 import { importJournalEntries } from "./import.ts";
 import { getDashboard, setItemClosed } from "./dashboard.ts";
+import { search } from "./search.ts";
+import { integrationsAvailable, requireIntegrations, writeIntegration } from "./integrations.ts";
+import { applyLlmChange, llmComplete, llmUsage, publicLlmConfig, readLlmConfig } from "./llm.ts";
+import { applyGmailChange, codeFromPaste, finishAuth, publicGmailConfig, readGmailConfig, REDIRECT_URI, revoke as revokeGmail, startAuth } from "./gmail.ts";
 import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
 import {
 	applyConfigChange,
@@ -78,7 +82,7 @@ import {
 	undoReconciliation,
 	updateReconciliation,
 } from "./reconcile.ts";
-import { changePassword, login, logout, normalizeUsername, sessionUser, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS } from "./auth.ts";
+import { changePassword, createUser, listUsers, login, logout, normalizeUsername, sessionUser, setPassword, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, updateUserAccess, validatePassword } from "./auth.ts";
 import { MultipartError, formDataBoundary, parseHeaderParams, parseMultipart } from "./multipart.ts";
 import { CONTENT_TYPES, staticHandler } from "./static.ts";
 import { promises as fsp } from "node:fs";
@@ -107,7 +111,8 @@ type Handler = (c: Ctx) => Promise<void>;
 interface Route {
 	method: string;
 	segments: string[];
-	auth: boolean;
+	/** The least role allowed; null for routes that need no login. */
+	role: Role | null;
 	handler: Handler;
 }
 
@@ -391,6 +396,59 @@ async function handleMe(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, publicUser(c.user!));
 }
 
+async function handleListUsers(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, { data: (await listUsers(c.app)).map(publicUser) });
+}
+
+function decodeUserBody(v: unknown, create: boolean): { username?: string; password?: string; role?: Role; is_active?: boolean } {
+	const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
+	if (!o) throw new DecodeError("expected an object");
+	const allowed = create ? ["username", "password", "role"] : ["password", "role", "is_active"];
+	for (const k of Object.keys(o)) if (!allowed.includes(k)) throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+	const err = new ValidationError();
+	for (const k of ["username", "password"]) if (o[k] !== undefined && typeof o[k] !== "string") err.add(k, "must be text");
+	if (o.role !== undefined && !(ROLES as readonly unknown[]).includes(o.role)) err.add("role", "must be admin, bookkeeper or viewer");
+	if (o.is_active !== undefined && typeof o.is_active !== "boolean") err.add("is_active", "must be true or false");
+	if (create) for (const k of ["username", "password", "role"]) if (o[k] === undefined) err.add(k, "is required");
+	err.throwIfAny();
+	return o as { username?: string; password?: string; role?: Role; is_active?: boolean };
+}
+
+async function handleCreateUser(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, (v) => decodeUserBody(v, true));
+	try {
+		writeJSON(c.res, 201, publicUser(await createUser(c.app, b.username!, b.password!, b.role!)));
+	} catch (err) {
+		if (isPgError(err) && err.constraint === "users_username_unique") throw new ConflictError("a user with that name already exists");
+		throw err;
+	}
+}
+
+async function handleUpdateUser(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, (v) => decodeUserBody(v, false));
+	const name = c.params.username ?? "";
+	if (b.is_active === false && normalizeUsername(name) === c.user!.username) {
+		const v = new ValidationError();
+		v.add("is_active", "you can't disable yourself");
+		v.throwIfAny();
+	}
+	let name2: string;
+	try {
+		name2 = decodeURIComponent(name);
+	} catch {
+		throw new NotFoundError();
+	}
+	if (b.password !== undefined) {
+		const v = new ValidationError();
+		validatePassword(v, "password", b.password);
+		v.throwIfAny();
+	}
+	const user = await updateUserAccess(c.app, name2, { role: b.role, is_active: b.is_active });
+	// A new password ends that user's sessions (the admin resets it for them).
+	if (b.password !== undefined) await setPassword(c.app, name2, b.password);
+	writeJSON(c.res, 200, publicUser(user));
+}
+
 async function handleGetSidebar(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await getSidebar(c.app, c.user!.id));
 }
@@ -615,6 +673,94 @@ async function handleGoogleDisconnect(c: Ctx): Promise<void> {
 	await revokeGoogle(config.google, c.app.backup.google);
 	await writeConfig(c.app.backup.dir, { ...config, google: { ...config.google, enabled: false, refresh_token: "", folder_id: "", account: "" } });
 	writeJSON(c.res, 200, await backupsInfo(c));
+}
+
+async function handleSearch(c: Ctx): Promise<void> {
+	const limit = atoi(c.query.get("limit") ?? "") ?? 8;
+	writeJSON(c.res, 200, await search(c.app, c.query.get("q") ?? "", c.user!, Math.min(Math.max(limit, 1), 25)));
+}
+
+// ---------------------------------------------------------------------------
+// Integrations: the AI provider and Gmail, shared with modules
+// ---------------------------------------------------------------------------
+
+/** Running modules, for the "which modules may use it" lists. */
+function moduleChoices(c: Ctx) {
+	return [...c.app.modules.modules.values()].filter((m) => !m.error).map((m) => ({ id: m.manifest.id, name: m.manifest.name }));
+}
+
+async function llmInfo(c: Ctx) {
+	const dir = c.app.integrations.dir;
+	return {
+		available: await integrationsAvailable(dir),
+		config: publicLlmConfig(await readLlmConfig(dir)),
+		modules: moduleChoices(c),
+		usage: await llmUsage(c.app),
+	};
+}
+
+async function handleGetLlm(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await llmInfo(c));
+}
+
+async function handlePutLlm(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	const body = await decodeBody(c, true, (v) => plainJson(v));
+	await writeIntegration(c.app.integrations.dir, "llm", applyLlmChange(await readLlmConfig(c.app.integrations.dir), body));
+	writeJSON(c.res, 200, await llmInfo(c));
+}
+
+async function handleTestLlm(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	const started = Date.now();
+	const r = await llmComplete(c.app, "ledger", { prompt: "Reply with the single word OK.", maxTokens: 50 });
+	writeJSON(c.res, 200, { text: r.text.trim().slice(0, 200), model: r.model, duration_ms: Date.now() - started });
+}
+
+async function gmailInfo(c: Ctx) {
+	const dir = c.app.integrations.dir;
+	return { available: await integrationsAvailable(dir), config: publicGmailConfig(await readGmailConfig(dir)), modules: moduleChoices(c) };
+}
+
+async function handleGetGmail(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await gmailInfo(c));
+}
+
+async function handlePutGmail(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	const body = await decodeBody(c, true, (v) => plainJson(v));
+	await writeIntegration(c.app.integrations.dir, "gmail", applyGmailChange(await readGmailConfig(c.app.integrations.dir), body));
+	writeJSON(c.res, 200, await gmailInfo(c));
+}
+
+async function handleGmailStart(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	const body = (await decodeBody(c, false, (v) => plainJson(v))) as { send?: unknown } | null;
+	const { url, pending } = startAuth(await readGmailConfig(c.app.integrations.dir), c.app.integrations.gmail, body?.send === true);
+	c.app.integrations.pendingGmail = pending;
+	writeJSON(c.res, 200, { auth_url: url, redirect_uri: REDIRECT_URI });
+}
+
+async function handleGmailFinish(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	const body = (await decodeBody(c, true, (v) => plainJson(v))) as { url?: unknown } | null;
+	const pending = c.app.integrations.pendingGmail;
+	if (!pending) throw new ConflictError("press Connect first");
+	if (typeof body?.url !== "string") throw new HttpError(422, "paste the address your browser showed after approving", "validation_failed");
+	const code = codeFromPaste(body.url, pending.state);
+	const dir = c.app.integrations.dir;
+	await writeIntegration(dir, "gmail", await finishAuth(await readGmailConfig(dir), pending, code, c.app.integrations.gmail));
+	c.app.integrations.pendingGmail = null;
+	writeJSON(c.res, 200, await gmailInfo(c));
+}
+
+async function handleGmailDisconnect(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	const dir = c.app.integrations.dir;
+	const cur = await readGmailConfig(dir);
+	await revokeGmail(cur, c.app.integrations.gmail);
+	await writeIntegration(dir, "gmail", { ...cur, refresh_token: "", account: "", scopes: [] });
+	writeJSON(c.res, 200, await gmailInfo(c));
 }
 
 async function handleGetDashboard(c: Ctx): Promise<void> {
@@ -891,6 +1037,10 @@ async function serveModuleAPI(c: Ctx, segments: string[]): Promise<void> {
 	const found = c.app.modules.match(id, c.req.method ?? "", rest);
 	if (found === null) return writeError(c.res, 404, "not_found", "no such endpoint");
 	if (found === "method") return writeError(c.res, 405, "bad_request", "method not allowed");
+	// Modules follow the same rule as Ledger: viewers read, bookkeepers change.
+	if (c.req.method !== "GET" && !roleAtLeast(c.user.role, "bookkeeper")) {
+		return writeError(c.res, 403, "forbidden", `this needs the bookkeeper role (you are ${c.user.role})`);
+	}
 	let body: unknown = undefined;
 	if (c.req.method !== "GET" && c.req.method !== "DELETE") {
 		const v = await decodeBody(c, false, (x) => x);
@@ -949,8 +1099,13 @@ async function serveModuleUI(c: Ctx, pathname: string): Promise<void> {
 // Routing
 // ---------------------------------------------------------------------------
 
-function route(method: string, pattern: string, auth: boolean, handler: Handler): Route {
-	return { method, segments: pattern.split("/").slice(1), auth, handler };
+/**
+ * auth: false for public routes; true for "any logged-in user may read, a
+ * bookkeeper may change"; or the least role allowed.
+ */
+function route(method: string, pattern: string, auth: boolean | Role, handler: Handler): Route {
+	const role = auth === false ? null : auth === true ? (method === "GET" ? "viewer" : "bookkeeper") : auth;
+	return { method, segments: pattern.split("/").slice(1), role, handler };
 }
 
 const ROUTES: Route[] = [
@@ -960,9 +1115,12 @@ const ROUTES: Route[] = [
 
 	// Everything else requires a logged-in user.
 	route("GET", "/auth/me", true, handleMe),
-	route("POST", "/auth/password", true, handleChangePassword),
+	route("POST", "/auth/password", "viewer", handleChangePassword),
 	route("GET", "/settings/sidebar", true, handleGetSidebar),
-	route("PUT", "/settings/sidebar", true, handlePutSidebar),
+	route("GET", "/users", "admin", handleListUsers),
+	route("POST", "/users", "admin", handleCreateUser),
+	route("PATCH", "/users/:username", "admin", handleUpdateUser),
+	route("PUT", "/settings/sidebar", "viewer", handlePutSidebar),
 	route("GET", "/currencies", true, handleListCurrencies),
 
 	route("GET", "/accounts", true, handleListAccounts),
@@ -976,6 +1134,7 @@ const ROUTES: Route[] = [
 	route("GET", "/journal-entries/:entryId", true, handleGetJournalEntry),
 	route("POST", "/journal-entries/:entryId/reverse", true, handleReverseJournalEntry),
 
+	route("GET", "/search", true, handleSearch),
 	route("GET", "/dashboard", true, handleGetDashboard),
 	route("POST", "/dashboard/items/:itemId/close", true, handleCloseDashboardItem),
 	route("POST", "/dashboard/items/:itemId/reopen", true, handleReopenDashboardItem),
@@ -999,25 +1158,34 @@ const ROUTES: Route[] = [
 	route("GET", "/files/:filename", true, handleDownloadFile),
 	route("POST", "/imports/journal-entries", true, handleImportJournalEntries),
 
-	route("GET", "/backups", true, handleGetBackups),
-	route("PUT", "/backups/config", true, handlePutBackupConfig),
-	route("POST", "/backups/run", true, handleRunBackup),
-	route("POST", "/backups/truenas/test", true, handleTestShare),
-	route("POST", "/backups/google/connect", true, handleGoogleConnect),
-	route("POST", "/backups/google/poll", true, handleGooglePoll),
-	route("POST", "/backups/google/disconnect", true, handleGoogleDisconnect),
+	route("GET", "/backups", "admin", handleGetBackups),
+	route("PUT", "/backups/config", "admin", handlePutBackupConfig),
+	route("POST", "/backups/run", "admin", handleRunBackup),
+	route("POST", "/backups/truenas/test", "admin", handleTestShare),
+	route("POST", "/backups/google/connect", "admin", handleGoogleConnect),
+	route("POST", "/backups/google/poll", "admin", handleGooglePoll),
+	route("POST", "/backups/google/disconnect", "admin", handleGoogleDisconnect),
 
-	route("GET", "/system/update", true, handleGetUpdate),
-	route("PUT", "/system/update/schedule", true, handlePutUpdateSchedule),
-	route("POST", "/system/update/check", true, handleCheckUpdate),
+	route("GET", "/integrations/llm", "admin", handleGetLlm),
+	route("PUT", "/integrations/llm", "admin", handlePutLlm),
+	route("POST", "/integrations/llm/test", "admin", handleTestLlm),
+	route("GET", "/integrations/gmail", "admin", handleGetGmail),
+	route("PUT", "/integrations/gmail", "admin", handlePutGmail),
+	route("POST", "/integrations/gmail/start", "admin", handleGmailStart),
+	route("POST", "/integrations/gmail/finish", "admin", handleGmailFinish),
+	route("POST", "/integrations/gmail/disconnect", "admin", handleGmailDisconnect),
+
+	route("GET", "/system/update", "admin", handleGetUpdate),
+	route("PUT", "/system/update/schedule", "admin", handlePutUpdateSchedule),
+	route("POST", "/system/update/check", "admin", handleCheckUpdate),
 
 	route("GET", "/modules", true, handleListModules),
-	route("POST", "/modules", true, handleAddModule),
-	route("POST", "/modules/preview", true, handlePreviewModule),
-	route("POST", "/modules/sync", true, handleSyncModules),
-	route("DELETE", "/modules/:id", true, handleRemoveModule),
-	route("GET", "/modules/:id/settings", true, handleGetModuleSettings),
-	route("PUT", "/modules/:id/settings", true, handlePutModuleSettings),
+	route("POST", "/modules", "admin", handleAddModule),
+	route("POST", "/modules/preview", "admin", handlePreviewModule),
+	route("POST", "/modules/sync", "admin", handleSyncModules),
+	route("DELETE", "/modules/:id", "admin", handleRemoveModule),
+	route("GET", "/modules/:id/settings", "admin", handleGetModuleSettings),
+	route("PUT", "/modules/:id/settings", "admin", handlePutModuleSettings),
 ];
 
 /** Matches a path relative to /api/v1 against a route; returns its decoded params. */
@@ -1046,9 +1214,10 @@ async function serveAPI(c: Ctx, rel: string): Promise<void> {
 		pathMatched = true;
 		if (r.method !== c.req.method) continue;
 		c.params = params;
-		if (r.auth) {
+		if (r.role) {
 			c.token = sessionToken(c.req);
 			c.user = await sessionUser(c.app, c.token);
+			if (!roleAtLeast(c.user.role, r.role)) throw new HttpError(403, `this needs the ${r.role} role (you are ${c.user.role})`, "forbidden");
 		}
 		await r.handler(c);
 		return;

@@ -36,7 +36,7 @@
 
 <div class="card">
 	<p style="margin-top:0">
-		Signed in as <strong>{data.user?.username}</strong>.
+		Signed in as <strong>{data.user?.username}</strong> <span class="badge">{data.user?.role}</span>.
 		{#if data.user?.last_login_at}<span class="muted small">Last login {new Date(data.user.last_login_at).toLocaleString()}.</span>{/if}
 	</p>
 </div>

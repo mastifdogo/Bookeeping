@@ -703,6 +703,166 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All users (admin) */
+        get: operations["listUsers"];
+        put?: never;
+        /** Add a user (admin) */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{username}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change a user's role, disable or enable them, or reset their password (admin)
+         * @description At least one active admin must remain, and admins can't disable
+         *     themselves. Disabling or a new password ends the user's sessions.
+         */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search accounts, journal entries (text, number or amount) and modules */
+        get: operations["search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/llm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The AI provider shared with modules, and its usage (admin) */
+        get: operations["getLlm"];
+        /** Set the AI provider (admin); api_key omitted or null keeps it, "" clears it */
+        put: operations["putLlm"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/llm/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a tiny prompt to check the provider works (admin) */
+        post: operations["testLlm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/gmail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Gmail connection shared with modules (admin) */
+        get: operations["getGmail"];
+        /** Set the OAuth client and which modules may read and send (admin) */
+        put: operations["putGmail"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/gmail/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start connecting Gmail; open auth_url, approve, then paste the address the browser lands on into /finish */
+        post: operations["startGmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/gmail/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish connecting with the pasted address (or code) */
+        post: operations["finishGmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/gmail/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect Gmail (revokes Ledger's access) */
+        post: operations["disconnectGmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/system/update": {
         parameters: {
             query?: never;
@@ -889,6 +1049,7 @@ export interface components {
         User: {
             /** @example alice */
             username: string;
+            role: components["schemas"]["Role"];
             is_active: boolean;
             /** Format: date-time */
             created_at: string;
@@ -1451,6 +1612,83 @@ export interface components {
                 /** Format: date-time */
                 modified_at: string;
             }[];
+        };
+        /**
+         * @description admin manages everything; bookkeeper works in the books; viewer reads
+         * @enum {string}
+         */
+        Role: "admin" | "bookkeeper" | "viewer";
+        SearchResults: {
+            query: string;
+            groups: {
+                source: string;
+                label: string;
+                results: {
+                    title: string;
+                    subtitle: string;
+                    href: string;
+                }[];
+            }[];
+        };
+        ModuleChoice: {
+            id: string;
+            name: string;
+        };
+        LlmInfo: {
+            available: boolean;
+            config: {
+                provider: string;
+                model: string;
+                base_url: string;
+                has_api_key: boolean;
+                effort: string;
+                max_tokens: number;
+                allow_modules: string[];
+                configured: boolean;
+                providers: string[];
+                defaults: {
+                    [key: string]: {
+                        model: string;
+                        base_url: string;
+                    };
+                };
+            };
+            modules: components["schemas"]["ModuleChoice"][];
+            usage: {
+                last_30_days: {
+                    source: string;
+                    calls: number;
+                    failed: number;
+                    input_tokens: number;
+                    output_tokens: number;
+                }[];
+                recent: {
+                    source: string;
+                    model: string;
+                    input_tokens: number | null;
+                    output_tokens: number | null;
+                    ok: boolean;
+                    error: string;
+                    duration_ms: number;
+                    /** Format: date-time */
+                    created_at: string;
+                }[];
+            };
+        };
+        GmailInfo: {
+            available: boolean;
+            config: {
+                client_id: string;
+                has_client_secret: boolean;
+                connected: boolean;
+                account: string;
+                can_read: boolean;
+                can_send: boolean;
+                allow_read: string[];
+                allow_send: string[];
+                redirect_uri: string;
+            };
+            modules: components["schemas"]["ModuleChoice"][];
         };
         ModulesInfo: {
             installer_available: boolean;
@@ -2628,6 +2866,332 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["User"][];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username: string;
+                    password: string;
+                    role: components["schemas"]["Role"];
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    role?: components["schemas"]["Role"];
+                    is_active?: boolean;
+                    password?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    search: {
+        parameters: {
+            query: {
+                q: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResults"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLlm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putLlm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    provider?: "" | "anthropic" | "ollama" | "openai";
+                    model?: string;
+                    base_url?: string;
+                    api_key?: string | null;
+                    /** @enum {string} */
+                    effort?: "low" | "medium" | "high";
+                    max_tokens?: number;
+                    allow_modules?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmInfo"];
+                };
+            };
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    testLlm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        text: string;
+                        model: string;
+                        duration_ms: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getGmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GmailInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putGmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    client_id?: string;
+                    client_secret?: string | null;
+                    allow_read?: string[];
+                    allow_send?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GmailInfo"];
+                };
+            };
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    startGmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Also ask permission to send mail */
+                    send?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        auth_url: string;
+                        redirect_uri: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finishGmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    url: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GmailInfo"];
+                };
+            };
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    disconnectGmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GmailInfo"];
                 };
             };
             default: components["responses"]["Error"];
