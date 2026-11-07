@@ -19,7 +19,8 @@ Read **`docs/MODULE_LLM_CONTEXT.md`** in full before writing anything. It is
 the authoritative, compact reference: manifest fields, the `ctx` API and its
 return shapes, `ctx.dashboard`, `ctx.settings`, migrations, the UI contract,
 security rules and the release checklist. `docs/MODULES.md` has the longer
-explanation, and `examples/modules/hello/` is a complete working module.
+explanation. Real modules to learn from: mastifdogo/invoice-costumer-module
+(Sales), mastifdogo/llm-api-module and mastifdogo/tailscale-module.
 
 If the context file and the code disagree, the code wins:
 `backend/src/module-host.ts` (the `ctx` object), `backend/src/modules.ts`
@@ -79,10 +80,9 @@ real feature on top of it: rename the `items` table and routes, and so on.
 
 Where `<dir>` goes:
 
-- A module the user wants published: a new directory **outside** this
-  repository (e.g. a sibling `../ledger-<id>`), which becomes its own git
-  repository.
-- An example shipped with Ledger: `examples/modules/<id>/`.
+- Always a new directory **outside** this repository (e.g. a sibling
+  `../ledger-<id>`), which becomes its own git repository. Ledger doesn't
+  ship example modules.
 
 ## 4. Implement: rules that matter
 
@@ -175,7 +175,7 @@ model changes, bump the version, run the checks, release again.
 If you change what modules can do (`backend/src/module-host.ts`,
 `backend/src/modules.ts`, `backend/src/module-settings.ts`), update in the
 same change: `docs/MODULE_LLM_CONTEXT.md`, `docs/MODULES.md`, this skill
-(its template and `check-module.ts` if they're affected) and, if useful,
-`examples/modules/hello/`. Note the Ledger version that introduces the
+(its template and `check-module.ts` if they're affected) and the test
+fixture `backend/test/fixtures/hello-module/` if the tests should cover it. Note the Ledger version that introduces the
 feature (the next release after the latest tag). As in §6, don't push
 these changes yourself as part of module work; hand them to the user.

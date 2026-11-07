@@ -7,10 +7,10 @@ import { compatible, normalizeRepo, scanInstalled, validateDesired, validateMani
 import { syncModules, type ModuleOps } from "../src/module-installer.ts";
 import { fakeGitHub } from "./fake-github.ts";
 
-const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-const HELLO = path.join(repoRoot, "examples", "modules", "hello");
+// A complete module used as a test fixture (every manifest feature).
+const HELLO = path.join(import.meta.dirname, "fixtures", "hello-module");
 
-test("the example module's manifest is valid", async () => {
+test("the fixture module's manifest is valid", async () => {
 	const m = validateManifest(JSON.parse(await readFile(path.join(HELLO, "ledger-module.json"), "utf8")));
 	assert.equal(m.id, "hello");
 	assert.equal(m.nav!.label, "Hello");

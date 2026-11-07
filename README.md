@@ -173,7 +173,6 @@ backend/src/update.ts     Update schedule, status files, due-time logic (shared 
 backend/src/updater.ts    `ledger update run`: the root updater (GitHub Releases, verify, install, rollback, reboot)
 backend/src/module-host.ts       Runs installed modules: routes, UI, the `ctx` API
 backend/src/module-installer.ts  Root side: installs/updates/removes modules, runs their migrations
-examples/modules/hello/   A complete example module
 backend/src/http.ts       Routes, handlers, error mapping, request safety
 backend/src/decode.ts     Strict JSON request decoding (exact integers, no unknown fields)
 backend/src/csv.ts        RFC 4180 CSV reader/writer
@@ -354,8 +353,8 @@ invoicing, dashboards or an LLM gateway. Enter `owner/name`; Ledger shows
 what the module does, then installs its latest release. A module runs inside
 Ledger and appears in the sidebar. It can read the books and post entries,
 but it can't edit or delete posted ones. Writing a module:
-[docs/MODULES.md](docs/MODULES.md); a working example is in
-`examples/modules/hello/`. To have an LLM write one, paste
+[docs/MODULES.md](docs/MODULES.md); a small working module to start from is
+in `.claude/skills/ledger-module/template/`. To have an LLM write one, paste
 [docs/MODULE_LLM_CONTEXT.md](docs/MODULE_LLM_CONTEXT.md) into the chat and
 describe the module. In Claude Code on this repository, the `ledger-module`
 skill (`.claude/skills/ledger-module/`) scaffolds, checks and publishes

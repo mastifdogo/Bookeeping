@@ -1,7 +1,7 @@
 // Ledger loads this file at startup and calls register(ctx).
 // The API it gets is described in docs/MODULES.md.
 
-/** @param {import("../../../backend/src/module-host.ts").ModuleContext} ctx */
+/** @param {import("../../../src/module-host.ts").ModuleContext} ctx */
 export default async function register(ctx) {
 	const notes = `${ctx.schema}.notes`; // tables live in the module's own schema
 

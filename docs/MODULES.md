@@ -6,8 +6,10 @@ GitHub repository. You install it from **Settings → Modules** by entering
 `owner/name`. Ledger installs the repository's latest release and keeps it
 updated together with Ledger itself.
 
-`examples/modules/hello/` is a complete, working module. To start a new one,
-copy it into a new repository. To have an LLM write one, paste
+To start a new one, run
+`sh .claude/skills/ledger-module/scripts/new-module.sh <dir> <id> "<Name>"`,
+which copies a small working module (`.claude/skills/ledger-module/template/`)
+into a new directory for its own repository. To have an LLM write one, paste
 [MODULE_LLM_CONTEXT.md](MODULE_LLM_CONTEXT.md) into the chat, followed by
 what the module should do.
 

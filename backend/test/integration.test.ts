@@ -653,9 +653,9 @@ test("modules: runtime, UI and management API", async (t) => {
 	const cookie = `${SESSION_COOKIE}=${ta.token}`;
 	const root = await mkdtemp(path.join(tmpdir(), "ledger-modrt-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
-	const hello = path.join(path.resolve(import.meta.dirname, "..", ".."), "examples", "modules", "hello");
+	const hello = path.join(import.meta.dirname, "fixtures", "hello-module");
 
-	// Installed modules (what the root installer leaves behind): the example,
+	// Installed modules (what the root installer leaves behind): the fixture,
 	// one that posts entries, and one that fails to load.
 	const modules = path.join(root, "modules");
 	await cp(hello, path.join(modules, "hello"), { recursive: true });
@@ -738,7 +738,7 @@ test("modules: runtime, UI and management API", async (t) => {
 		["configured", "hello"],
 	);
 
-	// The example module's API.
+	// The fixture module's API.
 	await createAccount(ta, "1000", "Bank CAD", "asset", "CAD");
 	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
 	let r = await call("GET", "/m/hello/summary");
