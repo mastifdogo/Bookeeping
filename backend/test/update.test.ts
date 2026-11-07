@@ -61,8 +61,9 @@ test("isNewer", () => {
 });
 
 test("schedule slots honour the time zone and DST", () => {
-	// Winnipeg is UTC-5 in summer (CDT) and UTC-6 in winter (CST).
-	const s = sched({ days: [0], time: "03:30", timezone: "America/Winnipeg" }); // Sundays 03:30
+	// Chicago is UTC-5 in summer (CDT) and UTC-6 in winter (CST). (Not Winnipeg:
+	// time zone data from 2026 keeps Manitoba on CDT all year.)
+	const s = sched({ days: [0], time: "03:30", timezone: "America/Chicago" }); // Sundays 03:30
 	// Saturday 2026-10-24 12:00 UTC -> previous slot Sunday 2026-10-18 03:30 CDT = 08:30 UTC.
 	assert.equal(new Date(lastScheduledTime(s, Date.parse("2026-10-24T12:00:00Z"))!).toISOString(), "2026-10-18T08:30:00.000Z");
 	assert.equal(new Date(nextScheduledTime(s, Date.parse("2026-10-24T12:00:00Z"))!).toISOString(), "2026-10-25T08:30:00.000Z");

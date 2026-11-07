@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__NAME__</title>
+<style>
+	:root { --bg: #fff; --surface: #fff; --text: #1d232b; --muted: #5d6875; --border: #dde1e6; --accent: #1f6feb; --danger: #cf222e; color-scheme: light; }
+	@media (prefers-color-scheme: dark) {
+		:root { --bg: #171b21; --surface: #171b21; --text: #e3e7ec; --muted: #97a1ad; --border: #2c333c; --accent: #4c8dff; --danger: #ff7b72; color-scheme: dark; }
+	}
+	* { box-sizing: border-box; }
+	body { margin: 0; padding: 1rem 1.25rem; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+	h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+	.muted { color: var(--muted); }
+	.error { color: var(--danger); }
+	form { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+	input { flex: 1; min-width: 10rem; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; font: inherit; }
+	button { padding: 0.4rem 0.8rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+	button.plain { background: transparent; color: var(--muted); border-color: transparent; }
+	table { width: 100%; border-collapse: collapse; }
+	th, td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--border); }
+	th { font-size: 0.75rem; text-transform: uppercase; color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>__NAME__</h1>
+<form id="add"><input id="name" placeholder="New item" maxlength="200" required><button>Add</button></form>
+<p id="error" class="error"></p>
+<table><thead><tr><th>Name</th><th>By</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+
+<script>
+	// Served by Ledger at /m/__ID__/, so API calls carry the user's login.
+	const api = (path, opts = {}) =>
+		fetch(`/api/v1/m/__ID__${path}`, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } }).then(async (r) => {
+			if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error?.message || r.statusText);
+			return r.status === 204 ? null : r.json();
+		});
+	const show = (e) => (document.getElementById("error").textContent = e ? e.message : "");
+
+	async function load() {
+		const { data } = await api("/items");
+		document.getElementById("rows").replaceChildren(
+			...data.map((it) => {
+				const tr = document.createElement("tr");
+				for (const text of [it.name, it.created_by]) {
+					const td = document.createElement("td");
+					td.textContent = text; // never innerHTML with data
+					tr.append(td);
+				}
+				const del = document.createElement("button");
+				del.className = "plain";
+				del.textContent = "✕";
+				del.title = "Delete";
+				del.onclick = () => api(`/items/${it.id}`, { method: "DELETE" }).then(load, show);
+				const td = document.createElement("td");
+				td.append(del);
+				tr.append(td);
+				return tr;
+			}),
+		);
+	}
+
+	document.getElementById("add").onsubmit = async (e) => {
+		e.preventDefault();
+		const input = document.getElementById("name");
+		try {
+			await api("/items", { method: "POST", body: JSON.stringify({ name: input.value }) });
+			input.value = "";
+			show(null);
+			await load();
+		} catch (err) {
+			show(err);
+		}
+	};
+	load().catch(show);
+</script>
+</body>
+</html>
