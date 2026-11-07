@@ -4,7 +4,7 @@ VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo
 ARCH         ?= amd64
 SUITE        ?= bookworm
 # Node.js runtime shipped in releases (an Active LTS line).
-NODE_VERSION ?= 24.21.0
+NODE_VERSION ?= 24.22.2
 
 OUT := out
 REL := dist/ledger-$(VERSION)-linux-$(ARCH)

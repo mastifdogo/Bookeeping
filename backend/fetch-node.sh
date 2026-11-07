@@ -1,11 +1,11 @@
 #!/bin/sh
 # Downloads the official Node.js runtime for a release and verifies it
 # against the published SHA256SUMS:
-#   backend/fetch-node.sh 24.21.0 amd64 <output dir>
+#   backend/fetch-node.sh 24.22.2 amd64 <output dir>
 # Writes <output dir>/node and <output dir>/LICENSE.node. Downloads are
 # cached in dist/cache.
 set -eu
-version=${1:?Node.js version, e.g. 24.21.0}
+version=${1:?Node.js version, e.g. 24.22.2}
 arch=${2:?amd64 or arm64}
 out=${3:?output directory}
 

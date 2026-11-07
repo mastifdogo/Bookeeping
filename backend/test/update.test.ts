@@ -72,6 +72,17 @@ test("schedule slots honour the time zone and DST", () => {
 	assert.equal(nextScheduledTime({ ...s, enabled: false }, Date.now()), null);
 });
 
+test("Manitoba stays on UTC-5 all year (tzdata 2026e)", (t) => {
+	// Ledger ships its own Node.js runtime; its time zone data must include
+	// Manitoba's 2026 move to permanent UTC-5 (and northwestern Ontario's).
+	if ((process.versions.tz ?? "") < "2026e") return t.skip(`this Node.js has tzdata ${process.versions.tz}`);
+	for (const timezone of ["America/Winnipeg", "America/Rainy_River"]) {
+		const s = sched({ days: [0], time: "03:30", timezone });
+		// Sunday 2026-12-06 03:30 is UTC-5, not CST (UTC-6).
+		assert.equal(new Date(nextScheduledTime(s, Date.parse("2026-12-01T00:00:00Z"))!).toISOString(), "2026-12-06T08:30:00.000Z", timezone);
+	}
+});
+
 test("dueSlot runs each slot once, within the catch-up window", () => {
 	const s = sched({ days: [0, 1, 2, 3, 4, 5, 6], time: "03:00", timezone: "UTC" });
 	const slot = Date.parse("2026-10-24T03:00:00Z");
