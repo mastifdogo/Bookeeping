@@ -152,6 +152,12 @@ instance.
 Creating repositories, pushing and releasing are outward-facing: confirm
 with the user first, and use the repository they name.
 
+**Never push to the Ledger repository (`mastifdogo/Bookeeping`) while
+working on a module.** Push only to the module's own repository. If the
+module needs a change in Ledger (a bug fix, a new `ctx` feature, a docs or
+checker fix), make it locally, tell the user what it is and why, and leave
+pushing it to them. Build the module so it works without that change.
+
 1. In `<dir>`: `git init -b main`, commit, add the remote, push `main`.
 2. Release: bump `version` in `ledger-module.json` (`x.y.z`), tag `vx.y.z`,
    push the tag, and create a GitHub Release from it (not a draft or
@@ -171,4 +177,5 @@ If you change what modules can do (`backend/src/module-host.ts`,
 same change: `docs/MODULE_LLM_CONTEXT.md`, `docs/MODULES.md`, this skill
 (its template and `check-module.ts` if they're affected) and, if useful,
 `examples/modules/hello/`. Note the Ledger version that introduces the
-feature (the next release after the latest tag).
+feature (the next release after the latest tag). As in §6, don't push
+these changes yourself as part of module work; hand them to the user.

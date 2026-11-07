@@ -206,7 +206,8 @@ await ctx.dashboard.list({ kind: "todo", open: true }); // → items
 ```
 
 title 1-200 chars, body ≤ 2000 (plain text), link must be a path inside
-Ledger starting with `/` (your page is `/apps/<id>`). A dismissed
+Ledger starting with `/` (your page is `/apps/<id>`; a query string such as
+`/apps/<id>?invoice=31` reaches your page as `location.search`, Ledger ≥ 0.10.1). A dismissed
 notification reappears only if re-posted with a different title/body.
 Notification without `key` → always a new one. There is no timer API: post
 items from route handlers or from `register` (startup); a `setInterval` in
@@ -313,7 +314,8 @@ relying on read/unread state; the access is read-only. Errors as for `ctx.llm`.
 ctx.search.provide(async (query, { limit, user }) => [{ title: "Invoice 31", subtitle: "Acme Corp · $4,200.00", href: "/apps/<id>?invoice=31" }]);
 ```
 
-Return at most `limit` results; `href` must start with `/`; answer within 2 s
+Return at most `limit` results; `href` must start with `/` (`/apps/<id>?…`
+passes the query string to your page, Ledger ≥ 0.10.1); answer within 2 s
 (parameterized `ILIKE` on indexed columns).
 
 ## 6. Security rules

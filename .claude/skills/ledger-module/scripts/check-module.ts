@@ -96,8 +96,19 @@ if (m.ui) {
 		if (!String(f).endsWith(".html")) continue;
 		const html = await readFile(path.join(mdir, m.ui, String(f)), "utf8");
 		if (/<script[^>]+src=["']https?:/i.test(html) || /<link[^>]+href=["']https?:/i.test(html)) warn(`${m.ui}/${f} loads files from the internet; keep the UI self-contained`);
-		if (/\.innerHTML\s*=/.test(html)) warn(`${m.ui}/${f} assigns innerHTML; use textContent for data`);
-		if (!/prefers-color-scheme:\s*dark/.test(html)) warn(`${m.ui}/${f} has no dark mode (prefers-color-scheme)`);
+		// The page plus the local stylesheets and scripts it loads (<link href="app.css">, <script src="app.js">).
+		const local = async (re: RegExp) => {
+			let text = "";
+			for (const [, ref] of html.matchAll(re)) {
+				if (/^[a-z]+:|^\/\//i.test(ref!)) continue;
+				text += await readFile(path.join(mdir, m.ui!, path.dirname(String(f)), ref!.split(/[?#]/)[0]!), "utf8").catch(() => "");
+			}
+			return text;
+		};
+		const css = html + (await local(/<link[^>]+href=["']([^"']+\.css)[^"']*["']/gi));
+		const js = html + (await local(/<script[^>]+src=["']([^"']+)["']/gi));
+		if (/\.innerHTML\s*=/.test(js)) warn(`${m.ui}/${f} (or a script it loads) assigns innerHTML; use textContent for data`);
+		if (!/prefers-color-scheme:\s*dark/.test(css)) warn(`${m.ui}/${f} has no dark mode (prefers-color-scheme)`);
 	}
 }
 if (m.nav?.icon_file && !(await exists(path.join(mdir, m.ui, m.nav.icon_file), "file"))) fail(`icon file ${m.ui}/${m.nav.icon_file} is missing`);
