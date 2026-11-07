@@ -22,7 +22,8 @@
 	let busy = $state(false);
 	let error: unknown = $state(null);
 	let notice = $state('');
-	let wantSend = $state(false);
+	// Most setups send invoices, so sending is asked for unless unticked.
+	let wantSend = $state(true);
 	let authUrl = $state('');
 	let pasted = $state('');
 	let showHelp = $state(false);
@@ -47,9 +48,10 @@
 			notice = 'OAuth client saved.';
 		});
 	};
-	const connect = () =>
+	const connect = (send = wantSend) =>
 		act(async () => {
-			const r = unwrap(await api().POST('/integrations/gmail/start', { body: { send: wantSend } }));
+			wantSend = send;
+			const r = unwrap(await api().POST('/integrations/gmail/start', { body: { send } }));
 			authUrl = r.auth_url;
 			window.open(authUrl, '_blank', 'noopener');
 		});
@@ -58,7 +60,10 @@
 		return act(async () => {
 			load(unwrap(await api().POST('/integrations/gmail/finish', { body: { url: pasted } })));
 			authUrl = pasted = '';
-			notice = `Connected as ${info.config.account}.`;
+			notice =
+				wantSend && !info.config.can_send
+					? `Connected as ${info.config.account}, but Google didn't allow sending: tick "Send email on your behalf" on Google's page and try again.`
+					: `Connected as ${info.config.account}: ${info.config.can_send ? 'read and send' : 'read'} mail.`;
 		});
 	};
 	const disconnect = () =>
@@ -87,23 +92,12 @@
 
 <section class="card">
 	<h2>Account</h2>
-	{#if info.config.connected}
-		<p>
-			Connected as <strong>{info.config.account}</strong>:
-			{info.config.can_read ? 'read' : ''}{info.config.can_read && info.config.can_send ? ' and ' : ''}{info.config.can_send ? 'send' : ''} mail.
-		</p>
-		<button disabled={busy} onclick={disconnect}>Disconnect</button>
-		{#if !info.config.can_send}<span class="muted small">To allow sending, disconnect and connect again with "send" ticked.</span>{/if}
-	{:else if !info.config.client_id || !info.config.has_client_secret}
-		<p class="muted">First save a Google OAuth client below.</p>
-	{:else if !authUrl}
-		<label class="inline"><input type="checkbox" bind:checked={wantSend} /> Also allow sending mail (for modules that email invoices)</label>
-		<p><button class="primary" disabled={busy || !info.available} onclick={connect}>Connect Gmail</button></p>
-	{:else}
+	{#if authUrl}
 		<ol>
 			<li>
 				A Google page opened in a new tab (<a href={authUrl} target="_blank" rel="noopener noreferrer">open it again</a>). Choose your account and allow
-				access. If Google warns that the app isn't verified, choose <em>Advanced → Go to … (unsafe)</em>: it's your own app.
+				access{wantSend ? ', with sending ticked' : ''}. If Google warns that the app isn't verified, choose <em>Advanced → Go to … (unsafe)</em>: it's your
+				own app.
 			</li>
 			<li>Your browser then lands on a page that doesn't load, starting with <code>{info.config.redirect_uri}</code>. That's expected.</li>
 			<li>Copy that whole address from the address bar and paste it here:</li>
@@ -113,6 +107,23 @@
 			<button class="primary" disabled={busy}>Finish</button>
 			<button type="button" onclick={() => (authUrl = '')}>Cancel</button>
 		</form>
+	{:else if info.config.connected}
+		<p>
+			Connected as <strong>{info.config.account}</strong>:
+			{info.config.can_read ? 'read' : ''}{info.config.can_read && info.config.can_send ? ' and ' : ''}{info.config.can_send ? 'send' : ''} mail.
+		</p>
+		{#if !info.config.can_send}
+			<div class="notice warn-box">
+				Gmail was connected without permission to send, so modules can't email (the Send mail boxes below are off).
+				<button class="primary" disabled={busy || !info.available} onclick={() => connect(true)}>Allow sending mail</button>
+			</div>
+		{/if}
+		<button disabled={busy} onclick={disconnect}>Disconnect</button>
+	{:else if !info.config.client_id || !info.config.has_client_secret}
+		<p class="muted">First save a Google OAuth client below.</p>
+	{:else}
+		<label class="inline"><input type="checkbox" bind:checked={wantSend} /> Allow sending mail too (for modules that email invoices)</label>
+		<p><button class="primary" disabled={busy || !info.available} onclick={() => connect()}>Connect Gmail</button></p>
 	{/if}
 </section>
 
@@ -123,7 +134,9 @@
 			<p class="muted">No modules are installed.</p>
 		{:else}
 			<table>
-				<thead><tr><th>Module</th><th>Read mail</th><th>Send mail</th></tr></thead>
+				<thead>
+					<tr><th>Module</th><th>Read mail</th><th>Send mail{#if !info.config.can_send}<span class="muted small" style="text-transform:none">&nbsp;(allow sending above first)</span>{/if}</th></tr>
+				</thead>
 				<tbody>
 					{#each info.modules as m (m.id)}
 						<tr>
@@ -134,6 +147,7 @@
 									type="checkbox"
 									aria-label="{m.name} may send mail"
 									disabled={!info.config.can_send}
+									title={info.config.can_send ? undefined : 'Gmail was connected without permission to send: press "Allow sending mail" above'}
 									checked={allowSend.includes(m.id)}
 									onchange={(e) => (allowSend = toggle(allowSend, m.id, e.currentTarget.checked))}
 								/>
@@ -190,6 +204,14 @@
 		gap: 0.75rem;
 		align-items: flex-end;
 		margin: 0.5rem 0;
+	}
+	.warn-box {
+		background: var(--warn-bg);
+		color: var(--text);
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.6rem;
 	}
 	td input[type='checkbox'] {
 		width: auto;

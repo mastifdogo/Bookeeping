@@ -56,10 +56,12 @@ export interface FakeGmail {
 	sent: string[];
 	revoked: string[];
 	lastChallenge: string;
+	/** Whether the user leaves "send" ticked on Google's page. */
+	grantSend: boolean;
 }
 
 export async function fakeGmail(t: TestContext): Promise<FakeGmail> {
-	const g: FakeGmail = { base: "", sent: [], revoked: [], lastChallenge: "" };
+	const g: FakeGmail = { base: "", sent: [], revoked: [], lastChallenge: "", grantSend: true };
 	const b64 = (s: string) => Buffer.from(s).toString("base64url");
 	g.base = await listen(t, (req, res, raw) => {
 		const url = new URL(req.url ?? "/", "http://x");
@@ -73,7 +75,8 @@ export async function fakeGmail(t: TestContext): Promise<FakeGmail> {
 				if (form.get("code") !== "good-code" || challenge !== g.lastChallenge || form.get("redirect_uri") !== "http://127.0.0.1") {
 					return json(res, 400, { error: "invalid_grant", error_description: "Bad code" });
 				}
-				return json(res, 200, { access_token: "acc", refresh_token: "ref-1", expires_in: 3600, scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send" });
+				const scope = ["https://www.googleapis.com/auth/gmail.readonly", ...(g.grantSend ? ["https://www.googleapis.com/auth/gmail.send"] : [])].join(" ");
+				return json(res, 200, { access_token: "acc", refresh_token: "ref-1", expires_in: 3600, scope });
 			}
 			if (form.get("refresh_token") === "ref-1") return json(res, 200, { access_token: "acc", expires_in: 3600 });
 			return json(res, 400, { error: "invalid_grant" });

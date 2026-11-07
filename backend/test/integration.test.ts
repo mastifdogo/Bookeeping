@@ -1388,6 +1388,24 @@ test("Gmail shared with modules", async (t) => {
 	expectStatus(r, 200);
 	assert.equal(r.json().config.has_client_secret, true);
 	assert.equal(JSON.stringify(r.json()).includes("gsecret"), false);
+	// Connect read-only first (the user unticks sending on Google's page)...
+	const connect = async (grantSend: boolean) => {
+		g.grantSend = grantSend;
+		const s = await call("POST", "/integrations/gmail/start", { send: true });
+		expectStatus(s, 200);
+		const a = new URL(s.json().auth_url);
+		g.lastChallenge = a.searchParams.get("code_challenge")!;
+		return call("POST", "/integrations/gmail/finish", { url: `http://127.0.0.1/?state=${a.searchParams.get("state")}&code=good-code` });
+	};
+	r = await connect(false);
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().config.connected, r.json().config.can_send], [true, false]);
+	// ...then allow sending without disconnecting.
+	r = await connect(true);
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().config.connected, r.json().config.can_send], [true, true]);
+	assert.deepEqual(g.revoked, []); // the earlier grant isn't revoked (that would revoke the new one too)
+
 	r = await call("POST", "/integrations/gmail/start", { send: true });
 	expectStatus(r, 200);
 	const auth = new URL(r.json().auth_url);
