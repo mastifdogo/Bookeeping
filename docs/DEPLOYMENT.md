@@ -20,6 +20,7 @@ What runs where:
 | `/usr/local/sbin/ledger-user` | root wrapper: runs `ledger user …` with the service config |
 | `ledger-backup.service` / `.timer` | database backups (`ledger backup run`) to TrueNAS and/or Google Drive on the schedule set in the app (see step 8) |
 | `/var/lib/ledger/backup/` | backup settings, Google credentials and the last result (user `ledger`, 0700) |
+| `/var/lib/ledger/integrations/` | Settings → AI and Gmail: API key, OAuth tokens (user `ledger`, 0700; not in backups) |
 | `ledger-update.timer` / `.path` | automatic updates from GitHub Releases on the schedule set in the app (see step 9) |
 | `/var/lib/ledger/update-config/` | the update schedule, written by the app (user `ledger`) |
 | `/var/lib/ledger/update-status/` | the updater's last result, written by root, shown in the app |
@@ -245,17 +246,20 @@ the password are kept.
 ## 6. Create a user and start
 
 ```sh
-ledger-user add alice                # prompts for a password (10+ characters)
+ledger-user add alice                # an admin; prompts for a password (4+ characters)
 systemctl enable --now ledger ledger-backup.timer ledger-update.timer ledger-update.path
 systemctl status ledger
 ```
 
 Open `http://<container-ip>:8080/` and log in.
 
-Managing users later:
+Managing users later: an admin does it in the app under **Settings → Users**
+(add, change role, reset password, disable). On the server:
 
 ```sh
 ledger-user list
+ledger-user add bob --role bookkeeper   # admin, bookkeeper or viewer
+ledger-user role bob viewer
 ledger-user passwd alice             # also logs out all of alice's sessions
 ledger-user disable bob              # blocks login and ends sessions; history keeps the name
 ledger-user enable bob

@@ -6,6 +6,7 @@
 	import { api } from '#lib/api/client.ts';
 	import { ICONS, arrangeNav, pageTitle } from '#lib/nav.ts';
 	import NavIcon from '#lib/components/NavIcon.svelte';
+	import SearchPalette from '#lib/components/SearchPalette.svelte';
 	import { MAIN_ID, MIN_PANE_PX, panes, type Pane } from '#lib/panes.svelte.ts';
 	import type { LayoutProps } from './$types';
 
@@ -19,7 +20,8 @@
 
 	// Ledger's pages and running modules, in the order set under Settings → Sidebar.
 	let nav = $derived(arrangeNav(data.sidebar, data.modules));
-	let visible = $derived(nav.filter((i) => !i.hidden));
+	// Viewers can't post, so no "New entry" for them.
+	let visible = $derived(nav.filter((i) => !i.hidden && !(data.user?.role === 'viewer' && i.id === 'core:new-entry')));
 
 	function active(href: string, exact: boolean): boolean {
 		const p = page.url.pathname;
@@ -176,6 +178,7 @@
 					</button>
 				</div>
 				<div class="links" id="main-links">
+					<SearchPalette {nav} isAdmin={data.user.role === 'admin'} {collapsed} />
 					<ul>
 						{#each visible as l (l.id)}
 							<li>

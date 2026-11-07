@@ -15,6 +15,7 @@ import { today } from "../src/date.ts";
 import { postItem } from "../src/dashboard.ts";
 import { readBackupStatus, runBackup } from "../src/backup.ts";
 import { fakeGoogle } from "./fake-google.ts";
+import { fakeAi, fakeGmail } from "./fake-services.ts";
 
 type Line = { account_code: string; debit_cents: number; credit_cents: number; memo?: string };
 const dr = (code: string, cents: number): Line => ({ account_code: code, debit_cents: cents, credit_cents: 0 });
@@ -1145,4 +1146,294 @@ test("backups: settings, TrueNAS and Google Drive", async (t) => {
 	assert.equal(r.json().config.google.has_client_secret, false);
 	expectStatus(await call("GET", "/backups"), 200);
 	expectStatus(await ta.request("GET", "/api/v1/backups"), 401);
+});
+
+test("users and roles", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call, request } = ta;
+	const as = async (username: string, password: string) => {
+		const r = await request("POST", "/api/v1/auth/login", { body: { username, password } });
+		expectStatus(r, 200);
+		const cookie = sessionFrom(r).header.split(";")[0]!;
+		return (method: string, p: string, body?: unknown) => request(method, "/api/v1" + p, { body, cookie });
+	};
+
+	let r = await call("GET", "/auth/me");
+	assert.equal(r.json().role, "admin"); // the harness user (like `ledger user add`)
+	expectStatus(await call("POST", "/users", { username: "bob", password: "1234", role: "bookkeeper" }), 201);
+	expectStatus(await call("POST", "/users", { username: "vera", password: "5678", role: "viewer" }), 201);
+	expectStatus(await call("POST", "/users", { username: "bob", password: "1234", role: "viewer" }), 409);
+	expectStatus(await call("POST", "/users", { username: "x", password: "1", role: "viewer" }), 422);
+	expectStatus(await call("POST", "/users", { username: "y", password: "1234", role: "owner" }), 422);
+	r = await call("GET", "/users");
+	assert.deepEqual(
+		r.json().data.map((u: any) => [u.username, u.role]),
+		[["bob", "bookkeeper"], ["tester", "admin"], ["vera", "viewer"]],
+	);
+
+	const vera = await as("vera", "5678");
+	const bob = await as("bob", "1234");
+	// Viewer: reads everything, changes nothing but their own password and sidebar.
+	expectStatus(await vera("GET", "/accounts"), 200);
+	expectStatus(await vera("GET", "/dashboard"), 200);
+	r = await vera("POST", "/accounts", { code: "1000", name: "Bank", type: "asset", currency: "CAD" });
+	expectStatus(r, 403);
+	assert.match(r.json().error.message, /bookkeeper/);
+	expectStatus(await vera("PUT", "/settings/sidebar", { items: [] }), 200);
+	expectStatus(await vera("POST", "/auth/password", { current_password: "5678", new_password: "8765" }), 204);
+	expectStatus(await vera("GET", "/users"), 403);
+	// Bookkeeper: works in the books, but not the system.
+	expectStatus(await bob("POST", "/accounts", { code: "1000", name: "Bank", type: "asset", currency: "CAD" }), 201);
+	expectStatus(await bob("GET", "/users"), 403);
+	expectStatus(await bob("GET", "/backups"), 403);
+	expectStatus(await bob("POST", "/modules/sync"), 403);
+	expectStatus(await bob("GET", "/modules"), 200); // the sidebar needs it
+
+	// Promote, demote; the last admin stays.
+	r = await call("PATCH", "/users/tester", { role: "viewer" });
+	expectStatus(r, 422);
+	assert.match(r.text, /at least one active admin/);
+	expectStatus(await call("PATCH", "/users/tester", { is_active: false }), 422); // not yourself
+	r = await call("PATCH", "/users/bob", { role: "admin" });
+	assert.equal(r.json().role, "admin");
+	expectStatus(await bob("GET", "/users"), 200); // takes effect at once
+	expectStatus(await call("PATCH", "/users/tester", { role: "bookkeeper" }), 200); // bob is an admin now
+	expectStatus(await call("GET", "/users"), 403);
+	expectStatus(await bob("PATCH", "/users/tester", { role: "admin" }), 200);
+
+	// Disabling ends sessions; a password reset too; a bad password changes nothing.
+	expectStatus(await bob("PATCH", "/users/vera", { role: "bookkeeper", password: "1" }), 422);
+	assert.equal((await bob("GET", "/users")).json().data.find((u: any) => u.username === "vera").role, "viewer");
+	expectStatus(await bob("PATCH", "/users/vera", { is_active: false }), 200);
+	expectStatus(await vera("GET", "/accounts"), 401);
+	expectStatus(await bob("PATCH", "/users/vera", { is_active: true, password: "9999" }), 200);
+	await as("vera", "9999");
+	expectStatus(await bob("PATCH", "/users/nobody", { role: "viewer" }), 404);
+	expectStatus(await bob("PATCH", "/users/vera", { username: "v2" }), 400);
+});
+
+test("search", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "4000", "Consulting revenue", "revenue", "CAD");
+	await createAccount(ta, "6100", "Office 100% supplies", "expense", "CAD");
+	const post = async (desc: string, ref: string, cents: number, memo = "") => {
+		const e = entry("2026-10-01", desc, dr("1000", cents), cr("4000", cents));
+		(e as any).reference = ref;
+		e.lines[0]!.memo = memo;
+		expectStatus(await call("POST", "/journal-entries", e), 201);
+	};
+	await post("Invoice 31 Acme", "INV-31", 123456);
+	await post("Deposit", "", 4500, "cheque from Globex");
+
+	const q = async (s: string) => (await call("GET", `/search?q=${encodeURIComponent(s)}`)).json();
+	let r = await q("cheq");
+	assert.deepEqual(r.groups.map((g: any) => [g.source, g.results.map((x: any) => x.title)]), [
+		["accounts", ["1000 Chequing"]],
+		["entries", ["#2 Deposit"]], // memo match
+	]);
+	assert.equal(r.groups[0].results[0].href, "/accounts/1000");
+	assert.deepEqual((await q("1,234.56")).groups.map((g: any) => g.results[0].title), ["#1 Invoice 31 Acme"]); // amount
+	assert.deepEqual((await q("#2")).groups[0].results.map((x: any) => x.href), ["/journal/2"]);
+	assert.deepEqual((await q("inv-31")).groups[0].results[0].subtitle, "2026-10-01 · 1,234.56 CAD · INV-31");
+	assert.deepEqual((await q("100%")).groups.map((g: any) => g.results.map((x: any) => x.title)), [["6100 Office 100% supplies"]]); // % is literal
+	assert.deepEqual((await q("  ")).groups, []);
+
+	// Modules add results; bad hrefs, errors and slow providers are dropped.
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-search-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(path.join(root, "crm"), { recursive: true });
+	await writeFile(path.join(root, "crm", "ledger-module.json"), JSON.stringify({ id: "crm", name: "Customers", version: "1.0.0", server: "server.mjs" }));
+	await writeFile(
+		path.join(root, "crm", "server.mjs"),
+		`export default function (ctx) {
+			ctx.search.provide((q, { user }) => q === "acme" ? [
+				{ title: "Acme Corp", subtitle: "customer, asked by " + user.username, href: "/apps/crm/customers/1" },
+				{ title: "evil", href: "https://evil.example" },
+				{ title: "evil2", href: "//evil.example" },
+			] : []);
+			ctx.search.provide(() => { throw new Error("broken"); });
+			ctx.search.provide(() => new Promise(() => {}));
+		}`,
+	);
+	app.modules = new ModuleHost(root);
+	await app.modules.loadAll(app);
+	r = await q("acme");
+	assert.deepEqual(
+		r.groups.map((g: any) => [g.label, g.results.map((x: any) => [x.title, x.subtitle, x.href])]),
+		[
+			["Journal entries", [["#1 Invoice 31 Acme", "2026-10-01 · 1,234.56 CAD · INV-31", "/journal/1"]]],
+			["Customers", [["Acme Corp", "customer, asked by tester", "/apps/crm/customers/1"]]],
+		],
+	);
+	expectStatus(await ta.request("GET", "/api/v1/search?q=acme"), 401);
+});
+
+/** Loads modules (id → server.mjs source) into the test app. */
+async function loadModules(t: any, app: any, mods: Record<string, string>) {
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-mods-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	for (const [id, code] of Object.entries(mods)) {
+		await mkdir(path.join(root, id), { recursive: true });
+		await writeFile(path.join(root, id, "ledger-module.json"), JSON.stringify({ id, name: id.toUpperCase(), version: "1.0.0", server: "server.mjs" }));
+		await writeFile(path.join(root, id, "server.mjs"), code);
+	}
+	app.modules = new ModuleHost(root);
+	await app.modules.loadAll(app);
+}
+
+test("AI provider shared with modules", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const ai = await fakeAi(t);
+	await loadModules(t, app, {
+		sorter: `export default function (ctx) {
+			ctx.route("GET", "/status", () => ctx.llm.status());
+			ctx.route("POST", "/ask", (req) => ctx.llm.json({ system: "Be brief.", prompt: req.body.q, schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } }));
+			ctx.route("POST", "/chat", (req) => ctx.llm.complete({ messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }, { role: "user", content: req.body.q }] }));
+		}`,
+		other: `export default function (ctx) { ctx.route("POST", "/ask", () => ctx.llm.complete({ prompt: "x" })); }`,
+	});
+
+	let r = await call("GET", "/integrations/llm");
+	expectStatus(r, 200);
+	assert.equal(r.json().available, false);
+	expectStatus(await call("PUT", "/integrations/llm", { provider: "anthropic" }), 409);
+	await mkdir(app.integrations.dir, { mode: 0o700 });
+
+	// Not set up yet: modules get a clear 409.
+	r = await call("POST", "/m/sorter/ask", { q: "hello" });
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /Settings → AI/);
+
+	r = await call("PUT", "/integrations/llm", { provider: "anthropic", api_key: "sk-test", base_url: ai.base, model: "claude-sonnet-5-5", allow_modules: ["sorter"] });
+	expectStatus(r, 200);
+	assert.equal(r.json().config.configured, true);
+	assert.equal(r.json().config.has_api_key, true);
+	assert.equal(JSON.stringify(r.json()).includes("sk-test"), false); // the key never leaves the server
+	assert.deepEqual(r.json().modules.map((m: any) => m.id).sort(), ["other", "sorter"]);
+	for (const bad of [{ provider: "gpt" }, { base_url: "ftp://x" }, { allow_modules: ["Bad Id"] }, { max_tokens: 10 }, { key: 1 }]) {
+		expectStatus(await call("PUT", "/integrations/llm", bad), 422);
+	}
+
+	r = await call("POST", "/integrations/llm/test");
+	expectStatus(r, 200);
+	assert.equal(r.json().text, "OK");
+	r = await call("POST", "/m/sorter/ask", { q: "Which account?" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().data, { answer: "Which account?" });
+	assert.equal(r.json().usage.input_tokens, 12);
+	const sent = ai.requests.at(-1)!;
+	assert.equal(sent.body.system, "Be brief.");
+	assert.equal(sent.body.output_config.format.type, "json_schema");
+	assert.equal(sent.headers["x-api-key"], "sk-test");
+	r = await call("POST", "/m/sorter/chat", { q: "and now?" });
+	assert.equal(r.json().text, "OK");
+	assert.equal(ai.requests.at(-1)!.body.messages.length, 3);
+	r = await call("POST", "/m/other/ask");
+	expectStatus(r, 403); // not allowed
+	assert.match(r.json().error.message, /allow it under Settings → AI/);
+	assert.deepEqual((await call("GET", "/m/sorter/status")).json(), { configured: true, allowed: true, provider: "anthropic", model: "claude-sonnet-5-5", readsPdf: true });
+
+	// Ollama and OpenAI-compatible servers.
+	await call("PUT", "/integrations/llm", { provider: "ollama", model: "qwen3:14b", api_key: "" });
+	r = await call("POST", "/m/sorter/ask", { q: "local?" });
+	assert.deepEqual(r.json().data, { answer: "local?" });
+	assert.equal(ai.requests.at(-1)!.path, "/api/chat");
+	await call("PUT", "/integrations/llm", { provider: "openai", base_url: ai.base + "/v1", model: "local-model" });
+	r = await call("POST", "/m/sorter/ask", { q: "compatible?" });
+	assert.deepEqual(r.json().data, { answer: "compatible?" });
+	assert.equal(ai.requests.at(-1)!.path, "/v1/chat/completions");
+
+	// Usage per module.
+	r = await call("GET", "/integrations/llm");
+	const usage = Object.fromEntries(r.json().usage.last_30_days.map((u: any) => [u.source, [u.calls, u.failed]]));
+	// Only calls that reach the provider are logged (not the refused ones).
+	assert.deepEqual(usage, { sorter: [4, 0], ledger: [1, 0] });
+});
+
+test("Gmail shared with modules", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const g = await fakeGmail(t);
+	app.integrations.gmail = { auth: g.base, oauth: g.base, gmail: g.base };
+	await mkdir(app.integrations.dir, { mode: 0o700 });
+	await loadModules(t, app, {
+		bills: `export default function (ctx) {
+			ctx.route("GET", "/status", () => ctx.gmail.status());
+			ctx.route("GET", "/bills", () => ctx.gmail.search("bill newer_than:30d", { max: 10 }));
+			ctx.route("GET", "/msg/:id", async (req) => {
+				const m = await ctx.gmail.message(req.params.id);
+				const pdf = await ctx.gmail.attachment(m.id, m.attachments[0].attachmentId);
+				const raw = await ctx.gmail.raw(m.id);
+				return { ...m, pdf: pdf.toString(), raw: raw.toString() };
+			});
+			ctx.route("POST", "/send", () => ctx.gmail.send({ to: "client@example.com", subject: "Invoice 31 — €", text: "Hi", html: "<p>Hi</p>",
+				attachments: [{ filename: "inv.pdf", contentType: "application/pdf", content: Buffer.from("%PDF-1") }] }));
+			ctx.route("POST", "/send-bad", () => ctx.gmail.send({ to: "not an address", subject: "x", text: "y" }));
+		}`,
+	});
+
+	let r = await call("GET", "/m/bills/status");
+	assert.deepEqual(r.json(), { connected: false, account: "", canRead: false, canSend: false });
+	expectStatus(await call("GET", "/m/bills/bills"), 409);
+	expectStatus(await call("POST", "/integrations/gmail/start"), 409); // no client yet
+
+	r = await call("PUT", "/integrations/gmail", { client_id: "123-abc.apps.googleusercontent.com", client_secret: "gsecret" });
+	expectStatus(r, 200);
+	assert.equal(r.json().config.has_client_secret, true);
+	assert.equal(JSON.stringify(r.json()).includes("gsecret"), false);
+	r = await call("POST", "/integrations/gmail/start", { send: true });
+	expectStatus(r, 200);
+	const auth = new URL(r.json().auth_url);
+	assert.equal(auth.searchParams.get("redirect_uri"), "http://127.0.0.1");
+	assert.equal(auth.searchParams.get("code_challenge_method"), "S256");
+	assert.match(auth.searchParams.get("scope")!, /gmail\.readonly .*gmail\.send/);
+	g.lastChallenge = auth.searchParams.get("code_challenge")!;
+	const state = auth.searchParams.get("state")!;
+	// Pasting an address from another attempt, or a bad code, is refused.
+	expectStatus(await call("POST", "/integrations/gmail/finish", { url: `http://127.0.0.1/?state=other&code=good-code` }), 422);
+	expectStatus(await call("POST", "/integrations/gmail/finish", { url: `http://127.0.0.1/?state=${state}&code=bad-code` }), 422);
+	r = await call("POST", "/integrations/gmail/finish", { url: `http://127.0.0.1/?state=${state}&code=good-code&scope=x` });
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().config.connected, r.json().config.account, r.json().config.can_send], [true, "me@example.com", true]);
+
+	// Connected, but the module isn't allowed yet.
+	r = await call("GET", "/m/bills/bills");
+	expectStatus(r, 403);
+	assert.match(r.json().error.message, /allowed to read mail/);
+	await call("PUT", "/integrations/gmail", { allow_read: ["bills"] });
+	r = await call("GET", "/m/bills/bills");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().messages.map((m: any) => [m.id, m.from, m.subject]), [
+		["m1", "Hydro <bills@hydro.example>", "Your bill m1"],
+		["m2", "Hydro <bills@hydro.example>", "Your bill m2"],
+	]);
+	assert.equal(r.json().nextPageToken, "p2");
+	r = await call("GET", "/m/bills/msg/m1");
+	assert.deepEqual([r.json().text, r.json().html, r.json().attachments[0].filename, r.json().pdf], ["Amount due: $42.00", "<p>Amount due</p>", "bill.pdf", "%PDF"]);
+	assert.match(r.json().raw, /Amount due: \$42.00/);
+	expectStatus(await call("GET", "/m/bills/msg/..%2Fx"), 422);
+
+	expectStatus(await call("POST", "/m/bills/send"), 403); // reading allowed, sending not
+	await call("PUT", "/integrations/gmail", { allow_send: ["bills"] });
+	r = await call("POST", "/m/bills/send");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { id: "sent1", threadId: "st1" });
+	const mime = g.sent[0]!;
+	assert.match(mime, /^To: client@example.com\r\n/);
+	assert.match(mime, /Subject: =\?UTF-8\?B\?/); // non-ASCII subject encoded
+	assert.match(mime, /multipart\/mixed[\s\S]*multipart\/alternative[\s\S]*filename="inv.pdf"/);
+	expectStatus(await call("POST", "/m/bills/send-bad"), 422);
+	assert.deepEqual((await call("GET", "/m/bills/status")).json(), { connected: true, account: "me@example.com", canRead: true, canSend: true });
+
+	r = await call("POST", "/integrations/gmail/disconnect");
+	assert.equal(r.json().config.connected, false);
+	assert.deepEqual(g.revoked, ["ref-1"]);
+	expectStatus(await call("GET", "/m/bills/bills"), 409);
 });

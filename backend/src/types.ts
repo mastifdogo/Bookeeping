@@ -159,10 +159,19 @@ export interface CsvFile {
 	row_count?: number;
 }
 
+export const ROLES = ["admin", "bookkeeper", "viewer"] as const;
+export type Role = (typeof ROLES)[number];
+
+/** Whether a role includes another's permissions (admin ⊃ bookkeeper ⊃ viewer). */
+export function roleAtLeast(have: Role, need: Role): boolean {
+	return ROLES.indexOf(have) <= ROLES.indexOf(need);
+}
+
 export interface User {
 	/** Internal; never serialised. */
 	id: number;
 	username: string;
+	role: Role;
 	is_active: boolean;
 	created_at: Date;
 	last_login_at: Date | null;
@@ -170,5 +179,5 @@ export interface User {
 
 /** The API shape of a user (no id). */
 export function publicUser(u: User): Omit<User, "id"> {
-	return { username: u.username, is_active: u.is_active, created_at: u.created_at, last_login_at: u.last_login_at };
+	return { username: u.username, role: u.role, is_active: u.is_active, created_at: u.created_at, last_login_at: u.last_login_at };
 }

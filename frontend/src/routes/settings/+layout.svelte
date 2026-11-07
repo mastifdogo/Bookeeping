@@ -5,21 +5,27 @@
 
 	let { children, data }: LayoutProps = $props();
 
-	const OWN = [
-		{ href: '/settings/account', label: 'Account', title: '' },
-		{ href: '/settings/sidebar', label: 'Sidebar', title: '' },
-		{ href: '/settings/backups', label: 'Backups', title: '' },
-		{ href: '/settings/import-export', label: 'Import & export', title: '' },
-		{ href: '/settings/modules', label: 'Modules', title: '' },
-		{ href: '/settings/updates', label: 'Updates', title: '' }
+	// Ledger's own tabs; the admin ones only for admins (the API enforces it too).
+	const ALL = [
+		{ href: '/settings/account', label: 'Account', title: '', admin: false },
+		{ href: '/settings/sidebar', label: 'Sidebar', title: '', admin: false },
+		{ href: '/settings/users', label: 'Users', title: '', admin: true },
+		{ href: '/settings/ai', label: 'AI', title: '', admin: true },
+		{ href: '/settings/gmail', label: 'Gmail', title: '', admin: true },
+		{ href: '/settings/backups', label: 'Backups', title: '', admin: true },
+		{ href: '/settings/import-export', label: 'Import & export', title: '', admin: false },
+		{ href: '/settings/modules', label: 'Modules', title: '', admin: true },
+		{ href: '/settings/updates', label: 'Updates', title: '', admin: true }
 	];
+	let isAdmin = $derived(data.user?.role === 'admin');
+	let OWN = $derived(ALL.filter((t) => isAdmin || !t.admin));
 	// Pages hidden from the sidebar stay reachable here; modules always get a
 	// tab of their own (which shows a hidden module's page too).
 	let hidden = $derived(arrangeNav(data.sidebar, data.modules).filter((i) => i.hidden && i.kind === 'core'));
 	let tabs = $derived([
 		...OWN,
 		...hidden.map((i) => ({ href: `/settings/page/${i.id.slice(5)}`, label: i.label, title: 'Hidden from the sidebar' })),
-		...data.installedModules.map((m) => ({ href: `/settings/m/${m.id}`, label: m.name, title: 'Module' }))
+		...(isAdmin ? data.installedModules.map((m) => ({ href: `/settings/m/${m.id}`, label: m.name, title: 'Module' })) : [])
 	]);
 </script>
 
@@ -37,6 +43,7 @@
 <style>
 	.tabs {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 0.25rem;
 		border-bottom: 1px solid var(--border);
 		margin-bottom: 1.25rem;

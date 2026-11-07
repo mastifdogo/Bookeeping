@@ -83,6 +83,8 @@ export async function setupTestApp(t: TestContext): Promise<TestApp | null> {
 		databaseUrl: url.toString(),
 		// Backups are "not set up" until a test creates this directory.
 		backupDir: path.join(csvDir, "backup-state"),
+		// Integrations too, until a test creates this directory.
+		integrationsDir: path.join(csvDir, "integrations"),
 	});
 	await createUser(app, "tester", "correct horse battery");
 	const { token } = await login(app, "tester", "correct horse battery");

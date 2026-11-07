@@ -48,6 +48,15 @@ Decide, and state briefly to the user:
   fields, account codes, options) goes in the manifest's `settings.fields`.
   Ledger renders the form on the module's Settings tab.
 - **Dashboard**: what deserves a notification or a to-do (`ctx.dashboard`).
+- **AI, Gmail, search**: AI goes through `ctx.llm` (the admin's provider,
+  never the module's own key), mail through `ctx.gmail` (never your own
+  OAuth/IMAP), and records worth finding through `ctx.search.provide`. These
+  need Ledger 0.10.0, and the admin must allow the module under Settings →
+  AI / Gmail: say so in the README and show `ctx.llm.status()` /
+  `ctx.gmail.status()` in the UI when it isn't allowed yet.
+- **Roles**: `req.user.role` is `admin`, `bookkeeper` or `viewer`. Ledger
+  blocks viewers from non-GET routes; restrict module setup to admins
+  yourself.
 - **UI**: one self-contained `ui/index.html` (plain HTML/CSS/JS, light and
   dark mode, works from ~260px wide).
 - **Icon**: draw one that says what the module does: `nav.icon` as

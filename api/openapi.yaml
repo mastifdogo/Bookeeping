@@ -87,6 +87,8 @@ tags:
   - name: Reconciliation
   - name: Files
   - name: Modules
+  - name: Users
+  - name: Integrations
 
 paths:
   /auth/login:
@@ -983,6 +985,229 @@ paths:
               schema: { $ref: '#/components/schemas/BackupInfo' }
         default: { $ref: '#/components/responses/Error' }
 
+  /users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: All users (admin)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: '#/components/schemas/User' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Users]
+      operationId: createUser
+      summary: Add a user (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password, role]
+              properties:
+                username: { type: string }
+                password: { type: string, minLength: 4 }
+                role: { $ref: '#/components/schemas/Role' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /users/{username}:
+    patch:
+      tags: [Users]
+      operationId: updateUser
+      summary: Change a user's role, disable or enable them, or reset their password (admin)
+      description: |
+        At least one active admin must remain, and admins can't disable
+        themselves. Disabling or a new password ends the user's sessions.
+      parameters:
+        - { name: username, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                role: { $ref: '#/components/schemas/Role' }
+                is_active: { type: boolean }
+                password: { type: string, minLength: 4 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /search:
+    get:
+      tags: [Reports]
+      operationId: search
+      summary: Search accounts, journal entries (text, number or amount) and modules
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 25, default: 8 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchResults' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /integrations/llm:
+    get:
+      tags: [Integrations]
+      operationId: getLlm
+      summary: The AI provider shared with modules, and its usage (admin)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LlmInfo' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Integrations]
+      operationId: putLlm
+      summary: Set the AI provider (admin); api_key omitted or null keeps it, "" clears it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider: { type: string, enum: ['', anthropic, ollama, openai] }
+                model: { type: string }
+                base_url: { type: string }
+                api_key: { type: string, nullable: true }
+                effort: { type: string, enum: [low, medium, high] }
+                max_tokens: { type: integer }
+                allow_modules: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LlmInfo' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /integrations/llm/test:
+    post:
+      tags: [Integrations]
+      operationId: testLlm
+      summary: Send a tiny prompt to check the provider works (admin)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, required: [text, model, duration_ms], properties: { text: { type: string }, model: { type: string }, duration_ms: { type: integer } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /integrations/gmail:
+    get:
+      tags: [Integrations]
+      operationId: getGmail
+      summary: Gmail connection shared with modules (admin)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GmailInfo' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Integrations]
+      operationId: putGmail
+      summary: Set the OAuth client and which modules may read and send (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_id: { type: string }
+                client_secret: { type: string, nullable: true }
+                allow_read: { type: array, items: { type: string } }
+                allow_send: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GmailInfo' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /integrations/gmail/start:
+    post:
+      tags: [Integrations]
+      operationId: startGmail
+      summary: Start connecting Gmail; open auth_url, approve, then paste the address the browser lands on into /finish
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { send: { type: boolean, description: Also ask permission to send mail } } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, required: [auth_url, redirect_uri], properties: { auth_url: { type: string }, redirect_uri: { type: string } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /integrations/gmail/finish:
+    post:
+      tags: [Integrations]
+      operationId: finishGmail
+      summary: Finish connecting with the pasted address (or code)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [url], properties: { url: { type: string } } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GmailInfo' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /integrations/gmail/disconnect:
+    post:
+      tags: [Integrations]
+      operationId: disconnectGmail
+      summary: Disconnect Gmail (revokes Ledger's access)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GmailInfo' }
+        default: { $ref: '#/components/responses/Error' }
+
   /system/update:
     get:
       tags: [System]
@@ -1274,9 +1499,10 @@ components:
 
     User:
       type: object
-      required: [username, is_active, created_at, last_login_at]
+      required: [username, role, is_active, created_at, last_login_at]
       properties:
         username: { type: string, example: alice }
+        role: { $ref: '#/components/schemas/Role' }
         is_active: { type: boolean }
         created_at: { type: string, format: date-time }
         last_login_at: { type: string, format: date-time, nullable: true }
@@ -1953,6 +2179,113 @@ components:
               name: { type: string }
               size_bytes: { type: integer }
               modified_at: { type: string, format: date-time }
+    Role:
+      type: string
+      enum: [admin, bookkeeper, viewer]
+      description: admin manages everything; bookkeeper works in the books; viewer reads
+    SearchResults:
+      type: object
+      required: [query, groups]
+      properties:
+        query: { type: string }
+        groups:
+          type: array
+          items:
+            type: object
+            required: [source, label, results]
+            properties:
+              source: { type: string }
+              label: { type: string }
+              results:
+                type: array
+                items:
+                  type: object
+                  required: [title, subtitle, href]
+                  properties:
+                    title: { type: string }
+                    subtitle: { type: string }
+                    href: { type: string }
+    ModuleChoice:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+    LlmInfo:
+      type: object
+      required: [available, config, modules, usage]
+      properties:
+        available: { type: boolean }
+        config:
+          type: object
+          required: [provider, model, base_url, has_api_key, effort, max_tokens, allow_modules, configured, providers, defaults]
+          properties:
+            provider: { type: string }
+            model: { type: string }
+            base_url: { type: string }
+            has_api_key: { type: boolean }
+            effort: { type: string }
+            max_tokens: { type: integer }
+            allow_modules: { type: array, items: { type: string } }
+            configured: { type: boolean }
+            providers: { type: array, items: { type: string } }
+            defaults:
+              type: object
+              additionalProperties:
+                type: object
+                required: [model, base_url]
+                properties:
+                  model: { type: string }
+                  base_url: { type: string }
+        modules: { type: array, items: { $ref: '#/components/schemas/ModuleChoice' } }
+        usage:
+          type: object
+          required: [last_30_days, recent]
+          properties:
+            last_30_days:
+              type: array
+              items:
+                type: object
+                required: [source, calls, failed, input_tokens, output_tokens]
+                properties:
+                  source: { type: string }
+                  calls: { type: integer }
+                  failed: { type: integer }
+                  input_tokens: { type: integer }
+                  output_tokens: { type: integer }
+            recent:
+              type: array
+              items:
+                type: object
+                required: [source, model, input_tokens, output_tokens, ok, error, duration_ms, created_at]
+                properties:
+                  source: { type: string }
+                  model: { type: string }
+                  input_tokens: { type: integer, nullable: true }
+                  output_tokens: { type: integer, nullable: true }
+                  ok: { type: boolean }
+                  error: { type: string }
+                  duration_ms: { type: integer }
+                  created_at: { type: string, format: date-time }
+    GmailInfo:
+      type: object
+      required: [available, config, modules]
+      properties:
+        available: { type: boolean }
+        config:
+          type: object
+          required: [client_id, has_client_secret, connected, account, can_read, can_send, allow_read, allow_send, redirect_uri]
+          properties:
+            client_id: { type: string }
+            has_client_secret: { type: boolean }
+            connected: { type: boolean }
+            account: { type: string }
+            can_read: { type: boolean }
+            can_send: { type: boolean }
+            allow_read: { type: array, items: { type: string } }
+            allow_send: { type: array, items: { type: string } }
+            redirect_uri: { type: string }
+        modules: { type: array, items: { $ref: '#/components/schemas/ModuleChoice' } }
     ModulesInfo:
       type: object
       required: [installer_available, modules, nav]

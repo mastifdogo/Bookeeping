@@ -165,7 +165,10 @@ backend/src/dashboard.ts  Dashboard summary, notifications and to-dos
 backend/src/reconcile.ts  Reconciling accounts against statements
 backend/src/backup.ts     `ledger backup run`: dumps to TrueNAS and/or Google Drive
 backend/src/module-settings.ts  Module settings declared in ledger-module.json
-backend/src/cli.ts        `ledger user add|passwd|disable|enable|list`
+backend/src/cli.ts        `ledger user add|role|passwd|disable|enable|list`
+backend/src/search.ts     The search bar (accounts, entries, module providers)
+backend/src/llm.ts        Settings → AI and ctx.llm (Anthropic, Ollama, OpenAI-compatible)
+backend/src/gmail.ts      Settings → Gmail (OAuth with PKCE) and ctx.gmail
 backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
 backend/src/updater.ts    `ledger update run`: the root updater (GitHub Releases, verify, install, rollback, reboot)
 backend/src/module-host.ts       Runs installed modules: routes, UI, the `ctx` API
@@ -266,8 +269,35 @@ CSV_DIR=./csv ./out/bin/ledger      # http://localhost:8080
 Users log in with a username and password (bcrypt) and get a server-side
 session in an HttpOnly, SameSite=Strict cookie. Sessions end after 8 hours idle
 or 7 days. Repeated failed logins are throttled. There's no sign-up page:
-users are managed with `ledger user …` on the server. Every journal entry and
-import records who posted it.
+admins add users under **Settings → Users** (or `ledger user add <name>
+--role …` on the server). Every journal entry and import records who posted
+it.
+
+### Users and roles
+
+- **Admin**: everything, including users, modules, backups, updates, AI and
+  Gmail.
+- **Bookkeeper**: works in the books (entries, accounts, reconciliation,
+  imports, modules' pages).
+- **Viewer**: reads the books and reports; changes nothing.
+
+The API enforces roles on every request (403 otherwise). Ledger always keeps
+at least one active admin. Users can't be deleted, because entries record
+who posted them; disable them instead.
+
+### Search
+
+The search box at the top of the sidebar (or `/`, or Ctrl/Cmd+K) finds pages
+and settings, accounts, journal entries by text, `#number` or amount
+(`1,800` or `45.00`), and whatever modules add.
+
+### AI and Gmail for modules
+
+**Settings → AI** sets one AI provider (Claude, Ollama or an
+OpenAI-compatible server) and **Settings → Gmail** connects one Gmail account
+(Google OAuth: read, and optionally send). Modules use them through
+`ctx.llm` and `ctx.gmail` without ever seeing the keys, and only if an admin
+allows each module there. AI usage is logged per module.
 
 ### Dashboard
 

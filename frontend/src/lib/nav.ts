@@ -15,6 +15,7 @@ export const ICONS = {
 	collapse: 'M15 6l-6 6 6 6',
 	module: 'M9 3h6v3a2 2 0 1 0 4 0V5h2v6h-3a2 2 0 1 0 0 4h3v6h-6v-3a2 2 0 1 0-4 0v3H3v-6h3a2 2 0 1 0 0-4H3V5h6z',
 	menu: 'M4 6h16M4 12h16M4 18h16',
+	search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
 	split: 'M3 4h18v16H3zM13 4v16M16 10v4M14 12h4',
 	close: 'M6 6l12 12M18 6L6 18',
 	expand: 'M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7',

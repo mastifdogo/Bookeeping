@@ -106,11 +106,17 @@ export default async function register(ctx) {
 | `ledger.*` | Ledger's own functions, below. |
 | `dashboard.*` | Notifications and to-dos on Ledger's dashboard, below. |
 | `settings.*` | `get()`, `set(values)`, `onChange(fn)` for the manifest's settings, below. |
+| `llm.*` | The shared AI provider (Ledger ≥ 0.10.0): `status()`, `complete()`, `json()`, below. |
+| `gmail.*` | The shared Gmail account (Ledger ≥ 0.10.0): `status()`, `search()`, `message()`, `attachment()`, `raw()`, `send()`, below. |
+| `search.provide(fn)` | Adds results to Ledger's search bar (Ledger ≥ 0.10.0), below. |
 | `HttpError` | `throw new ctx.HttpError(status, message)` → that status with JSON error body. |
 | `response(status, body?)` | Return it to choose the status (e.g. 201). |
 | `log.info/warn/error(msg, attrs?)` | JSON log lines (journalctl -u ledger). |
 
-**Handler** `req`: `{ method, path, params, query: URLSearchParams, body, user: { username } }`.
+**Handler** `req`: `{ method, path, params, query: URLSearchParams, body, user: { username, role } }`.
+`role` is `admin`, `bookkeeper` or `viewer` (Ledger ≥ 0.10.0). Ledger already
+answers 403 to non-GET requests from viewers; check `req.user.role === "admin"`
+yourself for module-setup actions only admins should do.
 `body` is parsed JSON (request must send `Content-Type: application/json`;
 max 1 MiB) or `undefined`. Return value → JSON 200; `undefined` → 204;
 `ctx.response(s, b)` → status `s`. Other thrown errors → 500 (Ledger's own
@@ -260,6 +266,56 @@ const api = (path, opts = {}) =>
 		});
 ```
 
+### ctx.llm (Ledger ≥ 0.10.0)
+
+**Never call an AI API yourself and never ask for an AI API key in your
+settings.** The admin sets one provider (Claude, Ollama or an
+OpenAI-compatible server) under Settings → AI and ticks which modules may
+use it; the key never reaches modules.
+
+```js
+const st = await ctx.llm.status(); // { configured, allowed, provider, model, readsPdf }
+const { text } = await ctx.llm.complete({ system: "…", prompt: "…", maxTokens: 800 });
+const { data } = await ctx.llm.json({ system: "…", prompt: "…", schema: { type: "object", properties: { … }, required: [ … ] } });
+// also: messages: [{ role: "user" | "assistant", content }], documents: [{ media_type: "application/pdf", data: base64, name }]
+// result: { text, data?, model, usage: { input_tokens, output_tokens } }
+```
+
+Errors are `HttpError`s (409 not set up, 403 module not allowed, 502 provider
+failed, 422 declined) whose messages tell the user where to fix it. Let them
+propagate from route handlers, or catch them and show `status()` in the UI
+("Ask an admin to allow <module> under Settings → AI"). Batch work (e.g. 40
+transactions per call) rather than one call per item. Use `json()` with a
+strict schema for anything the code parses.
+
+### ctx.gmail (Ledger ≥ 0.10.0)
+
+**Never implement OAuth, IMAP or an Apps Script bridge for Gmail.** The admin
+connects one account under Settings → Gmail and allows each module to read
+and/or send.
+
+```js
+const st = await ctx.gmail.status(); // { connected, account, canRead, canSend } for this module
+const { messages, nextPageToken } = await ctx.gmail.search("from:bills@ newer_than:30d has:attachment", { max: 25, pageToken });
+// messages: [{ id, threadId, date (ISO), from, to, subject, snippet, labels }], newest first
+const m = await ctx.gmail.message(id);   // { …, cc, text, html, attachments: [{ attachmentId, filename, mimeType, size }] }
+const buf = await ctx.gmail.attachment(m.id, m.attachments[0].attachmentId); // Buffer
+const raw = await ctx.gmail.raw(id);      // Buffer (RFC 822), for your own MIME parsing
+await ctx.gmail.send({ to, cc?, bcc?, replyTo?, subject, text?, html?, attachments?: [{ filename, contentType?, content: Buffer }], threadId? }); // → { id, threadId }
+```
+
+Remember which message ids you've processed (in your own table) instead of
+relying on read/unread state; the access is read-only. Errors as for `ctx.llm`.
+
+### ctx.search (Ledger ≥ 0.10.0)
+
+```js
+ctx.search.provide(async (query, { limit, user }) => [{ title: "Invoice 31", subtitle: "Acme Corp · $4,200.00", href: "/apps/<id>?invoice=31" }]);
+```
+
+Return at most `limit` results; `href` must start with `/`; answer within 2 s
+(parameterized `ILIKE` on indexed columns).
+
 ## 6. Security rules
 
 - Parameterized SQL only (`$1`); never interpolate user input into SQL. Only
@@ -284,8 +340,10 @@ const api = (path, opts = {}) =>
 
 ## 8. Checklist for your answer
 
-- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"`, with a drawn `nav.icon` that fits the module
+- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`), with a drawn `nav.icon` that fits the module
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
+- [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → AI / Gmail
+- [ ] searchable records exposed with `ctx.search.provide`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries
 - [ ] money as integer cents, per currency, entries balanced per currency

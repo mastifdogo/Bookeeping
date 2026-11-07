@@ -18,6 +18,9 @@ import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccou
 import { createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { moduleValues, saveSettings, type SettingValue } from "./module-settings.ts";
+import type { SearchProvider } from "./search.ts";
+import { llmComplete, llmReady, readLlmConfig, type LlmRequest } from "./llm.ts";
+import { gmailFor } from "./gmail.ts";
 import { listBySource, postItem, removeByKey, setClosedByKey, type ItemInput, type ItemKind } from "./dashboard.ts";
 import { isCurrency, publicUser, type AccountCreate, type Currency, type JournalEntryCreate, type User } from "./types.ts";
 
@@ -33,8 +36,8 @@ export interface ModuleRequest {
 	query: URLSearchParams;
 	/** Parsed JSON body (undefined when there is none). */
 	body: unknown;
-	/** The logged-in user. */
-	user: { username: string };
+	/** The logged-in user and their role ("admin", "bookkeeper" or "viewer"). */
+	user: { username: string; role: string };
 }
 
 /** Return this from a handler to choose the status code. */
@@ -63,6 +66,8 @@ export interface LoadedModule {
 	routes: ModuleRoute[];
 	/** Why the module is not running (load error, incompatible version); null when it runs. */
 	error: string | null;
+	/** ctx.search.provide functions. */
+	searchProviders: SearchProvider[];
 	/** ctx.settings.onChange listeners. */
 	settingsListeners: ((values: Record<string, SettingValue>) => unknown)[];
 }
@@ -100,8 +105,8 @@ const cur = (c: string | null | undefined): Currency | null => (c && isCurrency(
 // Users passed to modules: the internal id stays out of reach of the module's
 // JSON, but the host can still attribute entries to the right person.
 const userIds = new WeakMap<object, number>();
-function moduleUser(u: User): { username: string } {
-	const pub = { username: publicUser(u).username };
+function moduleUser(u: User): { username: string; role: string } {
+	const pub = { username: publicUser(u).username, role: u.role };
 	userIds.set(pub, u.id);
 	return pub;
 }
@@ -150,6 +155,36 @@ function makeContext(app: App, m: LoadedModule) {
 			onChange(fn: (values: Record<string, SettingValue>) => unknown) {
 				if (typeof fn !== "function") throw new Error("settings.onChange: expected a function");
 				m.settingsListeners.push(fn);
+			},
+		},
+		/**
+		 * The AI provider set up under Settings → AI (an admin must allow this
+		 * module there). complete() returns { text, model, usage }; json() also
+		 * parses the answer against a JSON schema into data.
+		 */
+		llm: {
+			status: async () => {
+				const c = await readLlmConfig(app.integrations.dir);
+				return { configured: llmReady(c), allowed: c.allow_modules.includes(id), provider: c.provider || null, model: c.model || null, readsPdf: c.provider === "anthropic" };
+			},
+			complete: (r: LlmRequest) => llmComplete(app, id, { ...r, schema: undefined }),
+			json: (r: LlmRequest & { schema: object }) => {
+				if (!r || typeof r.schema !== "object" || r.schema === null) throw new HttpError(400, "llm.json needs a JSON schema");
+				return llmComplete(app, id, r);
+			},
+		},
+		/** Gmail, connected under Settings → Gmail (an admin must allow reading and sending per module). */
+		gmail: gmailFor(app, id),
+		/** Results in Ledger's search bar. */
+		search: {
+			/**
+			 * Registers fn(query, { limit, user }) returning (or resolving to)
+			 * [{ title, subtitle?, href }], href a path inside Ledger such as
+			 * "/apps/<id>/invoices/7". Called for every search; answer within 2 s.
+			 */
+			provide(fn: SearchProvider) {
+				if (typeof fn !== "function") throw new Error("search.provide: expected a function");
+				m.searchProviders.push(fn);
 			},
 		},
 		/** Notifications and to-dos on Ledger's dashboard, owned by this module. */
@@ -236,6 +271,7 @@ export class ModuleHost {
 			routes: [],
 			error: null,
 			settingsListeners: [],
+			searchProviders: [],
 		};
 		this.modules.set(m.manifest.id, m);
 		if (!compatible(m.manifest, app.version)) {

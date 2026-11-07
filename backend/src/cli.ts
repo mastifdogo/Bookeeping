@@ -5,10 +5,12 @@ import { loadConfig } from "./config.ts";
 import { connectDB } from "./db.ts";
 import { NotFoundError, ValidationError } from "./errors.ts";
 import { isPgError } from "./db.ts";
-import { createUser, listUsers, normalizeUsername, setPassword, setUserActive } from "./auth.ts";
+import { createUser, listUsers, normalizeUsername, setPassword, setUserActive, updateUserAccess } from "./auth.ts";
+import { ROLES, type Role } from "./types.ts";
 
 export const USER_USAGE = `usage:
-  ledger user add <name> [--password-stdin]
+  ledger user add <name> [--role admin|bookkeeper|viewer] [--password-stdin]
+  ledger user role <name> admin|bookkeeper|viewer
   ledger user passwd <name> [--password-stdin]
   ledger user disable <name>
   ledger user enable <name>
@@ -16,13 +18,21 @@ export const USER_USAGE = `usage:
 
 class UsageError extends Error {}
 
-function parseArgs(args: string[]): { cmd: string; name: string; fromStdin: boolean } {
+function parseArgs(args: string[]): { cmd: string; name: string; fromStdin: boolean; role: string } {
 	if (args.length === 0) throw new UsageError(USER_USAGE);
 	const [cmd, ...rest] = args as [string, ...string[]];
 	let name = "";
+	let role = "";
 	let fromStdin = false;
 	let flagsDone = false;
-	for (const a of rest) {
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i]!;
+		const roleFlag = /^--?role(?:=(.*))?$/.exec(a);
+		if (!flagsDone && roleFlag) {
+			role = roleFlag[1] ?? rest[++i] ?? "";
+			if (role === "") throw new UsageError(USER_USAGE);
+			continue;
+		}
 		const flag = /^--?password-stdin(?:=(.*))?$/.exec(a);
 		if (!flagsDone && flag) {
 			const val = flag[1];
@@ -35,12 +45,16 @@ function parseArgs(args: string[]): { cmd: string; name: string; fromStdin: bool
 			throw new UsageError(`flag provided but not defined: ${a}\n${USER_USAGE}`);
 		} else if (name === "") {
 			name = a;
+		} else if (cmd === "role" && role === "") {
+			role = a;
 		} else {
 			throw new UsageError(USER_USAGE);
 		}
 	}
 	if ((cmd === "list") !== (name === "")) throw new UsageError(USER_USAGE);
-	return { cmd, name, fromStdin };
+	if (cmd === "role" && role === "") throw new UsageError(USER_USAGE);
+	if (role !== "" && cmd !== "add" && cmd !== "role") throw new UsageError(USER_USAGE);
+	return { cmd, name, fromStdin, role };
 }
 
 /** Reads one line from stdin (for --password-stdin or a pipe). */
@@ -115,8 +129,9 @@ function printTable(rows: string[][]): void {
 
 /** Implements `ledger user ...`; returns the process exit code. */
 export async function runUserCommand(args: string[]): Promise<void> {
-	const { cmd, name, fromStdin } = parseArgs(args);
-	if (!["add", "passwd", "disable", "enable", "list"].includes(cmd)) throw new UsageError(USER_USAGE);
+	const { cmd, name, fromStdin, role } = parseArgs(args);
+	if (!["add", "role", "passwd", "disable", "enable", "list"].includes(cmd)) throw new UsageError(USER_USAGE);
+	if (role !== "" && !(ROLES as readonly string[]).includes(role)) throw new Error("role must be admin, bookkeeper or viewer");
 
 	const cfg = loadConfig("");
 	const db = await connectDB(cfg);
@@ -125,8 +140,13 @@ export async function runUserCommand(args: string[]): Promise<void> {
 		switch (cmd) {
 			case "add": {
 				const pw = await readPassword(fromStdin);
-				const u = await createUser(app, name, pw).catch((e) => Promise.reject(cliError(e)));
-				console.log(`created user ${u.username}`);
+				const u = await createUser(app, name, pw, (role || "admin") as Role).catch((e) => Promise.reject(cliError(e)));
+				console.log(`created user ${u.username} (${u.role})`);
+				break;
+			}
+			case "role": {
+				const u = await updateUserAccess(app, name, { role: role as Role }).catch((e) => Promise.reject(cliError(e)));
+				console.log(`${u.username} is now ${u.role}`);
 				break;
 			}
 			case "passwd": {
@@ -143,8 +163,8 @@ export async function runUserCommand(args: string[]): Promise<void> {
 			case "list": {
 				const users = await listUsers(app);
 				printTable([
-					["USERNAME", "ACTIVE", "CREATED", "LAST LOGIN"],
-					...users.map((u) => [u.username, String(u.is_active), localDate(u.created_at), u.last_login_at ? localDateTime(u.last_login_at) : "never"]),
+					["USERNAME", "ROLE", "ACTIVE", "CREATED", "LAST LOGIN"],
+					...users.map((u) => [u.username, u.role, String(u.is_active), localDate(u.created_at), u.last_login_at ? localDateTime(u.last_login_at) : "never"]),
 				]);
 				break;
 			}

@@ -4,6 +4,8 @@ import { LOGIN_MAX_FAILURES_PER_USER, LoginLimiter } from "./limiter.ts";
 import { updateDirs, type UpdateDirs } from "./update.ts";
 import { ModuleHost } from "./module-host.ts";
 import { modulesDir } from "./modules.ts";
+import { integrationsDir } from "./integrations.ts";
+import { gmailEndpoints, type GoogleEndpoints as GmailEndpoints, type PendingAuth } from "./gmail.ts";
 import { backupStateDir, googleEndpoints, type DeviceCode, type GoogleEndpoints } from "./backup.ts";
 
 /** Shared dependencies for handlers and ledger operations. */
@@ -19,6 +21,8 @@ export interface App {
 	update: UpdateDirs;
 	/** Installed modules running in this process. */
 	modules: ModuleHost;
+	/** AI and Gmail settings (integrationsDir), Gmail endpoints and a pending OAuth attempt. */
+	integrations: { dir: string; gmail: GmailEndpoints; pendingGmail: PendingAuth | null };
 	/** Backups: settings/status directory, database URL for pg_dump, Google endpoints. */
 	backup: { dir: string; databaseUrl: string; google: GoogleEndpoints; device: DeviceCode | null; running: Promise<unknown> | null };
 }
@@ -35,6 +39,8 @@ export function newApp(
 		databaseUrl?: string;
 		backupDir?: string;
 		google?: GoogleEndpoints;
+		integrationsDir?: string;
+		gmail?: GmailEndpoints;
 	},
 ): App {
 	return {
@@ -47,6 +53,7 @@ export function newApp(
 		version: cfg.version ?? "dev",
 		update: cfg.update ?? updateDirs(),
 		modules: new ModuleHost(cfg.modulesDir ?? modulesDir()),
+		integrations: { dir: cfg.integrationsDir ?? integrationsDir(), gmail: cfg.gmail ?? gmailEndpoints(), pendingGmail: null },
 		backup: { dir: cfg.backupDir ?? backupStateDir(), databaseUrl: cfg.databaseUrl ?? "", google: cfg.google ?? googleEndpoints(), device: null, running: null },
 	};
 }
