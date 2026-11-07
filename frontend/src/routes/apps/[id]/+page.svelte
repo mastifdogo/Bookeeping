@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { forwardSearchKeys } from '#lib/search-shortcut.ts';
 
 	const id = $derived(page.params.id ?? '');
 	const mod = $derived(page.data.modules?.find((m: { id: string }) => m.id === id));
@@ -12,7 +13,8 @@
 
 {#if mod}
 	<!-- The module's own UI, served by Ledger at /m/<id>/ (same origin, same login). -->
-	<iframe class="module" title={mod.label} {src}></iframe>
+	<!-- Its "/" and Ctrl/Cmd+K open Ledger's search too. -->
+	<iframe class="module" title={mod.label} {src} {@attach forwardSearchKeys}></iframe>
 {:else}
 	<h1>Module not found</h1>
 	<p>No running module is called "{id}". See <a href="/settings/modules">Settings → Modules</a>.</p>

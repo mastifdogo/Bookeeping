@@ -6,13 +6,16 @@
 	import { api } from '#lib/api/client.ts';
 	import { ICONS, type NavItem } from '#lib/nav.ts';
 	import { tick } from 'svelte';
+	import { isSearchKey, SEARCH_MESSAGE } from '#lib/search-shortcut.ts';
 
 	let { nav, isAdmin, collapsed = false }: { nav: NavItem[]; isAdmin: boolean; collapsed?: boolean } = $props();
 
 	type Hit = { title: string; subtitle: string; href: string };
 	type Group = { label: string; results: Hit[] };
 
-	let open = $state(false);
+	// A modal <dialog> sits in the browser's top layer, above every pane and
+	// module frame (a z-index can't do that from inside the sticky sidebar).
+	let dlg: HTMLDialogElement | undefined = $state();
 	let q = $state('');
 	let groups = $state<Group[]>([]);
 	let loading = $state(false);
@@ -69,13 +72,14 @@
 	}
 
 	async function show() {
-		open = true;
+		if (!dlg) return;
+		if (!dlg.open) dlg.showModal();
 		await tick();
 		input?.focus();
 		input?.select();
 	}
 	function close() {
-		open = false;
+		dlg?.close();
 	}
 	function pick(h: Hit | undefined) {
 		if (!h) return;
@@ -94,22 +98,24 @@
 		} else if (e.key === 'Enter') {
 			e.preventDefault();
 			pick(flat[active]);
-		} else if (e.key === 'Escape') {
-			close();
 		}
+		// Escape: the dialog closes itself.
 	}
 	// "/" or Ctrl/Cmd+K opens it from anywhere (but "/" not while typing elsewhere).
 	function globalKey(e: KeyboardEvent) {
-		const typing = e.target instanceof HTMLElement && (e.target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName));
-		if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey)) {
+		if (isSearchKey(e) && !dlg?.open) {
 			e.preventDefault();
 			show();
 		}
 	}
+	// ...including from pages in panes and modules' frames, which pass it on.
+	function onMessage(e: MessageEvent) {
+		if (e.origin === location.origin && e.data?.type === SEARCH_MESSAGE) show();
+	}
 	const indexOf = (h: Hit) => flat.indexOf(h);
 </script>
 
-<svelte:window onkeydown={globalKey} />
+<svelte:window onkeydown={globalKey} onmessage={onMessage} />
 
 <button class="trigger" class:collapsed onclick={show} title="Search (/ or Ctrl+K)" aria-haspopup="dialog">
 	<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d={ICONS.search} /></svg>
@@ -117,55 +123,53 @@
 	<kbd class="label">/</kbd>
 </button>
 
-{#if open}
-	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (Escape closes it; the backdrop click is a convenience) -->
-	<div class="backdrop" onclick={close}>
-		<div class="palette" role="dialog" aria-modal="true" aria-label="Search" tabindex="-1" onclick={(e) => e.stopPropagation()}>
-			<div class="box">
-				<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d={ICONS.search} /></svg>
-				<input
-					bind:this={input}
-					bind:value={q}
-					oninput={onInput}
-					onkeydown={keydown}
-					placeholder="Search accounts, entries (text, #number or amount), pages…"
-					aria-label="Search"
-					aria-controls="search-results"
-					aria-activedescendant={flat.length ? `search-hit-${active}` : undefined}
-					autocomplete="off"
-					spellcheck="false"
-				/>
-				{#if loading}<span class="muted small">…</span>{/if}
-			</div>
-			<div class="results" id="search-results" role="listbox">
-				{#each groups as g (g.label)}
-					<div class="group">{g.label}</div>
-					{#each g.results as h (h.href + h.title)}
-						{@const i = indexOf(h)}
-						<a
-							id="search-hit-{i}"
-							role="option"
-							aria-selected={i === active}
-							class:active={i === active}
-							href={h.href}
-							onclick={(e) => {
-								e.preventDefault();
-								pick(h);
-							}}
-							onmousemove={() => (active = i)}
-						>
-							<span class="title">{h.title}</span>
-							{#if h.subtitle}<span class="sub">{h.subtitle}</span>{/if}
-						</a>
-					{/each}
-				{:else}
-					{#if q.trim() && !loading}<div class="empty small">Nothing found for “{q.trim()}”.</div>{/if}
-					{#if !q.trim()}<div class="empty small">Type to search. Tip: <kbd>#12</kbd> finds entry 12, <kbd>45.00</kbd> finds that amount.</div>{/if}
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions (Escape closes it; a click on the backdrop is a convenience) -->
+<dialog bind:this={dlg} class="palette" aria-label="Search" onclick={(e) => e.target === dlg && close()}>
+	<div class="inner">
+		<div class="box">
+			<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d={ICONS.search} /></svg>
+			<input
+				bind:this={input}
+				bind:value={q}
+				oninput={onInput}
+				onkeydown={keydown}
+				placeholder="Search accounts, entries (text, #number or amount), pages…"
+				aria-label="Search"
+				aria-controls="search-results"
+				aria-activedescendant={flat.length ? `search-hit-${active}` : undefined}
+				autocomplete="off"
+				spellcheck="false"
+			/>
+			{#if loading}<span class="muted small">…</span>{/if}
+		</div>
+		<div class="results" id="search-results" role="listbox">
+			{#each groups as g (g.label)}
+				<div class="group">{g.label}</div>
+				{#each g.results as h (h.href + h.title)}
+					{@const i = indexOf(h)}
+					<a
+						id="search-hit-{i}"
+						role="option"
+						aria-selected={i === active}
+						class:active={i === active}
+						href={h.href}
+						onclick={(e) => {
+							e.preventDefault();
+							pick(h);
+						}}
+						onmousemove={() => (active = i)}
+					>
+						<span class="title">{h.title}</span>
+						{#if h.subtitle}<span class="sub">{h.subtitle}</span>{/if}
+					</a>
 				{/each}
-			</div>
+			{:else}
+				{#if q.trim() && !loading}<div class="empty small">Nothing found for “{q.trim()}”.</div>{/if}
+				{#if !q.trim()}<div class="empty small">Type to search. Tip: <kbd>#12</kbd> finds entry 12, <kbd>45.00</kbd> finds that amount.</div>{/if}
+			{/each}
 		</div>
 	</div>
-{/if}
+</dialog>
 
 <style>
 	.trigger {
@@ -212,26 +216,26 @@
 		padding: 0 0.35rem;
 		color: var(--muted);
 	}
-	.backdrop {
-		position: fixed;
-		inset: 0;
-		z-index: 50;
-		background: rgb(0 0 0 / 0.35);
-		display: flex;
-		justify-content: center;
-		align-items: flex-start;
-		padding: 10vh 16px 0;
-	}
 	.palette {
-		width: min(640px, 100%);
+		width: min(640px, calc(100% - 32px));
+		max-width: none;
 		max-height: 70vh;
-		display: flex;
-		flex-direction: column;
+		margin: 10vh auto auto;
+		padding: 0;
+		color: var(--text);
 		background: var(--surface);
 		border: 1px solid var(--border);
 		border-radius: 10px;
 		box-shadow: 0 12px 40px rgb(0 0 0 / 0.25);
 		overflow: hidden;
+	}
+	.palette::backdrop {
+		background: rgb(0 0 0 / 0.35);
+	}
+	.palette[open] .inner {
+		display: flex;
+		flex-direction: column;
+		max-height: 70vh;
 	}
 	.box {
 		display: flex;

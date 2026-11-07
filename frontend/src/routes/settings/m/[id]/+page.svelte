@@ -5,6 +5,7 @@
 	import { page } from '$app/state';
 	import { arrangeNav } from '#lib/nav.ts';
 	import NavIcon from '#lib/components/NavIcon.svelte';
+	import { forwardSearchKeys } from '#lib/search-shortcut.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -149,7 +150,7 @@
 {/if}
 
 {#if settings?.page}
-	<iframe class="card module-page" src={settings.page} title="Module settings"></iframe>
+	<iframe class="card module-page" src={settings.page} title="Module settings" {@attach forwardSearchKeys}></iframe>
 {/if}
 
 {#if navItem?.hidden}
@@ -157,7 +158,7 @@
 	<p class="muted small" style="margin-top:0">
 		Hidden from the sidebar, so it's shown here. Show it again under <a href="/settings/sidebar">Sidebar</a>.
 	</p>
-	<iframe class="card module-app" src="/m/{data.id}/" title={navItem.label}></iframe>
+	<iframe class="card module-app" src="/m/{data.id}/" title={navItem.label} {@attach forwardSearchKeys}></iframe>
 {/if}
 
 <style>

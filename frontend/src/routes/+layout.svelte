@@ -7,6 +7,7 @@
 	import { ICONS, arrangeNav, pageTitle } from '#lib/nav.ts';
 	import NavIcon from '#lib/components/NavIcon.svelte';
 	import SearchPalette from '#lib/components/SearchPalette.svelte';
+	import { isSearchKey, requestSearch } from '#lib/search-shortcut.ts';
 	import { MAIN_ID, MIN_PANE_PX, panes, type Pane } from '#lib/panes.svelte.ts';
 	import type { LayoutProps } from './$types';
 
@@ -35,6 +36,13 @@
 	afterNavigate(() => {
 		if (embedded) window.parent.postMessage({ type: 'ledger-pane', path: location.pathname + location.search }, location.origin);
 	});
+	// "/" and Ctrl/Cmd+K in a pane open the search of the window around it.
+	function embeddedKey(e: KeyboardEvent) {
+		if (embedded && isSearchKey(e)) {
+			e.preventDefault();
+			requestSearch();
+		}
+	}
 
 	// Desktop: the sidebar collapses to an icon rail; the choice is remembered
 	// in this browser. Phones: the menu opens from a button in the top bar.
@@ -142,7 +150,7 @@
 	<title>Ledger</title>
 </svelte:head>
 
-<svelte:window onmessage={onMessage} />
+<svelte:window onmessage={onMessage} onkeydown={embeddedKey} />
 
 {#snippet icon(d: string)}
 	<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path {d} /></svg>
