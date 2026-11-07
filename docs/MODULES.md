@@ -270,6 +270,12 @@ ctx.search.provide(async (query, { limit, user }) => {
 });
 ```
 
+The query string of `/apps/<id>?…` is passed on to the module's page
+(`/m/<id>/?…`, read it from `location.search`), so a link can open one
+record. Ledger 0.10.1 and later; before that the page always opened at
+its start.
+
+
 Your results appear under your module's name in Ledger's search bar. `href`
 must be a path inside Ledger. Answer within 2 seconds; slow or failing
 providers are skipped.
