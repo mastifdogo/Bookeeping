@@ -76,16 +76,16 @@ Paths are relative to the repository root and cannot contain `..` or hidden
 
 - **A name** from Ledger's set: `hammer`, `wrench`, `invoice`, `cart`, `chart`, `users`, `mail`, `calendar`, `box`, `dollar`, `bank`, `wallet`, `piggy`, `receipt`, `tag`, `truck`, `home`, `briefcase`, `clock`, `globe`, `key`, `lock`, `star`, `heart`, `bell`, `file`, `folder`, `cloud`, `database`, `link`, `send`, `phone`, `printer`, `gift`, `bot`, `sparkles`, `pie`, `target`, `scale`, `percent`, `calculator`.
   Unknown names show the generic module icon.
-- **Your own drawing** (Ledger 0.10.0 and later): `{"path": "M4 5h16v11H10l-5 4v-4H4z"}`,
+- **Your own drawing** (Ledger 0.9.1 and later): `{"path": "M4 5h16v11H10l-5 4v-4H4z"}`,
   SVG path data on a 24×24 grid. It is stroked like Ledger's icons (1.8px,
   round caps); add `"fill": true` for a solid shape. Up to 4,000 characters,
   path commands and numbers only.
-- **An SVG file** (Ledger 0.10.0 and later): `{"file": "icon.svg"}`, inside
+- **An SVG file** (Ledger 0.9.1 and later): `{"file": "icon.svg"}`, inside
   the `ui` directory. Ledger uses its shape as a mask, so it takes the
   sidebar's colour in light and dark mode; colours in the file are ignored.
 
 Draw on a 24×24 grid with about 2px of margin. Use
-`"ledger": ">=0.10.0"` for drawn or file icons: older versions refuse them.
+`"ledger": ">=0.9.1"` for drawn or file icons: older versions refuse them.
 
 ## Publishing
 
@@ -271,6 +271,17 @@ read/write access to everything the module creates.
   `DROP SCHEMA mod_<id> CASCADE` as the `postgres` user.
 
 ## Developing locally
+
+**Checking a module.** `node .claude/skills/ledger-module/scripts/check-module.ts <dir>`
+validates the manifest the way Ledger does and checks files, imports and
+migrations. With `TEST_DATABASE_URL` set to a PostgreSQL superuser URL, it
+also loads the module into a real Ledger in a scratch database and calls its
+routes; add `--serve 8098` to keep it running so you can open its UI. Claude
+Code uses this through the `ledger-module` skill in `.claude/skills/`, so
+"build a Ledger module that…" in a Claude Code session on this repository
+follows the whole workflow: scaffold, implement, check, publish.
+
+**Running it in Ledger.**
 
 Run Ledger from a checkout (see the README), with `MODULES_DIR` pointing at a
 directory that contains your module under its id:

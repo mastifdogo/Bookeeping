@@ -1,0 +1,16 @@
+{
+  "id": "__ID__",
+  "name": "__NAME__",
+  "version": "0.1.0",
+  "description": "__DESCRIPTION__",
+  "ledger": ">=0.9.1",
+  "server": "server.mjs",
+  "ui": "ui",
+  "nav": {
+    "label": "__LABEL__",
+    "icon": {
+      "path": "M4 4h16v16H4z M8 9h8 M8 13h8 M8 17h5"
+    }
+  },
+  "migrations": "migrations"
+}

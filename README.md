@@ -327,7 +327,9 @@ but it can't edit or delete posted ones. Writing a module:
 [docs/MODULES.md](docs/MODULES.md); a working example is in
 `examples/modules/hello/`. To have an LLM write one, paste
 [docs/MODULE_LLM_CONTEXT.md](docs/MODULE_LLM_CONTEXT.md) into the chat and
-describe the module.
+describe the module. In Claude Code on this repository, the `ledger-module`
+skill (`.claude/skills/ledger-module/`) scaffolds, checks and publishes
+modules.
 
 ### Reports
 

@@ -129,7 +129,7 @@ async function world(t: import("node:test").TestContext) {
 	for (const d of [dirs.config, dirs.status]) await mkdir(d);
 	const gh = await fakeGitHub(t);
 	const ops = fakeOps();
-	const opts = { dirs, modulesDir: path.join(root, "modules"), cacheDir: path.join(root, "cache"), apiBase: gh.base, ledgerVersion: "v0.10.0", ops };
+	const opts = { dirs, modulesDir: path.join(root, "modules"), cacheDir: path.join(root, "cache"), apiBase: gh.base, ledgerVersion: "v0.9.1", ops };
 	return { root, dirs, gh, ops, opts };
 }
 
