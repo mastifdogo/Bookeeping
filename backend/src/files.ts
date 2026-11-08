@@ -7,6 +7,7 @@ import type { Stats } from "node:fs";
 import path from "node:path";
 import { randomInt } from "node:crypto";
 import type { App } from "./app.ts";
+import { filesDir } from "./orgs.ts";
 import { withTx } from "./db.ts";
 import { ConflictError, NotFoundError, TooLargeError, ValidationError } from "./errors.ts";
 import { formatCents, splitAmount } from "./money.ts";
@@ -119,6 +120,7 @@ const FETCH_ROWS = 2000;
  * partially written export.
  */
 export async function exportGeneralLedger(app: App, from: string | null, to: string | null, currency: string | null): Promise<CsvFile> {
+	const csvDir = await filesDir(app);
 	const v = new ValidationError();
 	if (from !== null && to !== null && to < from) v.add("to", "must not be before from");
 	if (currency !== null && !isCurrency(currency)) v.add("currency", "must be CAD or USD");
@@ -126,9 +128,9 @@ export async function exportGeneralLedger(app: App, from: string | null, to: str
 
 	let tmp: { fh: FileHandle; name: string };
 	try {
-		tmp = await createTemp(app.csvDir, ".general_ledger-");
+		tmp = await createTemp(csvDir, ".general_ledger-");
 	} catch (err) {
-		throw new Error(`create export file in ${app.csvDir}: ${(err as Error).message}`, { cause: err });
+		throw new Error(`create export file in ${csvDir}: ${(err as Error).message}`, { cause: err });
 	}
 	let committed = false;
 	try {
@@ -183,7 +185,7 @@ export async function exportGeneralLedger(app: App, from: string | null, to: str
 		const now = new Date();
 		const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.(\d{3})Z$/, "Z");
 		const name = `general_ledger_${stamp}_${String(now.getUTCMilliseconds()).padStart(3, "0")}.csv`;
-		const final = path.join(app.csvDir, name);
+		const final = path.join(csvDir, name);
 		await fsp.rename(tmp.name, final);
 		committed = true;
 
@@ -199,9 +201,10 @@ export async function exportGeneralLedger(app: App, from: string | null, to: str
 
 /** The CSV files in the CSV directory, newest first. */
 export async function listCsvFiles(app: App): Promise<CsvFile[]> {
+	const csvDir = await filesDir(app);
 	let entries;
 	try {
-		entries = await fsp.readdir(app.csvDir, { withFileTypes: true });
+		entries = await fsp.readdir(csvDir, { withFileTypes: true });
 	} catch (err) {
 		throw new Error(`read CSV directory: ${(err as Error).message}`, { cause: err });
 	}
@@ -209,7 +212,7 @@ export async function listCsvFiles(app: App): Promise<CsvFile[]> {
 	for (const e of entries) {
 		if (!e.isFile() || !CSV_FILENAME_RE.test(e.name)) continue;
 		try {
-			const info = await fsp.lstat(path.join(app.csvDir, e.name));
+			const info = await fsp.lstat(path.join(csvDir, e.name));
 			if (info.isFile()) files.push({ filename: e.name, size_bytes: info.size, modified_at: info.mtime });
 		} catch {
 			// removed between readdir and stat
@@ -224,10 +227,11 @@ export async function listCsvFiles(app: App): Promise<CsvFile[]> {
  * and symlinks are refused, so the open cannot escape the CSV directory.
  */
 export async function openCsvFile(app: App, name: string): Promise<{ fh: FileHandle; info: Stats }> {
+	const csvDir = await filesDir(app);
 	if (!CSV_FILENAME_RE.test(name)) throw new NotFoundError();
 	let fh: FileHandle;
 	try {
-		fh = await fsp.open(path.join(app.csvDir, name), constants.O_RDONLY | constants.O_NOFOLLOW);
+		fh = await fsp.open(path.join(csvDir, name), constants.O_RDONLY | constants.O_NOFOLLOW);
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
 		if (code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR") throw new NotFoundError();
@@ -264,6 +268,7 @@ export function decodeUTF8(b: Buffer): string | null {
  * the name is already taken.
  */
 export async function saveUploadedCsv(app: App, name: string, data: Buffer): Promise<CsvFile> {
+	const csvDir = await filesDir(app);
 	const v = new ValidationError();
 	if (!CSV_FILENAME_RE.test(name)) {
 		v.add("file", "file name must end in .csv and use only letters, digits, '.', '_' or '-' (max 128 characters)");
@@ -281,14 +286,14 @@ export async function saveUploadedCsv(app: App, name: string, data: Buffer): Pro
 	}
 
 	const exists = () => new ConflictError(`a file named ${JSON.stringify(name)} already exists`);
-	const final = path.join(app.csvDir, name);
+	const final = path.join(csvDir, name);
 	if (await fsp.lstat(final).then(() => true, () => false)) throw exists();
 
 	let tmp: { fh: FileHandle; name: string };
 	try {
-		tmp = await createTemp(app.csvDir, ".upload-");
+		tmp = await createTemp(csvDir, ".upload-");
 	} catch (err) {
-		throw new Error(`create upload file in ${app.csvDir}: ${(err as Error).message}`, { cause: err });
+		throw new Error(`create upload file in ${csvDir}: ${(err as Error).message}`, { cause: err });
 	}
 	try {
 		try {

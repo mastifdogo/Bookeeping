@@ -60,8 +60,8 @@ export class UnauthorizedError extends Error {
 
 /** Deliberately vague: does not reveal whether the username exists or is disabled. */
 export class BadCredentialsError extends Error {
-	constructor() {
-		super("invalid username or password");
+	constructor(message = "invalid username or password") {
+		super(message);
 	}
 }
 

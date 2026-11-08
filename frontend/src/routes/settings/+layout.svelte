@@ -17,7 +17,7 @@
 		{ href: '/settings/modules', label: 'Modules', title: '', admin: true },
 		{ href: '/settings/updates', label: 'Updates', title: '', admin: true }
 	];
-	let isAdmin = $derived(data.user?.role === 'admin');
+	let isAdmin = $derived(data.user?.server_admin === true);
 	let OWN = $derived(ALL.filter((t) => isAdmin || !t.admin));
 	// Pages hidden from the sidebar stay reachable here; modules always get a
 	// tab of their own (which shows a hidden module's page too).

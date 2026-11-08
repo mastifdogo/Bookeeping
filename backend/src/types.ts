@@ -167,17 +167,28 @@ export function roleAtLeast(have: Role, need: Role): boolean {
 	return ROLES.indexOf(have) <= ROLES.indexOf(need);
 }
 
+/** A user's role in the main books; "none" gives them no access to them. */
+export const MAIN_ROLES = [...ROLES, "none"] as const;
+export type MainRole = (typeof MAIN_ROLES)[number];
+
 export interface User {
 	/** Internal; never serialised. */
 	id: number;
 	username: string;
+	/** The role in the organization this session works in. */
 	role: Role;
 	is_active: boolean;
 	created_at: Date;
 	last_login_at: Date | null;
+	/** The role in the main books (users.role). */
+	main_role: MainRole;
+	/** Admins of the main books run the server: users, modules, updates, backups, integrations. */
+	server_admin: boolean;
+	/** The organization this session works in. */
+	org: { id: number; name: string; kind: "business" | "personal"; db_name: string };
 }
 
 /** The API shape of a user (no id). */
-export function publicUser(u: User): Omit<User, "id"> {
-	return { username: u.username, role: u.role, is_active: u.is_active, created_at: u.created_at, last_login_at: u.last_login_at };
+export function publicUser(u: User) {
+	return { username: u.username, role: u.role, is_active: u.is_active, created_at: u.created_at, last_login_at: u.last_login_at, server_admin: u.server_admin };
 }

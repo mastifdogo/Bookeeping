@@ -15,6 +15,7 @@ import { createReadStream, promises as fsp } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import pg from "pg";
+import { withDatabase } from "./db.ts";
 import { closeLedgerNotice, postLedgerNotice } from "./dashboard.ts";
 import { ConflictError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
@@ -99,7 +100,10 @@ const EMPTY_STATUS: BackupStatus = {
 };
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-const DUMP_RE = /^ledger-\d{8}T\d{6}Z\.dump$/;
+// ledger-<stamp>.dump for the main database, ledger-<database>-<stamp>.dump
+// for each other organization's.
+const DUMP_RE = /^ledger-(?:([a-z0-9_]+)-)?\d{8}T\d{6}Z\.dump$/;
+const dumpGroup = (name: string) => DUMP_RE.exec(name)?.[1] ?? "";
 /** The share must be under one of these (the systemd units let Ledger write only there). */
 function allowedRoots(): string[] {
 	return process.env.BACKUP_SHARE_ROOTS?.split(":").filter((r) => r.startsWith("/")) ?? ["/app/csv_data", "/mnt"];
@@ -483,7 +487,7 @@ async function uploadToDrive(file: string, g: GoogleTarget, ep: GoogleEndpoints)
 	// Keep the newest keep_count dumps.
 	const q = encodeURIComponent(`'${g.folder_id}' in parents and trashed = false`);
 	const list = (await driveJson(ep, token, "GET", `/drive/v3/files?q=${q}&orderBy=name desc&pageSize=1000&fields=files(id,name)`)) as { files?: { id: string; name: string }[] };
-	const old = (list.files ?? []).filter((f) => DUMP_RE.test(f.name)).slice(g.keep_count);
+	const old = (list.files ?? []).filter((f) => DUMP_RE.test(f.name) && dumpGroup(f.name) === dumpGroup(name)).slice(g.keep_count);
 	for (const f of old) await driveJson(ep, token, "DELETE", `/drive/v3/files/${encodeURIComponent(f.id)}`);
 	return `Uploaded ${name} to Google Drive (${g.account || "connected account"}, folder "${FOLDER_NAME}")${old.length ? `; removed ${old.length} older` : ""}.`;
 }
@@ -508,8 +512,8 @@ export interface BackupOptions {
 	trigger: "manual" | "scheduled";
 	now?: () => number;
 	google?: GoogleEndpoints;
-	/** Writes the dump (tests replace pg_dump). */
-	dump?: (file: string) => Promise<void>;
+	/** Writes a database's dump (tests replace pg_dump). */
+	dump?: (file: string, databaseUrl: string) => Promise<void>;
 }
 
 export interface BackupOutcome {
@@ -560,16 +564,29 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 		const targets = [config.truenas.enabled && "truenas", config.google.enabled && "google"].filter(Boolean) as ("truenas" | "google")[];
 		const workDir = path.join(o.dir, "tmp");
 		const file = path.join(workDir, name);
+		const files = [file];
 		try {
 			if (targets.length === 0) throw new Error("no backup destination is turned on; choose TrueNAS or Google Drive under Settings → Backups");
 			await fsp.mkdir(workDir, { recursive: true, mode: 0o700 });
-			await (o.dump ?? ((f) => run("pg_dump", ["--format=custom", "--compress=6", "--no-owner", "--no-privileges", `--file=${f}`, o.databaseUrl])))(file);
-			if (!o.dump) await run("pg_restore", ["--list", file]); // the archive must be readable
-			status.size_bytes = (await fsp.stat(file)).size;
+			// The main database, then each other organization's.
+			const orgs = await client
+				.query<{ db_name: string }>(`SELECT db_name FROM organizations WHERE id <> 1 AND status = 'ready' ORDER BY id`)
+				.then((r) => r.rows.map((x) => x.db_name), () => [] as string[]);
+			const dumps = [{ file, url: o.databaseUrl }, ...orgs.map((d) => ({ file: path.join(workDir, `ledger-${d}-${stamp}.dump`), url: withDatabase(o.databaseUrl, d) }))];
+			files.push(...dumps.slice(1).map((d) => d.file));
+			status.size_bytes = 0;
+			for (const d of dumps) {
+				await (o.dump ?? ((f, url) => run("pg_dump", ["--format=custom", "--compress=6", "--no-owner", "--no-privileges", `--file=${f}`, url])))(d.file, d.url);
+				if (!o.dump) await run("pg_restore", ["--list", d.file]); // the archive must be readable
+				status.size_bytes += (await fsp.stat(d.file)).size;
+			}
 			for (const t of targets) {
 				try {
-					const message = t === "truenas" ? await copyToShare(file, config.truenas, now()) : await uploadToDrive(file, config.google, o.google ?? googleEndpoints());
-					status.results.push({ target: t, ok: true, message });
+					const messages: string[] = [];
+					for (const d of dumps) {
+						messages.push(t === "truenas" ? await copyToShare(d.file, config.truenas, now()) : await uploadToDrive(d.file, config.google, o.google ?? googleEndpoints()));
+					}
+					status.results.push({ target: t, ok: true, message: messages.join(" ") });
 					status.last_ok[t] = new Date(now()).toISOString();
 				} catch (e) {
 					status.results.push({ target: t, ok: false, message: (e as Error).message });
@@ -589,7 +606,7 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 			status.state = "error";
 			status.message = (e as Error).message;
 		} finally {
-			await fsp.rm(file, { force: true });
+			for (const f of files) await fsp.rm(f, { force: true });
 		}
 		status.finished_at = new Date(now()).toISOString();
 		await writeStatus(o.dir, status);

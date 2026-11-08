@@ -60,21 +60,30 @@ export async function setupTestApp(t: TestContext): Promise<TestApp | null> {
 	const csvDir = await mkdtemp(path.join(tmpdir(), "ledger-csv-"));
 
 	let server: Server | undefined;
+	let appRef: App | undefined;
 	t.after(async () => {
 		await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
-		await db.end();
+		await (appRef ? appRef.orgs.end() : db.end());
 		await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`).catch(() => {});
+		for (const r of (await admin.query(`SELECT datname FROM pg_database WHERE datname LIKE $1`, [`${dbName}_org%`])).rows) {
+			await admin.query(`DROP DATABASE IF EXISTS ${r.datname} WITH (FORCE)`).catch(() => {});
+		}
 		await admin.end();
 		await rm(csvDir, { recursive: true, force: true });
 	});
 
-	// No parameters: the simple protocol runs the multi-statement script as-is.
-	await db.query(await readFile(path.join(repo, "db", "schema.sql"), "utf8"));
-	// Then the migrations, in order, as deploy/migrate-db.sh applies them.
-	const migrations = path.join(repo, "db", "migrations");
-	for (const f of (await readdir(migrations)).filter((n) => /^\d+.*\.sql$/.test(n)).sort()) {
-		await db.query(await readFile(path.join(migrations, f), "utf8"));
-	}
+	await applySchema(db);
+	// Organizations' databases are created directly, as root's create-org-db.sh would.
+	const provisionOrg = async (name: string) => {
+		await admin.query(`CREATE DATABASE ${name}`);
+		const c = new pg.Client({ connectionString: url.toString().replace(`/${dbName}`, `/${name}`) });
+		await c.connect();
+		try {
+			await applySchema(c);
+		} finally {
+			await c.end();
+		}
+	};
 
 	const app = newApp(db, {
 		csvDir,
@@ -85,7 +94,9 @@ export async function setupTestApp(t: TestContext): Promise<TestApp | null> {
 		backupDir: path.join(csvDir, "backup-state"),
 		// Integrations too, until a test creates this directory.
 		integrationsDir: path.join(csvDir, "integrations"),
+		provisionOrg,
 	});
+	appRef = app;
 	await createUser(app, "tester", "correct horse battery");
 	const { token } = await login(app, "tester", "correct horse battery");
 
@@ -126,6 +137,16 @@ export async function setupTestApp(t: TestContext): Promise<TestApp | null> {
 		call: (method, apiPath, body) => request(method, "/api/v1" + apiPath, { body, cookie: `${SESSION_COOKIE}=${token}` }),
 		countRows: async (table) => Number((await db.query(`SELECT count(*) AS n FROM ${table}`)).rows[0].n),
 	};
+}
+
+/** Applies db/schema.sql and the migrations, in order, as deploy/migrate-db.sh does. */
+async function applySchema(db: { query(sql: string): Promise<unknown> }): Promise<void> {
+	// No parameters: the simple protocol runs the multi-statement script as-is.
+	await db.query(await readFile(path.join(repo, "db", "schema.sql"), "utf8"));
+	const migrations = path.join(repo, "db", "migrations");
+	for (const f of (await readdir(migrations)).filter((n) => /^\d+.*\.sql$/.test(n)).sort()) {
+		await db.query(await readFile(path.join(migrations, f), "utf8"));
+	}
 }
 
 /** Asserts the status, showing the body on failure. */

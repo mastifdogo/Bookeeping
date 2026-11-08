@@ -22,6 +22,7 @@ import type { SearchProvider } from "./search.ts";
 import { llmComplete, llmReady, readLlmConfig, type LlmRequest } from "./llm.ts";
 import { gmailFor } from "./gmail.ts";
 import { filesFor, type FileSummary } from "./module-files.ts";
+import { currentOrg, forEachOrg, getOrganization, listOrganizations, type OrgKind } from "./orgs.ts";
 import { listBySource, postItem, removeByKey, setClosedByKey, type ItemInput, type ItemKind } from "./dashboard.ts";
 import { isCurrency, publicUser, type AccountCreate, type Currency, type JournalEntryCreate, type User } from "./types.ts";
 
@@ -37,8 +38,8 @@ export interface ModuleRequest {
 	query: URLSearchParams;
 	/** Parsed JSON body (undefined when there is none). */
 	body: unknown;
-	/** The logged-in user and their role ("admin", "bookkeeper" or "viewer"). */
-	user: { username: string; role: string };
+	/** The logged-in user, their role ("admin", "bookkeeper" or "viewer") in the organization the request works in, and that organization. */
+	user: { username: string; role: string; organization: { id: number; name: string; kind: string } };
 }
 
 /** Return this from a handler to choose the status code. */
@@ -108,8 +109,8 @@ const cur = (c: string | null | undefined): Currency | null => (c && isCurrency(
 // Users passed to modules: the internal id stays out of reach of the module's
 // JSON, but the host can still attribute entries to the right person.
 const userIds = new WeakMap<object, number>();
-function moduleUser(u: User): { username: string; role: string } {
-	const pub = { username: publicUser(u).username, role: u.role };
+function moduleUser(u: User): ModuleRequest["user"] {
+	const pub = { username: publicUser(u).username, role: u.role, organization: { id: u.org.id, name: u.org.name, kind: u.org.kind } };
 	userIds.set(pub, u.id);
 	return pub;
 }
@@ -148,10 +149,10 @@ function makeContext(app: App, m: LoadedModule) {
 		},
 		/** The values of the settings declared in ledger-module.json (defaults filled in, secrets included). */
 		settings: {
-			get: () => moduleValues(app.db, id, m.manifest.settings ?? { fields: [], page: null }),
+			get: () => moduleValues(app.main, id, m.manifest.settings ?? { fields: [], page: null }),
 			/** Saves some values (validated like the form); other keys keep theirs. */
 			set: async (values: Record<string, SettingValue>) => {
-				await saveSettings(app.db, id, m.manifest.settings ?? { fields: [], page: null }, values, null);
+				await saveSettings(app.main, id, m.manifest.settings ?? { fields: [], page: null }, values, null);
 				await notifySettings(app, m);
 			},
 			/** Called with the new values after they change (the user saved the form, or set()). */
@@ -183,6 +184,25 @@ function makeContext(app: App, m: LoadedModule) {
 		 * transaction lists), without posting anything. Receive them by
 		 * declaring "files": {"accepts": [...]} in the manifest.
 		 */
+		/**
+		 * Organizations (separate books, each in its own database). A request
+		 * runs in the user's current organization and ctx.db, ctx.ledger and
+		 * the rest follow it; background work runs in the main books unless it
+		 * uses forEach.
+		 */
+		orgs: {
+			current: async () => {
+				const o = await getOrganization(app, currentOrg().id);
+				return { id: o.id, name: o.name, kind: o.kind };
+			},
+			list: async () =>
+				(await listOrganizations(app)).filter((o) => o.status === "ready").map((o) => ({ id: o.id, name: o.name, kind: o.kind })),
+			/** Runs fn({ id, name, kind }) once inside each organization, one after another. */
+			forEach: (fn: (org: { id: number; name: string; kind: OrgKind }) => unknown) => {
+				if (typeof fn !== "function") throw new Error("orgs.forEach: expected a function");
+				return forEachOrg(app, fn);
+			},
+		},
 		files: {
 			...filesFor(app, id, actorOf),
 			/** Called with the file's summary right after another module sends this one a file. */
@@ -253,7 +273,7 @@ export type ModuleContext = ReturnType<typeof makeContext>;
 /** Tells a module its settings changed. A failing listener is logged, never fatal. */
 export async function notifySettings(app: App, m: LoadedModule): Promise<void> {
 	if (!m.settingsListeners.length || !m.manifest.settings) return;
-	const values = await moduleValues(app.db, m.manifest.id, m.manifest.settings);
+	const values = await moduleValues(app.main, m.manifest.id, m.manifest.settings);
 	for (const fn of m.settingsListeners) {
 		try {
 			await fn({ ...values });

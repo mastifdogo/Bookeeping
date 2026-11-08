@@ -47,6 +47,11 @@ if [ -n "$db_url" ] && command -v psql >/dev/null 2>&1; then
 		runuser -u postgres -- psql -X -tA -d "$db_name" -c "SELECT to_regclass('public.journal_entries') IS NOT NULL" 2>/dev/null | grep -qx t; then
 		echo "==> database $db_name"
 		DB_NAME="$db_name" APP_ROLE="$app_role" SQL_DIR="$src/db" sh "$src/deploy/migrate-db.sh"
+		# Every other organization's books have their own database.
+		for org_db in $(runuser -u postgres -- psql -X -tA -d "$db_name" -c "SELECT db_name FROM organizations WHERE id <> 1 AND status = 'ready' ORDER BY id" 2>/dev/null); do
+			echo "==> database $org_db"
+			DB_NAME="$org_db" APP_ROLE="$app_role" SQL_DIR="$src/db" sh "$src/deploy/migrate-db.sh"
+		done
 	fi
 fi
 
@@ -71,6 +76,7 @@ rm -f /usr/local/share/ledger/migrations/*.sql
 install -m 0644 "$src"/db/migrations/*.sql /usr/local/share/ledger/migrations/
 install -m 0755 "$src/deploy/setup-db.sh" /usr/local/share/ledger/setup-db.sh
 install -m 0755 "$src/deploy/migrate-db.sh" /usr/local/share/ledger/migrate-db.sh
+install -m 0755 "$src/deploy/create-org-db.sh" /usr/local/share/ledger/create-org-db.sh
 install -m 0644 "$src/deploy/postgresql-lowmem.conf" /usr/local/share/ledger/
 
 # Automatic updates: the app (user ledger) writes the schedule; the root

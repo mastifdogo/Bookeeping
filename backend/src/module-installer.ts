@@ -338,3 +338,37 @@ export function moduleOps(databaseUrl: string, base: Pick<ModuleOps, "restart" |
 		},
 	};
 }
+
+/**
+ * One ModuleOps over several databases (the main books and every other
+ * organization's): a migration counts as applied only once every database
+ * has it, and applying runs in each database what it still lacks.
+ */
+export function multiDbOps(all: ModuleOps[]): ModuleOps {
+	if (all.length === 1) return all[0]!;
+	return {
+		restart: () => all[0]!.restart(),
+		healthy: () => all[0]!.healthy(),
+		async appliedMigrations(id) {
+			const sets = await Promise.all(all.map((o) => o.appliedMigrations(id)));
+			return new Set([...sets[0]!].filter((n) => sets.every((s) => s.has(n))));
+		},
+		async applyMigrations(id, files) {
+			for (const o of all) {
+				const done = await o.appliedMigrations(id);
+				const pending = files.filter((f) => !done.has(f.name));
+				if (pending.length > 0) await o.applyMigrations(id, pending);
+			}
+		},
+	};
+}
+
+/** Applies installed modules' migrations that a database doesn't have yet (a new organization's). */
+export async function migrateInstalled(modulesDir: string, ops: ModuleOps): Promise<void> {
+	for (const m of await scanInstalled(modulesDir)) {
+		const files = await migrationsOf(m.dir, m.manifest);
+		const done = await ops.appliedMigrations(m.manifest.id);
+		const pending = files.filter((f) => !done.has(f.name));
+		if (pending.length > 0) await ops.applyMigrations(m.manifest.id, pending);
+	}
+}

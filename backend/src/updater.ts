@@ -22,7 +22,9 @@ import pg from "pg";
 import { log } from "./log.ts";
 import { postLedgerNotice } from "./dashboard.ts";
 import { MODULES_RUN_NOW_FILE, modulesDir } from "./modules.ts";
-import { moduleOps, syncModules, type ModuleOps } from "./module-installer.ts";
+import { migrateInstalled, moduleOps, multiDbOps, syncModules, type ModuleOps } from "./module-installer.ts";
+import { withDatabase } from "./db.ts";
+import { ORGS_RUN_NOW_FILE } from "./orgs.ts";
 import { parseListenAddr } from "./config.ts";
 import { repoIdentity } from "./github.ts";
 import {
@@ -378,6 +380,14 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 	await fsp.chmod(cacheDir, 0o700);
 	const sys = systemOps(cacheDir, process.env.HTTP_ADDR || ":8080");
 	const databaseUrl = process.env.DATABASE_URL ?? "";
+	let modules: UpdaterOptions["modules"];
+	if (databaseUrl) {
+		const base = { restart: sys.restart, healthy: sys.healthy };
+		await provisionOrganizations(databaseUrl, dirs, base).catch((err: Error) => log.error("create organizations' databases", { err: err.message }));
+		// Modules' migrations go to every organization's database.
+		const orgDbs = await readyOrgDatabases(databaseUrl).catch(() => [] as string[]);
+		modules = { dir: modulesDir(), ops: multiDbOps([moduleOps(databaseUrl, base), ...orgDbs.map((d) => moduleOps(withDatabase(databaseUrl, d), base))]) };
+	}
 	await runUpdater({
 		dirs,
 		cacheDir,
@@ -386,9 +396,51 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 		arch,
 		currentVersion,
 		sys,
-		modules: databaseUrl ? { dir: modulesDir(), ops: moduleOps(databaseUrl, { restart: sys.restart, healthy: sys.healthy }) } : undefined,
+		modules,
 		notify: databaseUrl ? (n) => postUpdateNotice(databaseUrl, n) : undefined,
 	});
+}
+
+async function withClient<T>(databaseUrl: string, fn: (c: pg.Client) => Promise<T>): Promise<T> {
+	const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 });
+	await client.connect();
+	try {
+		return await fn(client);
+	} finally {
+		await client.end().catch(() => {});
+	}
+}
+
+async function readyOrgDatabases(databaseUrl: string): Promise<string[]> {
+	return withClient(databaseUrl, async (c) => (await c.query<{ db_name: string }>(`SELECT db_name FROM organizations WHERE id <> 1 AND status = 'ready' ORDER BY id`)).rows.map((r) => r.db_name));
+}
+
+/**
+ * Creates the databases of organizations the app has asked for
+ * (deploy/create-org-db.sh, then installed modules' migrations), and marks
+ * each ready, or failed with the reason.
+ */
+async function provisionOrganizations(databaseUrl: string, dirs: UpdateDirs, base: Pick<ModuleOps, "restart" | "healthy">): Promise<void> {
+	await fsp.rm(path.join(dirs.config, ORGS_RUN_NOW_FILE), { force: true });
+	const pending = await withClient(databaseUrl, async (c) => (await c.query<{ id: string; db_name: string }>(`SELECT id::text, db_name FROM organizations WHERE status = 'pending' ORDER BY id`)).rows);
+	if (pending.length === 0) return;
+	const appRole = decodeURIComponent(new URL(databaseUrl).username) || "ledger_app";
+	const script = process.env.LEDGER_CREATE_ORG_DB || "/usr/local/share/ledger/create-org-db.sh";
+	for (const o of pending) {
+		let message = "";
+		try {
+			if (!/^[a-z_][a-z0-9_]{0,62}$/.test(o.db_name)) throw new Error(`invalid database name ${o.db_name}`);
+			await run("sh", [script], { env: { ...process.env, DB_NAME: o.db_name, APP_ROLE: appRole } });
+			await migrateInstalled(modulesDir(), moduleOps(withDatabase(databaseUrl, o.db_name), base));
+			log.info("organization database created", { org: o.id, db: o.db_name });
+		} catch (err) {
+			message = (err as Error).message.slice(0, 500);
+			log.error("create organization database", { org: o.id, db: o.db_name, err: message });
+		}
+		await withClient(databaseUrl, (c) =>
+			c.query(`UPDATE organizations SET status = $2, message = $3 WHERE id = $1`, [o.id, message ? "error" : "ready", message]),
+		);
+	}
 }
 
 /** One notification, key "update", replaced by each outcome. */

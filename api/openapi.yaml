@@ -129,14 +129,101 @@ paths:
     get:
       tags: [Auth]
       operationId: getCurrentUser
-      summary: The logged-in user
+      summary: The logged-in user, the organization this session works in and the ones they can open
       responses:
         '200':
           description: Current user
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/User' }
+              schema: { $ref: '#/components/schemas/CurrentUser' }
         '401': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /auth/organization:
+    post:
+      tags: [Auth]
+      operationId: switchOrganization
+      summary: Work in another organization's books (this session)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [organization_id]
+              properties:
+                organization_id: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Switched
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /organizations:
+    get:
+      tags: [Users]
+      operationId: listOrganizations
+      summary: Organizations (all of them for admins of the main books, otherwise yours)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: '#/components/schemas/Organization' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Users]
+      operationId: createOrganization
+      summary: Create an organization with books of its own (admin of the main books; you become its admin)
+      description: |
+        Its database is created right away by the updater (status "pending"
+        until then, usually seconds). With `chart`, it starts with a basic
+        chart of accounts for the kind of books in that currency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrganizationCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /organizations/{orgId}:
+    patch:
+      tags: [Users]
+      operationId: updateOrganization
+      summary: Rename an organization (admin of the main books)
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
   /auth/password:
@@ -999,13 +1086,20 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: '#/components/schemas/User' } } } }
+              schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: '#/components/schemas/UserListItem' } } } }
         '403': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
     post:
       tags: [Users]
       operationId: createUser
       summary: Add a user (admin)
+      description: |
+        `organization` chooses their books: the main books (the default; role
+        is their role there), an existing organization, or a new
+        organization of their own (business or personal books, optionally
+        with a starter chart of accounts). Outside the main books, role is
+        their role in that organization and they get no access to the main
+        books.
       requestBody:
         required: true
         content:
@@ -1017,13 +1111,23 @@ paths:
               properties:
                 username: { type: string }
                 password: { type: string, minLength: 4 }
-                role: { $ref: '#/components/schemas/Role' }
+                role: { $ref: '#/components/schemas/MainRole' }
+                organization:
+                  type: object
+                  additionalProperties: false
+                  required: [mode]
+                  properties:
+                    mode: { type: string, enum: [main, existing, new] }
+                    organization_id: { type: integer, description: 'mode "existing"' }
+                    name: { type: string, description: 'mode "new"' }
+                    kind: { $ref: '#/components/schemas/OrgKind' }
+                    chart: { allOf: [{ $ref: '#/components/schemas/Currency' }], nullable: true, description: 'mode "new": start with a basic chart of accounts in this currency' }
       responses:
         '201':
           description: Created
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/User' }
+              schema: { $ref: '#/components/schemas/UserListItem' }
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
@@ -1046,7 +1150,7 @@ paths:
               type: object
               additionalProperties: false
               properties:
-                role: { $ref: '#/components/schemas/Role' }
+                role: { $ref: '#/components/schemas/MainRole' }
                 is_active: { type: boolean }
                 password: { type: string, minLength: 4 }
       responses:
@@ -1054,9 +1158,49 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/User' }
+              schema: { $ref: '#/components/schemas/UserListItem' }
         '404': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /users/{username}/organizations/{orgId}:
+    parameters:
+      - { name: username, in: path, required: true, schema: { type: string } }
+      - { name: orgId, in: path, required: true, schema: { type: integer } }
+    put:
+      tags: [Users]
+      operationId: setMembership
+      summary: Give a user a role in an organization other than the main books (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties:
+                role: { $ref: '#/components/schemas/Role' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserListItem' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Users]
+      operationId: removeMembership
+      summary: Take a user's access to an organization away (admin)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserListItem' }
+        '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
   /search:
@@ -1551,13 +1695,69 @@ components:
 
     User:
       type: object
-      required: [username, role, is_active, created_at, last_login_at]
+      required: [username, role, is_active, created_at, last_login_at, server_admin]
       properties:
         username: { type: string, example: alice }
-        role: { $ref: '#/components/schemas/Role' }
+        role: { allOf: [{ $ref: '#/components/schemas/Role' }], description: Their role in the organization this session works in }
         is_active: { type: boolean }
         created_at: { type: string, format: date-time }
         last_login_at: { type: string, format: date-time, nullable: true }
+        server_admin: { type: boolean, description: 'An admin of the main books: manages users, organizations, modules, updates, backups and integrations' }
+    CurrentUser:
+      allOf:
+        - { $ref: '#/components/schemas/User' }
+        - type: object
+          required: [organization, organizations]
+          properties:
+            organization:
+              type: object
+              required: [id, name, kind]
+              properties:
+                id: { type: integer }
+                name: { type: string }
+                kind: { $ref: '#/components/schemas/OrgKind' }
+            organizations: { type: array, items: { $ref: '#/components/schemas/OrgAccess' } }
+    UserListItem:
+      type: object
+      required: [username, role, is_active, created_at, last_login_at, server_admin, organizations]
+      properties:
+        username: { type: string }
+        role: { allOf: [{ $ref: '#/components/schemas/MainRole' }], description: Their role in the main books }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        server_admin: { type: boolean }
+        organizations: { type: array, items: { $ref: '#/components/schemas/OrgAccess' }, description: Organizations other than the main books }
+    OrgKind:
+      type: string
+      enum: [business, personal]
+    OrgAccess:
+      type: object
+      required: [id, name, kind, status, role]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        kind: { $ref: '#/components/schemas/OrgKind' }
+        status: { type: string, enum: [pending, ready, error] }
+        role: { $ref: '#/components/schemas/Role' }
+    Organization:
+      type: object
+      required: [id, name, kind, status, message, created_at]
+      properties:
+        id: { type: integer, description: '1 is the main books' }
+        name: { type: string }
+        kind: { $ref: '#/components/schemas/OrgKind' }
+        status: { type: string, enum: [pending, ready, error], description: 'pending while its database is being created' }
+        message: { type: string, description: Why creating it failed }
+        created_at: { type: string, format: date-time }
+    OrganizationCreate:
+      type: object
+      additionalProperties: false
+      required: [name, kind]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        kind: { $ref: '#/components/schemas/OrgKind' }
+        chart: { allOf: [{ $ref: '#/components/schemas/Currency' }], nullable: true, description: Start with a basic chart of accounts in this currency }
     LoginRequest:
       type: object
       required: [username, password]
@@ -2246,6 +2446,10 @@ components:
       type: string
       enum: [admin, bookkeeper, viewer]
       description: admin manages everything; bookkeeper works in the books; viewer reads
+    MainRole:
+      type: string
+      enum: [admin, bookkeeper, viewer, none]
+      description: A role in the main books; none gives no access to them (the user works in other organizations)
     SearchResults:
       type: object
       required: [query, groups]

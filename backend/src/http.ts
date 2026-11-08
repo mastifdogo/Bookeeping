@@ -18,7 +18,7 @@ import {
 } from "./errors.ts";
 import { parseDate } from "./date.ts";
 import { log } from "./log.ts";
-import { ACCOUNT_CODE_RE, isCurrency, publicUser, roleAtLeast, ROLES, type Currency, type Role, type User } from "./types.ts";
+import { ACCOUNT_CODE_RE, isCurrency, MAIN_ROLES, publicUser, roleAtLeast, ROLES, type Currency, type MainRole, type Role, type User } from "./types.ts";
 import {
 	DecodeError,
 	decodeAccountCreate,
@@ -85,7 +85,27 @@ import {
 	undoReconciliation,
 	updateReconciliation,
 } from "./reconcile.ts";
-import { changePassword, createUser, listUsers, login, logout, normalizeUsername, sessionUser, setPassword, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, updateUserAccess, validatePassword } from "./auth.ts";
+import { changePassword, createUser, findUser, hashToken, listUsers, login, logout, normalizeUsername, sessionUser, setPassword, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, updateUserAccess, validatePassword, type UserRecord } from "./auth.ts";
+import {
+	allMemberships,
+	createOrganization,
+	finishSetup,
+	inOrg,
+	listOrganizations,
+	mirrorUser,
+	ORG_KINDS,
+	orgsForUser,
+	provisionOrganization,
+	refreshOrganizations,
+	removeMembership,
+	renameOrganization,
+	setMembership,
+	switchOrganization,
+	validateOrgCreate,
+	type Organization,
+	type OrgCreate,
+	type OrgKind,
+} from "./orgs.ts";
 import { MultipartError, formDataBoundary, parseHeaderParams, parseMultipart } from "./multipart.ts";
 import { CONTENT_TYPES, staticHandler } from "./static.ts";
 import { promises as fsp } from "node:fs";
@@ -114,8 +134,8 @@ type Handler = (c: Ctx) => Promise<void>;
 interface Route {
 	method: string;
 	segments: string[];
-	/** The least role allowed; null for routes that need no login. */
-	role: Role | null;
+	/** The least role allowed in the current organization, "server" for server admins only; null for routes that need no login. */
+	role: Role | "server" | null;
 	handler: Handler;
 }
 
@@ -396,50 +416,149 @@ async function handleLogout(c: Ctx): Promise<void> {
 }
 
 async function handleMe(c: Ctx): Promise<void> {
-	writeJSON(c.res, 200, publicUser(c.user!));
+	await refreshOrganizations(c.app);
+	const u = c.user!;
+	writeJSON(c.res, 200, {
+		...publicUser(u),
+		organization: { id: u.org.id, name: u.org.name, kind: u.org.kind },
+		organizations: (await orgsForUser(c.app, u.id)).map(publicAccess),
+	});
+}
+
+async function handleSwitchOrg(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, (v) => {
+		const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
+		if (!o) throw new DecodeError("expected an object");
+		for (const k of Object.keys(o)) if (k !== "organization_id") throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+		if (!Number.isSafeInteger(o.organization_id) || (o.organization_id as number) < 1) {
+			const err = new ValidationError();
+			err.add("organization_id", "must be an organization's id");
+			err.throwIfAny();
+		}
+		return o as { organization_id: number };
+	});
+	await switchOrganization(c.app, c.user!.id, hashToken(c.token), b.organization_id);
+	c.user = await sessionUser(c.app, c.token);
+	await handleMe(c);
+}
+
+function publicAccess(o: { id: number; name: string; kind: OrgKind; status: Organization["status"]; role: Role }) {
+	return { id: o.id, name: o.name, kind: o.kind, status: o.status, role: o.role };
+}
+
+function publicOrg(o: Organization) {
+	return { id: o.id, name: o.name, kind: o.kind, status: o.status, message: o.message, created_at: o.created_at };
+}
+
+async function userItems(c: Ctx, users: UserRecord[]) {
+	const memberships = await allMemberships(c.app);
+	return users.map((u) => ({
+		username: u.username,
+		role: u.role,
+		is_active: u.is_active,
+		created_at: u.created_at,
+		last_login_at: u.last_login_at,
+		server_admin: u.role === "admin",
+		organizations: (memberships.get(u.id) ?? []).map(publicAccess),
+	}));
 }
 
 async function handleListUsers(c: Ctx): Promise<void> {
-	writeJSON(c.res, 200, { data: (await listUsers(c.app)).map(publicUser) });
+	writeJSON(c.res, 200, { data: await userItems(c, await listUsers(c.app)) });
 }
 
-function decodeUserBody(v: unknown, create: boolean): { username?: string; password?: string; role?: Role; is_active?: boolean } {
+interface OrgChoice {
+	mode: "main" | "existing" | "new";
+	organization_id?: number;
+	name?: string;
+	kind?: OrgKind;
+	chart?: string | null;
+}
+
+function decodeUserBody(v: unknown, create: boolean): { username?: string; password?: string; role?: MainRole; is_active?: boolean; organization?: OrgChoice } {
 	const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
 	if (!o) throw new DecodeError("expected an object");
-	const allowed = create ? ["username", "password", "role"] : ["password", "role", "is_active"];
+	const allowed = create ? ["username", "password", "role", "organization"] : ["password", "role", "is_active"];
 	for (const k of Object.keys(o)) if (!allowed.includes(k)) throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
 	const err = new ValidationError();
 	for (const k of ["username", "password"]) if (o[k] !== undefined && typeof o[k] !== "string") err.add(k, "must be text");
-	if (o.role !== undefined && !(ROLES as readonly unknown[]).includes(o.role)) err.add("role", "must be admin, bookkeeper or viewer");
+	if (o.role !== undefined && !(MAIN_ROLES as readonly unknown[]).includes(o.role)) err.add("role", "must be admin, bookkeeper, viewer or none");
 	if (o.is_active !== undefined && typeof o.is_active !== "boolean") err.add("is_active", "must be true or false");
 	if (create) for (const k of ["username", "password", "role"]) if (o[k] === undefined) err.add(k, "is required");
+	if (o.organization !== undefined) {
+		const g = (o.organization && typeof o.organization === "object" && !Array.isArray(o.organization) ? o.organization : null) as Record<string, unknown> | null;
+		if (!g) err.add("organization", "must be an object");
+		else {
+			for (const k of Object.keys(g)) if (!["mode", "organization_id", "name", "kind", "chart"].includes(k)) throw new DecodeError(`json: unknown field ${JSON.stringify("organization." + k)}`);
+			if (!["main", "existing", "new"].includes(g.mode as string)) err.add("organization.mode", "must be main, existing or new");
+			if (g.mode === "existing" && (!Number.isSafeInteger(g.organization_id) || (g.organization_id as number) < 2))
+				err.add("organization.organization_id", "must be another organization's id");
+			if (g.mode === "new") {
+				if (typeof g.name !== "string") err.add("organization.name", "is required");
+				if (!(ORG_KINDS as readonly unknown[]).includes(g.kind)) err.add("organization.kind", "must be business or personal");
+				if (g.chart !== undefined && g.chart !== null && !(typeof g.chart === "string" && isCurrency(g.chart))) err.add("organization.chart", "must be CAD, USD or null");
+			}
+			if (g.mode !== "main" && o.role === "none") err.add("role", "must be admin, bookkeeper or viewer in that organization");
+		}
+	}
 	err.throwIfAny();
-	return o as { username?: string; password?: string; role?: Role; is_active?: boolean };
+	return o as { username?: string; password?: string; role?: MainRole; is_active?: boolean; organization?: OrgChoice };
 }
 
+/**
+ * Creates a user with access to the main books (the default), to an
+ * existing organization, or to a new organization of their own (business or
+ * personal books, optionally with a starter chart of accounts). Outside the
+ * main books, role is their role in that organization and they get no access
+ * to the main books.
+ */
 async function handleCreateUser(c: Ctx): Promise<void> {
 	const b = await decodeBody(c, true, (v) => decodeUserBody(v, true));
+	const choice = b.organization ?? { mode: "main" };
+	if (choice.mode === "new") {
+		const v = new ValidationError();
+		validateOrgCreate(v, "organization.", { name: choice.name!, kind: choice.kind!, chart: null });
+		v.throwIfAny();
+	}
+	if (choice.mode === "existing") {
+		const org = (await listOrganizations(c.app)).find((o) => o.id === choice.organization_id);
+		if (!org) {
+			const v = new ValidationError();
+			v.add("organization.organization_id", "no such organization");
+			v.throwIfAny();
+		}
+	}
+	let user: UserRecord;
 	try {
-		writeJSON(c.res, 201, publicUser(await createUser(c.app, b.username!, b.password!, b.role!)));
+		user = await createUser(c.app, b.username!, b.password!, choice.mode === "main" ? b.role! : "none");
 	} catch (err) {
 		if (isPgError(err) && err.constraint === "users_username_unique") throw new ConflictError("a user with that name already exists");
 		throw err;
+	}
+	if (choice.mode === "existing") await setMembership(c.app, user.id, choice.organization_id!, b.role as Role);
+	if (choice.mode === "new") {
+		const org = await createOrganization(c.app, { name: choice.name!, kind: choice.kind!, chart: (choice.chart ?? null) as Currency | null });
+		await setMembership(c.app, user.id, org.id, b.role as Role);
+		await provisionOrganization(c.app, org);
+	}
+	writeJSON(c.res, 201, (await userItems(c, [user]))[0]);
+}
+
+function usernameParam(c: Ctx): string {
+	try {
+		return decodeURIComponent(c.params.username ?? "");
+	} catch {
+		throw new NotFoundError();
 	}
 }
 
 async function handleUpdateUser(c: Ctx): Promise<void> {
 	const b = await decodeBody(c, true, (v) => decodeUserBody(v, false));
-	const name = c.params.username ?? "";
-	if (b.is_active === false && normalizeUsername(name) === c.user!.username) {
+	const name2 = usernameParam(c);
+	if (b.is_active === false && normalizeUsername(name2) === c.user!.username) {
 		const v = new ValidationError();
 		v.add("is_active", "you can't disable yourself");
 		v.throwIfAny();
-	}
-	let name2: string;
-	try {
-		name2 = decodeURIComponent(name);
-	} catch {
-		throw new NotFoundError();
 	}
 	if (b.password !== undefined) {
 		const v = new ValidationError();
@@ -449,7 +568,79 @@ async function handleUpdateUser(c: Ctx): Promise<void> {
 	const user = await updateUserAccess(c.app, name2, { role: b.role, is_active: b.is_active });
 	// A new password ends that user's sessions (the admin resets it for them).
 	if (b.password !== undefined) await setPassword(c.app, name2, b.password);
-	writeJSON(c.res, 200, publicUser(user));
+	writeJSON(c.res, 200, (await userItems(c, [user]))[0]);
+}
+
+function orgIdParam(c: Ctx): number {
+	const id = Number(c.params.orgId);
+	if (!/^[1-9][0-9]{0,15}$/.test(c.params.orgId ?? "") || !Number.isSafeInteger(id)) throw new NotFoundError();
+	return id;
+}
+
+async function handlePutMembership(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, (v) => {
+		const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
+		if (!o) throw new DecodeError("expected an object");
+		for (const k of Object.keys(o)) if (k !== "role") throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+		if (!(ROLES as readonly unknown[]).includes(o.role)) {
+			const err = new ValidationError();
+			err.add("role", "must be admin, bookkeeper or viewer");
+			err.throwIfAny();
+		}
+		return o as { role: Role };
+	});
+	const user = await findUser(c.app, usernameParam(c));
+	await setMembership(c.app, user.id, orgIdParam(c), b.role);
+	writeJSON(c.res, 200, (await userItems(c, [user]))[0]);
+}
+
+async function handleDeleteMembership(c: Ctx): Promise<void> {
+	const user = await findUser(c.app, usernameParam(c));
+	await removeMembership(c.app, user.id, orgIdParam(c));
+	writeJSON(c.res, 200, (await userItems(c, [user]))[0]);
+}
+
+async function handleListOrgs(c: Ctx): Promise<void> {
+	await refreshOrganizations(c.app);
+	const mine = new Set((await orgsForUser(c.app, c.user!.id)).map((o) => o.id));
+	const all = await listOrganizations(c.app);
+	// Server admins see every organization; others the ones they belong to.
+	writeJSON(c.res, 200, { data: all.filter((o) => c.user!.server_admin || mine.has(o.id)).map(publicOrg) });
+}
+
+function decodeOrgCreate(v: unknown): OrgCreate {
+	const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
+	if (!o) throw new DecodeError("expected an object");
+	for (const k of Object.keys(o)) if (!["name", "kind", "chart"].includes(k)) throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+	const err = new ValidationError();
+	if (typeof o.name !== "string") err.add("name", "is required");
+	if (!(ORG_KINDS as readonly unknown[]).includes(o.kind)) err.add("kind", "must be business or personal");
+	if (o.chart !== undefined && o.chart !== null && !(typeof o.chart === "string" && isCurrency(o.chart))) err.add("chart", "must be CAD, USD or null");
+	err.throwIfAny();
+	return { name: o.name as string, kind: o.kind as OrgKind, chart: (o.chart ?? null) as Currency | null };
+}
+
+/** Creates an organization; the server admin who creates it becomes its admin. */
+async function handleCreateOrg(c: Ctx): Promise<void> {
+	const input = await decodeBody(c, true, decodeOrgCreate);
+	const org = await createOrganization(c.app, input);
+	await setMembership(c.app, c.user!.id, org.id, "admin");
+	writeJSON(c.res, 201, publicOrg(await provisionOrganization(c.app, org)));
+}
+
+async function handleUpdateOrg(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, (v) => {
+		const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
+		if (!o) throw new DecodeError("expected an object");
+		for (const k of Object.keys(o)) if (k !== "name") throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+		if (typeof o.name !== "string") {
+			const err = new ValidationError();
+			err.add("name", "is required");
+			err.throwIfAny();
+		}
+		return o as { name: string };
+	});
+	writeJSON(c.res, 200, publicOrg(await finishSetup(c.app, await renameOrganization(c.app, orgIdParam(c), b.name))));
 }
 
 async function handleGetSidebar(c: Ctx): Promise<void> {
@@ -982,7 +1173,7 @@ function settingsModule(c: Ctx) {
 
 async function handleGetModuleSettings(c: Ctx): Promise<void> {
 	const { m, spec } = settingsModule(c);
-	writeJSON(c.res, 200, await publicSettings(c.app.db, m.manifest.id, spec));
+	writeJSON(c.res, 200, await publicSettings(c.app.main, m.manifest.id, spec));
 }
 
 async function handlePutModuleSettings(c: Ctx): Promise<void> {
@@ -992,9 +1183,9 @@ async function handlePutModuleSettings(c: Ctx): Promise<void> {
 		if (!o || Object.keys(o).some((k) => k !== "values")) throw new DecodeError('expected {"values": {...}}');
 		return o.values;
 	});
-	await saveSettings(c.app.db, m.manifest.id, spec, body, c.user!.id);
+	await saveSettings(c.app.main, m.manifest.id, spec, body, c.user!.id);
 	await notifySettings(c.app, m);
-	writeJSON(c.res, 200, await publicSettings(c.app.db, m.manifest.id, spec));
+	writeJSON(c.res, 200, await publicSettings(c.app.main, m.manifest.id, spec));
 }
 
 async function handleListModules(c: Ctx): Promise<void> {
@@ -1091,10 +1282,22 @@ async function handleSyncModules(c: Ctx): Promise<void> {
 	writeJSON(c.res, 202, await modulesInfo(c));
 }
 
+/** Runs a request's work in the database of the session's organization. */
+async function inUserOrg<T>(c: Ctx, fn: () => Promise<T>): Promise<T> {
+	const org = c.user!.org;
+	await mirrorUser(c.app, org, c.user!);
+	return inOrg(org, fn);
+}
+
 /** /api/v1/m/<id>/...: a module's own API. Always requires a session. */
 async function serveModuleAPI(c: Ctx, segments: string[]): Promise<void> {
 	c.token = sessionToken(c.req);
 	c.user = await sessionUser(c.app, c.token);
+	return inUserOrg(c, () => serveModuleRoute(c, segments));
+}
+
+async function serveModuleRoute(c: Ctx, segments: string[]): Promise<void> {
+	if (!c.user) throw new UnauthorizedError();
 	const id = segments[1]!;
 	const rest = segments.length > 2 ? segments.slice(2) : [""];
 	const found = c.app.modules.match(id, c.req.method ?? "", rest);
@@ -1166,7 +1369,7 @@ async function serveModuleUI(c: Ctx, pathname: string): Promise<void> {
  * auth: false for public routes; true for "any logged-in user may read, a
  * bookkeeper may change"; or the least role allowed.
  */
-function route(method: string, pattern: string, auth: boolean | Role, handler: Handler): Route {
+function route(method: string, pattern: string, auth: boolean | Role | "server", handler: Handler): Route {
 	const role = auth === false ? null : auth === true ? (method === "GET" ? "viewer" : "bookkeeper") : auth;
 	return { method, segments: pattern.split("/").slice(1), role, handler };
 }
@@ -1178,11 +1381,17 @@ const ROUTES: Route[] = [
 
 	// Everything else requires a logged-in user.
 	route("GET", "/auth/me", true, handleMe),
+	route("POST", "/auth/organization", "viewer", handleSwitchOrg),
+	route("GET", "/organizations", true, handleListOrgs),
+	route("POST", "/organizations", "server", handleCreateOrg),
+	route("PATCH", "/organizations/:orgId", "server", handleUpdateOrg),
 	route("POST", "/auth/password", "viewer", handleChangePassword),
 	route("GET", "/settings/sidebar", true, handleGetSidebar),
-	route("GET", "/users", "admin", handleListUsers),
-	route("POST", "/users", "admin", handleCreateUser),
-	route("PATCH", "/users/:username", "admin", handleUpdateUser),
+	route("GET", "/users", "server", handleListUsers),
+	route("POST", "/users", "server", handleCreateUser),
+	route("PATCH", "/users/:username", "server", handleUpdateUser),
+	route("PUT", "/users/:username/organizations/:orgId", "server", handlePutMembership),
+	route("DELETE", "/users/:username/organizations/:orgId", "server", handleDeleteMembership),
 	route("PUT", "/settings/sidebar", "viewer", handlePutSidebar),
 	route("GET", "/currencies", true, handleListCurrencies),
 
@@ -1221,36 +1430,36 @@ const ROUTES: Route[] = [
 	route("GET", "/files/:filename", true, handleDownloadFile),
 	route("POST", "/imports/journal-entries", true, handleImportJournalEntries),
 
-	route("GET", "/backups", "admin", handleGetBackups),
-	route("PUT", "/backups/config", "admin", handlePutBackupConfig),
-	route("POST", "/backups/run", "admin", handleRunBackup),
-	route("POST", "/backups/truenas/test", "admin", handleTestShare),
-	route("POST", "/backups/google/connect", "admin", handleGoogleConnect),
-	route("POST", "/backups/google/poll", "admin", handleGooglePoll),
-	route("POST", "/backups/google/disconnect", "admin", handleGoogleDisconnect),
+	route("GET", "/backups", "server", handleGetBackups),
+	route("PUT", "/backups/config", "server", handlePutBackupConfig),
+	route("POST", "/backups/run", "server", handleRunBackup),
+	route("POST", "/backups/truenas/test", "server", handleTestShare),
+	route("POST", "/backups/google/connect", "server", handleGoogleConnect),
+	route("POST", "/backups/google/poll", "server", handleGooglePoll),
+	route("POST", "/backups/google/disconnect", "server", handleGoogleDisconnect),
 
-	route("GET", "/integrations/llm", "admin", handleGetLlm),
-	route("PUT", "/integrations/llm", "admin", handlePutLlm),
-	route("POST", "/integrations/llm/test", "admin", handleTestLlm),
-	route("GET", "/integrations/gmail", "admin", handleGetGmail),
-	route("PUT", "/integrations/gmail", "admin", handlePutGmail),
-	route("POST", "/integrations/gmail/start", "admin", handleGmailStart),
-	route("POST", "/integrations/gmail/finish", "admin", handleGmailFinish),
-	route("POST", "/integrations/gmail/disconnect", "admin", handleGmailDisconnect),
+	route("GET", "/integrations/llm", "server", handleGetLlm),
+	route("PUT", "/integrations/llm", "server", handlePutLlm),
+	route("POST", "/integrations/llm/test", "server", handleTestLlm),
+	route("GET", "/integrations/gmail", "server", handleGetGmail),
+	route("PUT", "/integrations/gmail", "server", handlePutGmail),
+	route("POST", "/integrations/gmail/start", "server", handleGmailStart),
+	route("POST", "/integrations/gmail/finish", "server", handleGmailFinish),
+	route("POST", "/integrations/gmail/disconnect", "server", handleGmailDisconnect),
 
-	route("GET", "/system/update", "admin", handleGetUpdate),
-	route("PUT", "/system/update/schedule", "admin", handlePutUpdateSchedule),
-	route("POST", "/system/update/check", "admin", handleCheckUpdate),
-	route("PUT", "/system/update/repo", "admin", handlePutUpdateRepo),
+	route("GET", "/system/update", "server", handleGetUpdate),
+	route("PUT", "/system/update/schedule", "server", handlePutUpdateSchedule),
+	route("POST", "/system/update/check", "server", handleCheckUpdate),
+	route("PUT", "/system/update/repo", "server", handlePutUpdateRepo),
 
 	route("GET", "/modules", true, handleListModules),
-	route("POST", "/modules", "admin", handleAddModule),
-	route("POST", "/modules/preview", "admin", handlePreviewModule),
-	route("POST", "/modules/sync", "admin", handleSyncModules),
-	route("DELETE", "/modules/:id", "admin", handleRemoveModule),
-	route("PATCH", "/modules/:id", "admin", handleRenameModuleRepo),
-	route("GET", "/modules/:id/settings", "admin", handleGetModuleSettings),
-	route("PUT", "/modules/:id/settings", "admin", handlePutModuleSettings),
+	route("POST", "/modules", "server", handleAddModule),
+	route("POST", "/modules/preview", "server", handlePreviewModule),
+	route("POST", "/modules/sync", "server", handleSyncModules),
+	route("DELETE", "/modules/:id", "server", handleRemoveModule),
+	route("PATCH", "/modules/:id", "server", handleRenameModuleRepo),
+	route("GET", "/modules/:id/settings", "server", handleGetModuleSettings),
+	route("PUT", "/modules/:id/settings", "server", handlePutModuleSettings),
 ];
 
 /** Matches a path relative to /api/v1 against a route; returns its decoded params. */
@@ -1282,7 +1491,11 @@ async function serveAPI(c: Ctx, rel: string): Promise<void> {
 		if (r.role) {
 			c.token = sessionToken(c.req);
 			c.user = await sessionUser(c.app, c.token);
-			if (!roleAtLeast(c.user.role, r.role)) throw new HttpError(403, `this needs the ${r.role} role (you are ${c.user.role})`, "forbidden");
+			if (r.role === "server") {
+				if (!c.user.server_admin) throw new HttpError(403, "this needs an admin of the main books", "forbidden");
+			} else if (!roleAtLeast(c.user.role, r.role)) throw new HttpError(403, `this needs the ${r.role} role (you are ${c.user.role})`, "forbidden");
+			await inUserOrg(c, () => r.handler(c));
+			return;
 		}
 		await r.handler(c);
 		return;

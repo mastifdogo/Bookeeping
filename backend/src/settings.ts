@@ -43,12 +43,12 @@ export function decodeSidebar(v: unknown): SidebarItem[] {
 }
 
 export async function getSidebar(app: App, userId: number): Promise<{ items: SidebarItem[] }> {
-	const r = await queryRow<{ sidebar: SidebarItem[] }>(app.db, `SELECT sidebar FROM user_settings WHERE user_id = $1`, [userId]);
+	const r = await queryRow<{ sidebar: SidebarItem[] }>(app.main, `SELECT sidebar FROM user_settings WHERE user_id = $1`, [userId]);
 	return { items: r?.sidebar ?? [] };
 }
 
 export async function putSidebar(app: App, userId: number, items: SidebarItem[]): Promise<{ items: SidebarItem[] }> {
-	await app.db.query(
+	await app.main.query(
 		`INSERT INTO user_settings (user_id, sidebar) VALUES ($1, $2::jsonb)
 		 ON CONFLICT (user_id) DO UPDATE SET sidebar = EXCLUDED.sidebar, updated_at = now()`,
 		[userId, JSON.stringify(items)],

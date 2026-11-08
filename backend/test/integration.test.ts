@@ -452,7 +452,9 @@ test("authentication", async (t) => {
 	r = await raw("GET", "/auth/me", undefined, cookie);
 	expectStatus(r, 200);
 	assert.ok(r.text.includes('"username":"tester"'), r.text);
-	assert.ok(!r.text.includes('"id"'), "user id must not be exposed");
+	assert.ok(!("id" in r.json()), "user id must not be exposed");
+	assert.equal(r.json().organization.name, "Main books");
+	assert.equal(r.json().server_admin, true);
 
 	// Secure flag when behind a TLS-terminating proxy.
 	r = await request("POST", "/api/v1/auth/login", {
@@ -1563,4 +1565,104 @@ test("modules hand files to each other", async (t) => {
 	expectStatus(await call("GET", "/m/downloads/peek/999"), 404);
 	// No journal entries were posted.
 	assert.equal(await ta.countRows("journal_entries"), 0);
+});
+
+test("organizations keep books apart", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	const loginAs = async (username: string, password: string) => {
+		const r = await request("POST", "/api/v1/auth/login", { body: { username, password } });
+		expectStatus(r, 200);
+		const cookie = `${SESSION_COOKIE}=${sessionFrom(r).value}`;
+		return (method: string, p: string, body?: unknown) => request(method, "/api/v1" + p, { body, cookie });
+	};
+
+	// A new user with personal books of their own and a starter chart.
+	let r = await call("POST", "/users", {
+		username: "sam",
+		password: "sam-password",
+		role: "admin",
+		organization: { mode: "new", name: "Sam's books", kind: "personal", chart: "CAD" },
+	});
+	expectStatus(r, 201);
+	assert.equal(r.json().role, "none");
+	assert.equal(r.json().server_admin, false);
+	const samOrg = r.json().organizations[0];
+	assert.deepEqual({ ...samOrg, id: 0 }, { id: 0, name: "Sam's books", kind: "personal", status: "ready", role: "admin" });
+
+	const sam = await loginAs("sam", "sam-password");
+	r = await sam("GET", "/auth/me");
+	expectStatus(r, 200);
+	assert.equal(r.json().organization.name, "Sam's books");
+	assert.equal(r.json().role, "admin");
+	assert.equal(r.json().server_admin, false);
+	assert.equal(r.json().organizations.length, 1);
+	const samAccounts = (await sam("GET", "/accounts")).json().data;
+	assert.ok(samAccounts.some((a: any) => a.name === "Groceries" && a.currency === "CAD"), JSON.stringify(samAccounts));
+	assert.equal((await call("GET", "/accounts")).json().data.length, 0, "the main books stay empty");
+
+	// Entries stay in their own books.
+	r = await sam("POST", "/journal-entries", {
+		entry_date: "2026-11-01",
+		description: "Groceries",
+		lines: [
+			{ account_code: "5100", debit_cents: 4250 },
+			{ account_code: "1000", credit_cents: 4250 },
+		],
+	});
+	expectStatus(r, 201);
+	assert.equal((await sam("GET", "/journal-entries")).json().data.length, 1);
+	assert.equal((await call("GET", "/journal-entries")).json().data.length, 0);
+
+	// Running the server stays with the main books' admins.
+	expectStatus(await sam("GET", "/users"), 403);
+	expectStatus(await sam("POST", "/organizations", { name: "Mine", kind: "business" }), 403);
+	expectStatus(await sam("GET", "/system/update"), 403);
+
+	// Someone added to an existing organization sees its books.
+	r = await call("POST", "/users", { username: "kim", password: "kim-password", role: "viewer", organization: { mode: "existing", organization_id: samOrg.id } });
+	expectStatus(r, 201);
+	const kim = await loginAs("kim", "kim-password");
+	assert.equal((await kim("GET", "/accounts")).json().data.length, samAccounts.length);
+	expectStatus(await kim("POST", "/accounts", { code: "9", name: "x", type: "asset", currency: "CAD" }), 403);
+
+	// An admin of the main books can join it too, and switch between books.
+	expectStatus(await call("PUT", `/users/tester/organizations/${samOrg.id}`, { role: "bookkeeper" }), 200);
+	r = await call("POST", "/auth/organization", { organization_id: samOrg.id });
+	expectStatus(r, 200);
+	assert.equal(r.json().organization.name, "Sam's books");
+	assert.equal(r.json().role, "bookkeeper");
+	assert.equal(r.json().server_admin, true);
+	assert.equal((await call("GET", "/journal-entries")).json().data.length, 1);
+	expectStatus(await call("POST", "/auth/organization", { organization_id: 1 }), 200);
+	assert.equal((await call("GET", "/journal-entries")).json().data.length, 0);
+	expectStatus(await sam("POST", "/auth/organization", { organization_id: 1 }), 403);
+
+	// Taking the only access away ends the session.
+	expectStatus(await call("DELETE", `/users/kim/organizations/${samOrg.id}`), 200);
+	expectStatus(await kim("GET", "/auth/me"), 401);
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "kim", password: "kim-password" } });
+	expectStatus(r, 401);
+
+	// Organizations created from Settings; the creator becomes its admin.
+	r = await call("POST", "/organizations", { name: "Side gig", kind: "business", chart: "USD" });
+	expectStatus(r, 201);
+	assert.equal(r.json().status, "ready");
+	assert.equal((await call("GET", "/organizations")).json().data.length, 3);
+	assert.equal((await sam("GET", "/organizations")).json().data.length, 1);
+	r = await call("GET", "/auth/me");
+	assert.deepEqual(r.json().organizations.map((o: any) => [o.name, o.role]), [["Main books", "admin"], ["Sam's books", "bookkeeper"], ["Side gig", "admin"]]);
+
+	// Modules work in whichever books the request is in.
+	await loadModules(t, app, {
+		whoami: `export default function (ctx) {
+			ctx.route("GET", "/", async (req) => ({ org: (await ctx.orgs.current()).name, user: req.user.organization.name,
+				accounts: (await ctx.ledger.listAccounts()).length, all: (await ctx.orgs.list()).length }));
+		}`,
+	});
+	r = await sam("GET", "/m/whoami/");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { org: "Sam's books", user: "Sam's books", accounts: samAccounts.length, all: 3 });
+	assert.deepEqual((await call("GET", "/m/whoami/")).json(), { org: "Main books", user: "Main books", accounts: 0, all: 3 });
 });

@@ -45,7 +45,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The logged-in user */
+        /** The logged-in user, the organization this session works in and the ones they can open */
         get: operations["getCurrentUser"];
         put?: never;
         post?: never;
@@ -53,6 +53,63 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/auth/organization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Work in another organization's books (this session) */
+        post: operations["switchOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Organizations (all of them for admins of the main books, otherwise yours) */
+        get: operations["listOrganizations"];
+        put?: never;
+        /**
+         * Create an organization with books of its own (admin of the main books; you become its admin)
+         * @description Its database is created right away by the updater (status "pending"
+         *     until then, usually seconds). With `chart`, it starts with a basic
+         *     chart of accounts for the kind of books in that currency.
+         */
+        post: operations["createOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizations/{orgId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename an organization (admin of the main books) */
+        patch: operations["updateOrganization"];
         trace?: never;
     };
     "/auth/password": {
@@ -713,7 +770,15 @@ export interface paths {
         /** All users (admin) */
         get: operations["listUsers"];
         put?: never;
-        /** Add a user (admin) */
+        /**
+         * Add a user (admin)
+         * @description `organization` chooses their books: the main books (the default; role
+         *     is their role there), an existing organization, or a new
+         *     organization of their own (business or personal books, optionally
+         *     with a starter chart of accounts). Outside the main books, role is
+         *     their role in that organization and they get no access to the main
+         *     books.
+         */
         post: operations["createUser"];
         delete?: never;
         options?: never;
@@ -740,6 +805,27 @@ export interface paths {
          *     themselves. Disabling or a new password ends the user's sessions.
          */
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/users/{username}/organizations/{orgId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+                orgId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Give a user a role in an organization other than the main books (admin) */
+        put: operations["setMembership"];
+        post?: never;
+        /** Take a user's access to an organization away (admin) */
+        delete: operations["removeMembership"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/search": {
@@ -1074,12 +1160,67 @@ export interface components {
         User: {
             /** @example alice */
             username: string;
+            /** @description Their role in the organization this session works in */
             role: components["schemas"]["Role"];
             is_active: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             last_login_at: string | null;
+            /** @description An admin of the main books: manages users, organizations, modules, updates, backups and integrations */
+            server_admin: boolean;
+        };
+        CurrentUser: components["schemas"]["User"] & {
+            organization: {
+                id: number;
+                name: string;
+                kind: components["schemas"]["OrgKind"];
+            };
+            organizations: components["schemas"]["OrgAccess"][];
+        };
+        UserListItem: {
+            username: string;
+            /** @description Their role in the main books */
+            role: components["schemas"]["MainRole"];
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_login_at: string | null;
+            server_admin: boolean;
+            /** @description Organizations other than the main books */
+            organizations: components["schemas"]["OrgAccess"][];
+        };
+        /** @enum {string} */
+        OrgKind: "business" | "personal";
+        OrgAccess: {
+            id: number;
+            name: string;
+            kind: components["schemas"]["OrgKind"];
+            /** @enum {string} */
+            status: "pending" | "ready" | "error";
+            role: components["schemas"]["Role"];
+        };
+        Organization: {
+            /** @description 1 is the main books */
+            id: number;
+            name: string;
+            kind: components["schemas"]["OrgKind"];
+            /**
+             * @description pending while its database is being created
+             * @enum {string}
+             */
+            status: "pending" | "ready" | "error";
+            /** @description Why creating it failed */
+            message: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        OrganizationCreate: {
+            name: string;
+            kind: components["schemas"]["OrgKind"];
+            /** @description Start with a basic chart of accounts in this currency */
+            chart?: components["schemas"]["Currency"] | null;
         };
         LoginRequest: {
             /** @description Case-insensitive */
@@ -1652,6 +1793,11 @@ export interface components {
          * @enum {string}
          */
         Role: "admin" | "bookkeeper" | "viewer";
+        /**
+         * @description A role in the main books; none gives no access to them (the user works in other organizations)
+         * @enum {string}
+         */
+        MainRole: "admin" | "bookkeeper" | "viewer" | "none";
         SearchResults: {
             query: string;
             groups: {
@@ -1834,10 +1980,120 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["User"];
+                    "application/json": components["schemas"]["CurrentUser"];
                 };
             };
             401: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    switchOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    organization_id: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Switched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUser"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listOrganizations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Organization"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationCreate"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            403: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    updateOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -2923,7 +3179,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["User"][];
+                        data: components["schemas"]["UserListItem"][];
                     };
                 };
             };
@@ -2943,7 +3199,18 @@ export interface operations {
                 "application/json": {
                     username: string;
                     password: string;
-                    role: components["schemas"]["Role"];
+                    role: components["schemas"]["MainRole"];
+                    organization?: {
+                        /** @enum {string} */
+                        mode: "main" | "existing" | "new";
+                        /** @description mode "existing" */
+                        organization_id?: number;
+                        /** @description mode "new" */
+                        name?: string;
+                        kind?: components["schemas"]["OrgKind"];
+                        /** @description mode "new": start with a basic chart of accounts in this currency */
+                        chart?: components["schemas"]["Currency"] | null;
+                    };
                 };
             };
         };
@@ -2954,7 +3221,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["User"];
+                    "application/json": components["schemas"]["UserListItem"];
                 };
             };
             409: components["responses"]["Error"];
@@ -2974,7 +3241,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    role?: components["schemas"]["Role"];
+                    role?: components["schemas"]["MainRole"];
                     is_active?: boolean;
                     password?: string;
                 };
@@ -2987,11 +3254,68 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["User"];
+                    "application/json": components["schemas"]["UserListItem"];
                 };
             };
             404: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    setMembership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+                orgId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    role: components["schemas"]["Role"];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserListItem"];
+                };
+            };
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    removeMembership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+                orgId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserListItem"];
+                };
+            };
+            404: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

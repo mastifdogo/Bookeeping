@@ -26,9 +26,21 @@ export const STATEMENT_TIMEOUT_MS = 60_000;
  * verifies connectivity.
  */
 export async function connectDB(cfg: Pick<Config, "databaseUrl" | "dbMaxConns">): Promise<pg.Pool> {
+	const pool = newPool(cfg.databaseUrl, cfg.dbMaxConns);
+	try {
+		await pool.query("SELECT 1");
+	} catch (err) {
+		await pool.end().catch(() => {});
+		throw new Error(`ping database: ${(err as Error).message}`, { cause: err });
+	}
+	return pool;
+}
+
+/** A pool with Ledger's settings, without checking connectivity. */
+export function newPool(databaseUrl: string, max: number): pg.Pool {
 	const pool = new pg.Pool({
-		connectionString: cfg.databaseUrl,
-		max: cfg.dbMaxConns,
+		connectionString: databaseUrl,
+		max,
 		min: 0,
 		idleTimeoutMillis: 5 * 60_000,
 		maxLifetimeSeconds: 3600,
@@ -40,13 +52,14 @@ export async function connectDB(cfg: Pick<Config, "databaseUrl" | "dbMaxConns">)
 	});
 	// An idle client losing its connection must not crash the process.
 	pool.on("error", (err) => log.warn("idle database connection error", { err: err.message }));
-	try {
-		await pool.query("SELECT 1");
-	} catch (err) {
-		await pool.end().catch(() => {});
-		throw new Error(`ping database: ${(err as Error).message}`, { cause: err });
-	}
 	return pool;
+}
+
+/** The same server and login with another database name. */
+export function withDatabase(databaseUrl: string, name: string): string {
+	const u = new URL(databaseUrl);
+	u.pathname = "/" + encodeURIComponent(name);
+	return u.toString();
 }
 
 export type IsolationLevel = "READ COMMITTED" | "REPEATABLE READ";

@@ -13,6 +13,20 @@
 
 	let { children, data }: LayoutProps = $props();
 
+	// Organizations: each has books of its own; switching reloads everything,
+	// including module pages open beside.
+	let orgs = $derived((data.user?.organizations ?? []).filter((o) => o.status === 'ready'));
+	let orgError = $state('');
+	async function switchOrg(id: number) {
+		orgError = '';
+		const r = await api().POST('/auth/organization', { body: { organization_id: id } });
+		if (r.error) {
+			orgError = r.error.error.message;
+			return;
+		}
+		location.assign('/');
+	}
+
 	async function logout() {
 		await api().POST('/auth/logout');
 		await invalidateAll();
@@ -186,7 +200,19 @@
 					</button>
 				</div>
 				<div class="links" id="main-links">
-					<SearchPalette {nav} isAdmin={data.user.role === 'admin'} {collapsed} />
+					{#if orgs.length > 1}
+						<label class="org" title="Books: {data.user.organization.name}">
+							<span class="sr-only">Books</span>
+							<span class="org-short" aria-hidden="true">{data.user.organization.name.slice(0, 1).toUpperCase()}</span>
+							<select value={data.user.organization.id} onchange={(e) => switchOrg(Number(e.currentTarget.value))}>
+								{#each orgs as o (o.id)}<option value={o.id}>{o.name}</option>{/each}
+							</select>
+						</label>
+						{#if orgError}<p class="small org-error">{orgError}</p>{/if}
+					{:else if data.user.organization.id !== 1}
+						<div class="org org-name" title="Books">{data.user.organization.name}</div>
+					{/if}
+					<SearchPalette {nav} isAdmin={data.user.server_admin} {collapsed} />
 					<ul>
 						{#each visible as l (l.id)}
 							<li>
@@ -363,6 +389,37 @@
 	}
 	.brand-short {
 		display: none;
+	}
+	.org {
+		display: block;
+		margin: 0 0.5rem;
+	}
+	.org select {
+		width: 100%;
+		font-weight: 600;
+	}
+	.org-name {
+		font-weight: 600;
+		padding: 0.25rem 0.5rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.org-short {
+		display: none;
+	}
+	.org-error {
+		color: var(--danger);
+		margin: 0 0.5rem;
+	}
+	.collapsed .org select,
+	.collapsed .org-name {
+		display: none;
+	}
+	.collapsed .org-short {
+		display: block;
+		text-align: center;
+		font-weight: 700;
 	}
 	svg {
 		flex: none;

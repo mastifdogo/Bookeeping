@@ -6,11 +6,18 @@ import { ModuleHost } from "./module-host.ts";
 import { modulesDir } from "./modules.ts";
 import { integrationsDir } from "./integrations.ts";
 import { gmailEndpoints, type GoogleEndpoints as GmailEndpoints, type PendingAuth } from "./gmail.ts";
+import { OrgPools, routedPool } from "./orgs.ts";
 import { backupStateDir, googleEndpoints, type DeviceCode, type GoogleEndpoints } from "./backup.ts";
 
 /** Shared dependencies for handlers and ledger operations. */
 export interface App {
+	/** The current organization's database (see orgs.ts); the main books outside a request. */
 	db: Pool;
+	/** The main database: users, sessions, organizations, server settings. */
+	main: Pool;
+	orgs: OrgPools;
+	/** Creates an organization's database directly (development, tests); otherwise root does it. */
+	provisionOrg: ((dbName: string) => Promise<void>) | null;
 	csvDir: string;
 	cookieSecure: CookieSecure;
 	webDir: string;
@@ -41,10 +48,15 @@ export function newApp(
 		google?: GoogleEndpoints;
 		integrationsDir?: string;
 		gmail?: GmailEndpoints;
+		provisionOrg?: (dbName: string) => Promise<void>;
 	},
 ): App {
+	const orgs = new OrgPools(db, cfg.databaseUrl ?? "");
 	return {
-		db,
+		db: routedPool(orgs),
+		main: db,
+		orgs,
+		provisionOrg: cfg.provisionOrg ?? null,
 		csvDir: cfg.csvDir,
 		cookieSecure: cfg.cookieSecure,
 		webDir: cfg.webDir,
