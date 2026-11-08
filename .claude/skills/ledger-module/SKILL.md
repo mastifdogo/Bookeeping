@@ -173,7 +173,8 @@ checker fix), make it locally, tell the user what it is and why, and leave
 pushing it to them. Build the module so it works without that change.
 
 1. In `<dir>`: `git init -b main`, commit, add the remote, push `main`.
-2. Release: bump `version` in `ledger-module.json` (`x.y.z`), tag `vx.y.z`,
+2. Release: bump `version` in `ledger-module.json` (`x.y.z`, by the rule
+   below), tag `vx.y.z`,
    push the tag, and create a GitHub Release from it (not a draft or
    pre-release). If pushing tags or creating releases is blocked from this
    session, tell the user exactly which tag/commit to release from the
@@ -183,6 +184,14 @@ pushing it to them. Build the module so it works without that change.
 
 Updating a published module: change code, add a new migration if the data
 model changes, bump the version, run the checks, release again.
+
+**Version numbers** (`x.y.z`, for modules and for Ledger itself):
+
+- New features (a new page, route, setting, `ctx` capability, data the module
+  keeps): raise the middle number and reset the last, e.g. `1.4.2` → `1.5.0`.
+- Small tweaks and bug fixes only: raise the last number, e.g. `1.4.2` →
+  `1.4.3`.
+- A release that has both counts as a feature release.
 
 ## 7. When Ledger's module API changes
 
