@@ -334,6 +334,10 @@ paths:
           in: query
           description: Only entries with at least one line on this account
           schema: { $ref: '#/components/schemas/AccountCode' }
+        - name: hide_reversed
+          in: query
+          description: Leave out entries that were reversed and the reversing entries
+          schema: { type: boolean, default: false }
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
@@ -2091,7 +2095,7 @@ components:
           items: { $ref: '#/components/schemas/DashboardItem' }
     ModuleInfo:
       type: object
-      required: [repo, id, name, version, description, nav_label, has_settings, state, message]
+      required: [repo, id, name, version, description, nav_label, has_settings, accepts, state, message]
       properties:
         repo: { type: string, nullable: true }
         id: { type: string, nullable: true }
@@ -2100,6 +2104,10 @@ components:
         description: { type: string }
         nav_label: { type: string, nullable: true }
         has_settings: { type: boolean, description: The module declares settings (it gets a Settings tab) }
+        accepts:
+          type: array
+          description: Kinds of files it takes from other modules (ctx.files)
+          items: { type: string, enum: [transaction, receipt, statement, bill] }
         state:
           type: string
           enum: [running, failed, pending, error, removing]

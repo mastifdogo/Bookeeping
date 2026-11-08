@@ -159,6 +159,7 @@
 								</div>
 							{/if}
 							{#if m.description}<div class="small">{m.description}</div>{/if}
+							{#if m.accepts.length}<div class="muted small">Takes {m.accepts.map((k) => k + 's').join(', ')} from other modules</div>{/if}
 						</td>
 						<td>{m.version ?? '—'}</td>
 						<td>

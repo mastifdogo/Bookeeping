@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
 	import Amount from '#lib/components/Amount.svelte';
+	import { openRow } from '#lib/rows.ts';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, unwrap } from '#lib/api/client.ts';
 	import type { PageProps } from './$types';
@@ -111,9 +112,9 @@
 				</tr>
 			{/if}
 			{#each data.ledger.lines as l (l.line_id)}
-				<tr>
+				<tr class="clickable" onclick={(ev) => openRow(ev, `/journal/${l.journal_entry_id}`)}>
 					<td class="mono">{l.entry_date}</td>
-					<td><a href="/journal/{l.journal_entry_id}">#{l.journal_entry_id}</a></td>
+					<td><a class="quiet" href="/journal/{l.journal_entry_id}">#{l.journal_entry_id}</a></td>
 					<td>
 						{l.description}
 						{#if l.memo}<div class="muted small">{l.memo}</div>{/if}

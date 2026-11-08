@@ -21,6 +21,7 @@ import { moduleValues, saveSettings, type SettingValue } from "./module-settings
 import type { SearchProvider } from "./search.ts";
 import { llmComplete, llmReady, readLlmConfig, type LlmRequest } from "./llm.ts";
 import { gmailFor } from "./gmail.ts";
+import { filesFor, type FileSummary } from "./module-files.ts";
 import { listBySource, postItem, removeByKey, setClosedByKey, type ItemInput, type ItemKind } from "./dashboard.ts";
 import { isCurrency, publicUser, type AccountCreate, type Currency, type JournalEntryCreate, type User } from "./types.ts";
 
@@ -66,6 +67,8 @@ export interface LoadedModule {
 	routes: ModuleRoute[];
 	/** Why the module is not running (load error, incompatible version); null when it runs. */
 	error: string | null;
+	/** ctx.files.onReceive listeners. */
+	fileListeners: ((file: FileSummary) => unknown)[];
 	/** ctx.search.provide functions. */
 	searchProviders: SearchProvider[];
 	/** ctx.settings.onChange listeners. */
@@ -175,6 +178,19 @@ function makeContext(app: App, m: LoadedModule) {
 		},
 		/** Gmail, connected under Settings → Gmail (an admin must allow reading and sending per module). */
 		gmail: gmailFor(app, id),
+		/**
+		 * Files for and from other modules (statements, bills, receipts,
+		 * transaction lists), without posting anything. Receive them by
+		 * declaring "files": {"accepts": [...]} in the manifest.
+		 */
+		files: {
+			...filesFor(app, id, actorOf),
+			/** Called with the file's summary right after another module sends this one a file. */
+			onReceive(fn: (file: FileSummary) => unknown) {
+				if (typeof fn !== "function") throw new Error("files.onReceive: expected a function");
+				m.fileListeners.push(fn);
+			},
+		},
 		/** Results in Ledger's search bar. */
 		search: {
 			/**
@@ -272,6 +288,7 @@ export class ModuleHost {
 			error: null,
 			settingsListeners: [],
 			searchProviders: [],
+			fileListeners: [],
 		};
 		this.modules.set(m.manifest.id, m);
 		if (!compatible(m.manifest, app.version)) {

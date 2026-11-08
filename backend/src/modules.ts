@@ -48,6 +48,8 @@ export interface ModuleManifest {
 	migrations: string | null;
 	/** Settings shown on the module's Settings tab (optional). */
 	settings: SettingsSpec | null;
+	/** Kinds of files other modules may send it with ctx.files (optional). */
+	files: { accepts: ("transaction" | "receipt" | "statement" | "bill")[] } | null;
 }
 
 /**
@@ -112,7 +114,7 @@ const REL_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.)[A-Za-z0-9_.\/-]{1,200}$/;
 export function validateManifest(v: unknown): ModuleManifest {
 	const err = new ValidationError();
 	const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
-	const allowed = ["id", "name", "version", "description", "ledger", "server", "ui", "nav", "migrations", "settings"];
+	const allowed = ["id", "name", "version", "description", "ledger", "server", "ui", "nav", "migrations", "settings", "files"];
 	for (const k of Object.keys(o)) if (!allowed.includes(k)) err.add(k, "unknown field");
 	const str = (k: string, re: RegExp | null, max: number, required: boolean): string | null => {
 		const x = o[k];
@@ -136,8 +138,20 @@ export function validateManifest(v: unknown): ModuleManifest {
 	const migrations = str("migrations", REL_PATH_RE, 200, false);
 	const nav = parseNav(o.nav, ui, err);
 	const settings = parseSettingsSpec(o.settings, err, ui !== null);
+	let files: ModuleManifest["files"] = null;
+	if (o.files !== undefined && o.files !== null) {
+		const f = (typeof o.files === "object" && !Array.isArray(o.files) ? o.files : null) as Record<string, unknown> | null;
+		const kinds = ["transaction", "receipt", "statement", "bill"];
+		if (!f || Object.keys(f).some((k) => k !== "accepts") || !Array.isArray(f.accepts) || !f.accepts.every((k) => kinds.includes(k as string)) || new Set(f.accepts).size !== f.accepts.length) {
+			err.add("files", 'must be {"accepts": [...]} with any of transaction, receipt, statement, bill');
+		} else if (!server) {
+			err.add("files", "needs server (to receive files)");
+		} else {
+			files = { accepts: f.accepts as NonNullable<ModuleManifest["files"]>["accepts"] };
+		}
+	}
 	err.throwIfAny();
-	return { id: id!, name: name!, version: version!, description, ledger, server, ui, nav, migrations, settings };
+	return { id: id!, name: name!, version: version!, description, ledger, server, ui, nav, migrations, settings, files };
 }
 
 /** Whether this Ledger version satisfies a manifest's "ledger" requirement. Dev builds accept everything. */

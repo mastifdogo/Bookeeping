@@ -24,6 +24,7 @@ GRANT SELECT, INSERT, UPDATE          ON user_settings                          
 GRANT SELECT, INSERT, UPDATE, DELETE  ON reconciliations, reconciliation_lines   TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON module_settings                         TO :"app_role";
 GRANT SELECT, INSERT, DELETE          ON llm_usage                               TO :"app_role";
+GRANT SELECT, INSERT, UPDATE, DELETE  ON module_files                            TO :"app_role";
 -- Read-only, so pg_dump (run as this role for backups) can include it.
 GRANT SELECT                          ON schema_migrations                       TO :"app_role";
 

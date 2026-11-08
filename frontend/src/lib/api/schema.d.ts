@@ -1534,6 +1534,8 @@ export interface components {
             nav_label: string | null;
             /** @description The module declares settings (it gets a Settings tab) */
             has_settings: boolean;
+            /** @description Kinds of files it takes from other modules (ctx.files) */
+            accepts: ("transaction" | "receipt" | "statement" | "bill")[];
             /**
              * @description running; failed (installed but would not load: see message);
              *     pending (waiting for the installer); error (the installer could
@@ -2106,6 +2108,8 @@ export interface operations {
                 to?: components["parameters"]["To"];
                 /** @description Only entries with at least one line on this account */
                 account_code?: components["schemas"]["AccountCode"];
+                /** @description Leave out entries that were reversed and the reversing entries */
+                hide_reversed?: boolean;
                 limit?: components["parameters"]["Limit"];
                 offset?: components["parameters"]["Offset"];
             };

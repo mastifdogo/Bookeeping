@@ -497,7 +497,7 @@ async function handleAccountLedger(c: Ctx): Promise<void> {
 
 async function handleListJournalEntries(c: Ctx): Promise<void> {
 	const [from, to] = queryDateRange(c.query);
-	const f: EntryFilter = { from, to, accountCode: null, limit: 50, offset: 0 };
+	const f: EntryFilter = { from, to, accountCode: null, hideReversed: queryBool(c.query, "hide_reversed"), limit: 50, offset: 0 };
 	const v = new ValidationError();
 	const code = c.query.get("account_code") ?? "";
 	if (code !== "") {
@@ -949,6 +949,7 @@ async function modulesInfo(c: Ctx) {
 			description: m?.manifest.description ?? "",
 			nav_label: m && !m.error ? (m.manifest.nav?.label ?? null) : null,
 			has_settings: !!m && !m.error && !!m.manifest.settings,
+			accepts: m?.manifest.files?.accepts ?? [],
 			state: m ? (m.error ? "failed" : "running") : last?.state === "error" ? "error" : "pending",
 			message: m?.error ?? (last?.state === "error" ? last.message : m ? "" : "Waiting for the installer…"),
 		});
@@ -964,6 +965,7 @@ async function modulesInfo(c: Ctx) {
 			nav_label: null,
 			// Still running until the next sync (or, in development, loaded from MODULES_DIR).
 			has_settings: !m.error && !!m.manifest.settings,
+			accepts: m.manifest.files?.accepts ?? [],
 			state: "removing",
 			message: "Removed from the list; uninstalls at the next sync.",
 		});

@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import EntryTotals from '#lib/components/EntryTotals.svelte';
-	import { _PAGE_SIZE } from './+page';
+	import { _HIDE_REVERSED_KEY, _PAGE_SIZE } from './+page';
+	// The whole row opens the entry (the number stays a link for keyboards and new tabs).
+	import { openRow } from '#lib/rows.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -15,13 +17,24 @@
 		accountCode = data.filter.account_code;
 	});
 
-	function href(offset: number, f = { from, to, account_code: accountCode }) {
+	function href(offset: number, f = { from, to, account_code: accountCode, hide_reversed: data.filter.hide_reversed }) {
 		const q = new URLSearchParams();
 		if (f.from) q.set('from', f.from);
 		if (f.to) q.set('to', f.to);
 		if (f.account_code) q.set('account_code', f.account_code);
+		q.set('hide_reversed', f.hide_reversed ? '1' : '0');
 		if (offset > 0) q.set('offset', String(offset));
 		return `?${q}`;
+	}
+
+	function toggleReversed(e: Event) {
+		const on = (e.currentTarget as HTMLInputElement).checked;
+		try {
+			localStorage.setItem(_HIDE_REVERSED_KEY, on ? '1' : '0');
+		} catch {
+			// storage blocked: the address still carries it
+		}
+		goto(href(0, { ...data.filter, hide_reversed: on }), { reset: false });
 	}
 
 	function apply(e: SubmitEvent) {
@@ -47,12 +60,14 @@
 		</select>
 	</label>
 	<button>Filter</button>
-	{#if data.filter.from || data.filter.to || data.filter.account_code}<a class="button" href="?">Clear</a>{/if}
+	{#if data.filter.from || data.filter.to || data.filter.account_code}<a class="button" href={href(0, { from: '', to: '', account_code: '', hide_reversed: data.filter.hide_reversed })}>Clear</a>{/if}
+	<span class="spacer"></span>
+	<label class="inline"><input type="checkbox" checked={data.filter.hide_reversed} onchange={toggleReversed} /> Hide reversed</label>
 </form>
 
 <div class="table-wrap">
 	{#if data.entries.length === 0}
-		<div class="empty">No journal entries match.</div>
+		<div class="empty">No journal entries match{data.filter.hide_reversed ? ' (reversed entries are hidden)' : ''}.</div>
 	{:else}
 		<table>
 			<thead>
@@ -60,9 +75,9 @@
 			</thead>
 			<tbody>
 				{#each data.entries as e (e.id)}
-					<tr>
+					<tr class="clickable" onclick={(ev) => openRow(ev, `/journal/${e.id}`)}>
 						<td class="mono">{e.entry_date}</td>
-						<td><a href="/journal/{e.id}">{e.id}</a></td>
+						<td><a class="quiet" href="/journal/{e.id}">{e.id}</a></td>
 						<td>{e.description}</td>
 						<td>{e.reference}</td>
 						<td class="small mono">{[...new Set(e.lines.map((l) => l.account_code))].join(', ')}</td>

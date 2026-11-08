@@ -310,3 +310,13 @@ test("syncModules follows a renamed repository", async (t) => {
 	installed = await scanInstalled(opts.modulesDir);
 	assert.deepEqual([installed.length, installed[0]!.source?.repo, installed[0]!.source?.tag], [1, "o/hello-module", "v1.1.0"]);
 });
+
+test("manifest files.accepts", () => {
+	const base = { id: "sorter", name: "Sorter", version: "1.0.0", server: "server.mjs" };
+	assert.deepEqual(validateManifest({ ...base, files: { accepts: ["statement", "bill"] } }).files, { accepts: ["statement", "bill"] });
+	assert.equal(validateManifest(base).files, null);
+	for (const files of [{ accepts: ["photo"] }, { accepts: "bill" }, { accepts: ["bill", "bill"] }, { take: ["bill"] }]) {
+		assert.throws(() => validateManifest({ ...base, files }), /validation failed/, JSON.stringify(files));
+	}
+	assert.throws(() => validateManifest({ ...base, server: undefined, files: { accepts: ["bill"] } }), /validation failed/);
+});

@@ -4,6 +4,7 @@
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, today, unwrap, type DashboardItem } from '#lib/api/client.ts';
 	import { invalidate } from '$app/navigation';
+	import { openRow } from '#lib/rows.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -186,9 +187,9 @@
 			</thead>
 			<tbody>
 				{#each data.entries as e (e.id)}
-					<tr>
+					<tr class="clickable" onclick={(ev) => openRow(ev, `/journal/${e.id}`)}>
 						<td class="mono">{e.entry_date}</td>
-						<td><a href="/journal/{e.id}">{e.id}</a></td>
+						<td><a class="quiet" href="/journal/{e.id}">{e.id}</a></td>
 						<td>{e.description}</td>
 						<td class="num"><EntryTotals totals={e.totals} /></td>
 					</tr>

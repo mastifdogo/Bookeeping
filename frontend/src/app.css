@@ -55,6 +55,14 @@ a {
 a:hover {
 	text-decoration: underline;
 }
+/* A link that reads as plain text (e.g. entry numbers in a clickable row). */
+a.quiet {
+	color: inherit;
+}
+/* Table rows that open something when clicked anywhere. */
+tr.clickable {
+	cursor: pointer;
+}
 
 h1 {
 	font-size: 1.5rem;

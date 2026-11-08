@@ -1304,13 +1304,15 @@ test("search", async (t) => {
 	expectStatus(await ta.request("GET", "/api/v1/search?q=acme"), 401);
 });
 
-/** Loads modules (id → server.mjs source) into the test app. */
-async function loadModules(t: any, app: any, mods: Record<string, string>) {
+/** Loads modules (id → server.mjs source, or { code, manifest } for extra manifest fields) into the test app. */
+async function loadModules(t: any, app: any, mods: Record<string, string | { code: string; manifest: Record<string, unknown> }>) {
 	const root = await mkdtemp(path.join(tmpdir(), "ledger-mods-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
-	for (const [id, code] of Object.entries(mods)) {
+	for (const [id, spec] of Object.entries(mods)) {
+		const code = typeof spec === "string" ? spec : spec.code;
+		const extra = typeof spec === "string" ? {} : spec.manifest;
 		await mkdir(path.join(root, id), { recursive: true });
-		await writeFile(path.join(root, id, "ledger-module.json"), JSON.stringify({ id, name: id.toUpperCase(), version: "1.0.0", server: "server.mjs" }));
+		await writeFile(path.join(root, id, "ledger-module.json"), JSON.stringify({ id, name: id.toUpperCase(), version: "1.0.0", server: "server.mjs", ...extra }));
 		await writeFile(path.join(root, id, "server.mjs"), code);
 	}
 	app.modules = new ModuleHost(root);
@@ -1486,4 +1488,79 @@ test("Gmail shared with modules", async (t) => {
 	assert.equal(r.json().config.connected, false);
 	assert.deepEqual(g.revoked, ["ref-1"]);
 	expectStatus(await call("GET", "/m/bills/bills"), 409);
+});
+
+test("journal list can hide reversed entries", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	await createAccount(ta, "1000", "Bank", "asset", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	for (const d of ["Kept", "Mistake"]) expectStatus(await call("POST", "/journal-entries", entry("2026-10-01", d, dr("1000", 100), cr("4000", 100))), 201);
+	expectStatus(await call("POST", "/journal-entries/2/reverse", { entry_date: "2026-10-02" }), 201);
+	const list = async (q: string) => (await call("GET", `/journal-entries${q}`)).json().data.map((e: any) => e.description);
+	assert.equal((await list("")).length, 3);
+	assert.deepEqual(await list("?hide_reversed=true"), ["Kept"]);
+	assert.equal((await list("?hide_reversed=false")).length, 3);
+	expectStatus(await call("GET", "/journal-entries?hide_reversed=maybe"), 422);
+});
+
+test("modules hand files to each other", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await loadModules(t, app, {
+		downloads: `export default function (ctx) {
+			ctx.route("GET", "/targets", (req) => ctx.files.targets(req.query.get("kind") || undefined));
+			ctx.route("POST", "/send", (req) => ctx.files.send({ to: req.body.to, kind: req.body.kind, filename: "oct.csv", contentType: "text/csv",
+				data: Buffer.from("date,amount\\n2026-10-01,12.50\\n"), meta: { account_code: "1000" }, note: "October statement" }, req.user));
+			ctx.route("GET", "/outbox", () => ctx.files.outbox());
+			ctx.route("GET", "/peek/:id", async (req) => (await ctx.files.get(req.params.id)).data.toString());
+			ctx.route("DELETE", "/withdraw/:id", (req) => ctx.files.remove(req.params.id));
+		}`,
+		autosort: {
+			manifest: { files: { accepts: ["statement", "bill"] } },
+			code: `let got = [];
+			export default function (ctx) {
+				ctx.files.onReceive((f) => { got.push(f.id + ":" + f.kind + ":" + f.filename); });
+				ctx.route("GET", "/got", () => got);
+				ctx.route("GET", "/inbox", (req) => ctx.files.inbox({ status: req.query.get("status") || undefined }));
+				ctx.route("POST", "/take/:id", async (req) => {
+					const f = await ctx.files.get(req.params.id);
+					return ctx.files.update(f.id, { status: "done", result: "12 transactions, " + f.data.length + " bytes" });
+				});
+			}`,
+		},
+	});
+
+	let r = await call("GET", "/m/downloads/targets?kind=statement");
+	assert.deepEqual(r.json(), [{ id: "autosort", name: "AUTOSORT", accepts: ["statement", "bill"] }]);
+	assert.deepEqual((await call("GET", "/m/downloads/targets?kind=receipt")).json(), []);
+	expectStatus(await call("GET", "/m/downloads/targets?kind=photo"), 422);
+
+	r = await call("POST", "/m/downloads/send", { to: "autosort", kind: "statement" });
+	expectStatus(r, 200);
+	const id = r.json().id;
+	assert.deepEqual([r.json().status, r.json().size_bytes, r.json().sent_by, r.json().meta], ["new", 29, "tester", { account_code: "1000" }]);
+	await new Promise((res) => setTimeout(res, 50));
+	assert.deepEqual((await call("GET", "/m/autosort/got")).json(), [`${id}:statement:oct.csv`]);
+	// Kinds the receiver doesn't take, unknown or non-receiving modules are refused.
+	expectStatus(await call("POST", "/m/downloads/send", { to: "autosort", kind: "receipt" }), 409);
+	expectStatus(await call("POST", "/m/downloads/send", { to: "downloads", kind: "statement" }), 409);
+	expectStatus(await call("POST", "/m/downloads/send", { to: "nope", kind: "bill" }), 409);
+	expectStatus(await call("POST", "/m/downloads/send", { to: "autosort", kind: "photo" }), 422);
+
+	r = await call("GET", "/m/autosort/inbox?status=new");
+	assert.deepEqual(r.json().map((f: any) => [f.id, f.sender, f.kind, f.note]), [[id, "downloads", "statement", "October statement"]]);
+	assert.equal(r.json()[0].data, undefined); // listings carry no bytes
+	r = await call("POST", `/m/autosort/take/${id}`);
+	assert.deepEqual([r.json().status, r.json().result], ["done", "12 transactions, 29 bytes"]);
+	r = await call("GET", "/m/downloads/outbox");
+	assert.deepEqual(r.json().map((f: any) => [f.recipient, f.status, f.result]), [["autosort", "done", "12 transactions, 29 bytes"]]);
+	assert.equal((await call("GET", `/m/downloads/peek/${id}`)).json(), "date,amount\n2026-10-01,12.50\n");
+	// Only the receiver changes the status; the sender can't withdraw a file already taken.
+	expectStatus(await call("DELETE", `/m/downloads/withdraw/${id}`), 409);
+	expectStatus(await call("GET", "/m/downloads/peek/999"), 404);
+	// No journal entries were posted.
+	assert.equal(await ta.countRows("journal_entries"), 0);
 });

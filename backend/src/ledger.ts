@@ -412,6 +412,8 @@ export interface EntryFilter {
 	from: string | null;
 	to: string | null;
 	accountCode: string | null;
+	/** Leave out reversed entries and the entries that reverse them. */
+	hideReversed?: boolean;
 	limit: number;
 	offset: number;
 }
@@ -426,9 +428,10 @@ export async function listJournalEntries(app: App, f: EntryFilter): Promise<Jour
 		  AND ($3::text IS NULL OR EXISTS (
 		        SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id
 		         WHERE t.journal_entry_id = e.id AND a.code = $3))
+		  AND (NOT $6 OR (e.reverses_id IS NULL AND r.id IS NULL))
 		ORDER BY e.entry_date DESC, e.id DESC
 		LIMIT $4 OFFSET $5`,
-		[f.from, f.to, f.accountCode, f.limit, f.offset],
+		[f.from, f.to, f.accountCode, f.limit, f.offset, f.hideReversed === true],
 	);
 	const entries = rows.map(toEntry);
 	await attachLines(app, entries);
