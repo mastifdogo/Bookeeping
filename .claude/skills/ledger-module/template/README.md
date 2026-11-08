@@ -8,5 +8,7 @@ under **Settings → Modules** by entering this repository's `owner/name`.
 ## Releasing
 
 1. Bump `version` in `ledger-module.json`.
-2. Tag and publish a GitHub Release (`v<version>`). Ledger installs the
-   latest release; drafts and pre-releases are ignored.
+2. Commit and push to `main`. The Release workflow
+   (`.github/workflows/release.yml`) tags `v<version>` and publishes a
+   GitHub Release when that version isn't released yet. Ledger installs the
+   latest release.

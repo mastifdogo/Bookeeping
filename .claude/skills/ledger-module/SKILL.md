@@ -189,13 +189,25 @@ module needs a change in Ledger (a bug fix, a new `ctx` feature, a docs or
 checker fix), make it locally, tell the user what it is and why, and leave
 pushing it to them. Build the module so it works without that change.
 
-1. In `<dir>`: `git init -b main`, commit, add the remote, push `main`.
+Every module repository has the release workflow
+**`.github/workflows/release.yml`** (in the template, so new modules get it;
+copy `template/.github/workflows/release.yml` into older modules that lack
+it). On every push to `main` that changes `ledger-module.json`, it reads
+`version` and, if there is no GitHub Release `v<version>` yet, creates the
+tag on that commit and the Release (with notes generated from the commits),
+using GitHub's built-in token: no secrets to set up. It does nothing when the
+version is already released, and fails on a version that isn't `x.y.z`.
+
+1. In `<dir>`: `git init -b main`, commit (including the workflow), add the
+   remote, push `main`. The first push releases the manifest's version.
 2. Release: bump `version` in `ledger-module.json` (`x.y.z`, by the rule
-   below), tag `vx.y.z`,
-   push the tag, and create a GitHub Release from it (not a draft or
-   pre-release). If pushing tags or creating releases is blocked from this
-   session, tell the user exactly which tag/commit to release from the
-   GitHub web UI.
+   below), commit, push `main`. **Don't create tags or Releases by hand**;
+   the workflow does it. Check the run under the repository's Actions tab
+   (or `gh run list --workflow release.yml`). If it fails with "Resource not
+   accessible by integration", the user must allow it once: repository
+   Settings → Actions → General → Workflow permissions → "Read and write
+   permissions". To re-run it without a change: Actions → Release → Run
+   workflow.
 3. Tell the user to install it: **Settings → Modules**, enter `owner/repo`.
    Updates install on Ledger's update schedule or with "Update modules now".
 

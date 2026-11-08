@@ -67,6 +67,9 @@ try {
 	fail(`ledger-module.json: ${e.message}${e.details ? " " + JSON.stringify(e.details) : ""}`);
 	process.exit(1);
 }
+if (!(await exists(path.join(mdir, ".github", "workflows", "release.yml"), "file"))) {
+	warn("no .github/workflows/release.yml; copy it from the ledger-module skill's template so pushing a new version releases it");
+}
 if (!m.ledger) warn('no "ledger" minimum version; set one (e.g. ">=0.9.1") so older Ledgers refuse it cleanly');
 if (!compatible(m, ledgerVersion)) warn(`needs Ledger ${m.ledger}; checking against ${ledgerVersion} anyway`);
 
