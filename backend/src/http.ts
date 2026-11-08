@@ -1173,7 +1173,7 @@ function settingsModule(c: Ctx) {
 
 async function handleGetModuleSettings(c: Ctx): Promise<void> {
 	const { m, spec } = settingsModule(c);
-	writeJSON(c.res, 200, await publicSettings(c.app.main, m.manifest.id, spec));
+	writeJSON(c.res, 200, await publicSettings(c.app.db, m.manifest.id, spec));
 }
 
 async function handlePutModuleSettings(c: Ctx): Promise<void> {
@@ -1183,9 +1183,9 @@ async function handlePutModuleSettings(c: Ctx): Promise<void> {
 		if (!o || Object.keys(o).some((k) => k !== "values")) throw new DecodeError('expected {"values": {...}}');
 		return o.values;
 	});
-	await saveSettings(c.app.main, m.manifest.id, spec, body, c.user!.id);
+	await saveSettings(c.app.db, m.manifest.id, spec, body, c.user!.id);
 	await notifySettings(c.app, m);
-	writeJSON(c.res, 200, await publicSettings(c.app.main, m.manifest.id, spec));
+	writeJSON(c.res, 200, await publicSettings(c.app.db, m.manifest.id, spec));
 }
 
 async function handleListModules(c: Ctx): Promise<void> {
@@ -1458,8 +1458,8 @@ const ROUTES: Route[] = [
 	route("POST", "/modules/sync", "server", handleSyncModules),
 	route("DELETE", "/modules/:id", "server", handleRemoveModule),
 	route("PATCH", "/modules/:id", "server", handleRenameModuleRepo),
-	route("GET", "/modules/:id/settings", "server", handleGetModuleSettings),
-	route("PUT", "/modules/:id/settings", "server", handlePutModuleSettings),
+	route("GET", "/modules/:id/settings", "admin", handleGetModuleSettings),
+	route("PUT", "/modules/:id/settings", "admin", handlePutModuleSettings),
 ];
 
 /** Matches a path relative to /api/v1 against a route; returns its decoded params. */

@@ -361,8 +361,11 @@ books), each with its own database: accounts, entries, files and **your
 module's schema and data** are separate per organization. Each request runs
 in the user's current organization, and `ctx.db`, `ctx.ledger`,
 `ctx.dashboard`, `ctx.files` and `ctx.search` follow it automatically: write
-your module as if there were one set of books. Settings (`ctx.settings`),
-`ctx.llm` and `ctx.gmail` are server-wide.
+your module as if there were one set of books. `ctx.settings` is per
+organization as well (Ledger ≥ 0.11.1): each organization's admins set its
+values, `get()` returns the current organization's (defaults in a new one),
+and `onChange` runs inside the organization that changed. `ctx.llm` and
+`ctx.gmail` are server-wide.
 
 Background work (timers, `onReceive` outside a request, startup) runs in the
 main books. To do it for every organization:

@@ -47,7 +47,9 @@ Decide, and state briefly to the user:
   **settings** (e.g. `receivable_account`, default `1200`), never hard-coded.
 - **Settings**: everything the user configures (API keys as `secret`
   fields, account codes, options) goes in the manifest's `settings.fields`.
-  Ledger renders the form on the module's Settings tab.
+  Ledger renders the form on the module's Settings tab. Values are per
+  organization (Ledger 0.11.1): read them with `ctx.settings.get()` where
+  they're used, never cache one copy for the whole server.
 - **Dashboard**: what deserves a notification or a to-do (`ctx.dashboard`).
 - **AI, Gmail, search**: AI goes through `ctx.llm` (the admin's provider,
   never the module's own key), mail through `ctx.gmail` (never your own

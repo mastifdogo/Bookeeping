@@ -18,6 +18,8 @@
 		{ href: '/settings/updates', label: 'Updates', title: '', admin: true }
 	];
 	let isAdmin = $derived(data.user?.server_admin === true);
+	// Modules' settings belong to each organization: its admins set them.
+	let orgAdmin = $derived(data.user?.role === 'admin');
 	let OWN = $derived(ALL.filter((t) => isAdmin || !t.admin));
 	// Pages hidden from the sidebar stay reachable here; modules always get a
 	// tab of their own (which shows a hidden module's page too).
@@ -25,7 +27,7 @@
 	let tabs = $derived([
 		...OWN,
 		...hidden.map((i) => ({ href: `/settings/page/${i.id.slice(5)}`, label: i.label, title: 'Hidden from the sidebar' })),
-		...(isAdmin ? data.installedModules.map((m) => ({ href: `/settings/m/${m.id}`, label: m.name, title: 'Module' })) : [])
+		...(orgAdmin ? data.installedModules.map((m) => ({ href: `/settings/m/${m.id}`, label: m.name, title: 'Module' })) : [])
 	]);
 </script>
 

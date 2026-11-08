@@ -97,7 +97,7 @@
 			{#if mod.repo}<div class="small"><a href="https://github.com/{mod.repo}" target="_blank" rel="noopener noreferrer">github.com/{mod.repo}</a></div>{/if}
 		</div>
 		{#if navItem}<a class="button" href={navItem.href}>Open</a>{/if}
-		{#if data.installerAvailable && mod.state !== 'removing'}<button onclick={remove} disabled={busy}>Remove</button>{/if}
+		{#if data.installerAvailable && page.data.user?.server_admin && mod.state !== 'removing'}<button onclick={remove} disabled={busy}>Remove</button>{/if}
 	</div>
 	{#if mod.message}<p class="small" class:err={mod.state === 'failed' || mod.state === 'error'}>{mod.message}</p>{/if}
 	{#if !settings}<p class="muted small" style="margin-bottom:0">This module has no settings of its own.</p>{/if}
@@ -105,6 +105,12 @@
 
 {#if settings && settings.fields.length > 0}
 	<form class="card" style="max-width:640px" onsubmit={save}>
+		{#if (page.data.user?.organizations.length ?? 0) > 1}
+			<p class="muted small" style="margin-top:0">
+				Settings for <strong>{page.data.user?.organization.name}</strong>. Each organization keeps its own; switch books in
+				the sidebar to change another's.
+			</p>
+		{/if}
 		{#if saved}<div class="notice ok">Saved.</div>{/if}
 		<ErrorNotice {error} />
 		<div class="fields">

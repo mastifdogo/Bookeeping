@@ -1666,3 +1666,53 @@ test("organizations keep books apart", async (t) => {
 	assert.deepEqual(r.json(), { org: "Sam's books", user: "Sam's books", accounts: samAccounts.length, all: 3 });
 	assert.deepEqual((await call("GET", "/m/whoami/")).json(), { org: "Main books", user: "Main books", accounts: 0, all: 3 });
 });
+
+test("module settings belong to each organization", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	await loadModules(t, app, {
+		greeter: {
+			manifest: {
+				settings: {
+					fields: [
+						{ key: "greeting", label: "Greeting", type: "text", default: "Hello" },
+						{ key: "api_key", label: "API key", type: "secret" },
+					],
+				},
+			},
+			code: `let seen = [];
+			export default function (ctx) {
+				ctx.settings.onChange(async (v) => { seen.push((await ctx.orgs.current()).name + ":" + v.greeting); });
+				ctx.route("GET", "/", async () => ({ greeting: (await ctx.settings.get()).greeting, seen }));
+				ctx.route("GET", "/all", async () => { const out = []; await ctx.orgs.forEach(async (o) => out.push(o.name + ":" + (await ctx.settings.get()).greeting)); return out; });
+			}`,
+		},
+	});
+	let r = await call("POST", "/users", { username: "ana", password: "ana-password", role: "admin", organization: { mode: "new", name: "Ana Co", kind: "business" } });
+	expectStatus(r, 201);
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "ana", password: "ana-password" } });
+	const cookie = `${SESSION_COOKIE}=${sessionFrom(r).value}`;
+	const ana = (method: string, p: string, body?: unknown) => request(method, "/api/v1" + p, { body, cookie });
+
+	expectStatus(await call("PUT", "/modules/greeter/settings", { values: { greeting: "Bonjour", api_key: "main-secret" } }), 200);
+	// Ana, an admin of her organization only, sets its own values.
+	r = await ana("GET", "/modules/greeter/settings");
+	expectStatus(r, 200);
+	assert.equal(r.json().values.greeting, "Hello");
+	assert.equal(r.json().secrets_set.api_key, false, "the main books' secret stays there");
+	expectStatus(await ana("PUT", "/modules/greeter/settings", { values: { greeting: "Hola" } }), 200);
+
+	assert.equal((await call("GET", "/m/greeter/")).json().greeting, "Bonjour");
+	r = await ana("GET", "/m/greeter/");
+	assert.equal(r.json().greeting, "Hola");
+	assert.deepEqual(r.json().seen, ["Main books:Bonjour", "Ana Co:Hola"]);
+	assert.deepEqual((await call("GET", "/m/greeter/all")).json(), ["Main books:Bonjour", "Ana Co:Hola"]);
+
+	// Installing and removing modules stays with admins of the main books.
+	expectStatus(await ana("DELETE", "/modules/greeter"), 403);
+	// A viewer can't change settings.
+	expectStatus(await call("POST", "/users", { username: "vic", password: "vic-password", role: "viewer", organization: { mode: "existing", organization_id: 2 } }), 201);
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "vic", password: "vic-password" } });
+	expectStatus(await request("GET", "/api/v1/modules/greeter/settings", { cookie: `${SESSION_COOKIE}=${sessionFrom(r).value}` }), 403);
+});

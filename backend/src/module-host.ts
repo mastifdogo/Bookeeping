@@ -147,15 +147,20 @@ function makeContext(app: App, m: LoadedModule) {
 			if (typeof handler !== "function") throw new Error("route: handler must be a function");
 			m.routes.push({ method, segments: routePath.split("/").slice(1), handler });
 		},
-		/** The values of the settings declared in ledger-module.json (defaults filled in, secrets included). */
+		/**
+		 * The values of the settings declared in ledger-module.json (defaults
+		 * filled in, secrets included). Each organization has its own values:
+		 * the request's organization, the main books outside a request, or
+		 * the one ctx.orgs.forEach is visiting.
+		 */
 		settings: {
-			get: () => moduleValues(app.main, id, m.manifest.settings ?? { fields: [], page: null }),
+			get: () => moduleValues(app.db, id, m.manifest.settings ?? { fields: [], page: null }),
 			/** Saves some values (validated like the form); other keys keep theirs. */
 			set: async (values: Record<string, SettingValue>) => {
-				await saveSettings(app.main, id, m.manifest.settings ?? { fields: [], page: null }, values, null);
+				await saveSettings(app.db, id, m.manifest.settings ?? { fields: [], page: null }, values, null);
 				await notifySettings(app, m);
 			},
-			/** Called with the new values after they change (the user saved the form, or set()). */
+			/** Called with the new values after they change (the user saved the form, or set()), inside that organization. */
 			onChange(fn: (values: Record<string, SettingValue>) => unknown) {
 				if (typeof fn !== "function") throw new Error("settings.onChange: expected a function");
 				m.settingsListeners.push(fn);
@@ -273,7 +278,7 @@ export type ModuleContext = ReturnType<typeof makeContext>;
 /** Tells a module its settings changed. A failing listener is logged, never fatal. */
 export async function notifySettings(app: App, m: LoadedModule): Promise<void> {
 	if (!m.settingsListeners.length || !m.manifest.settings) return;
-	const values = await moduleValues(app.main, m.manifest.id, m.manifest.settings);
+	const values = await moduleValues(app.db, m.manifest.id, m.manifest.settings);
 	for (const fn of m.settingsListeners) {
 		try {
 			await fn({ ...values });

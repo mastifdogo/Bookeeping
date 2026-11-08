@@ -342,7 +342,11 @@ Requests run in the user's current organization, and `ctx.db`,
 module is written as if there were one set of books. `req.user.role` is the
 user's role in that organization and `req.user.organization` is
 `{ id, name, kind }` (`kind`: `business` or `personal`; id 1 is the main
-books). Settings, `ctx.llm` and `ctx.gmail` are shared by the whole server.
+books). Settings are per organization too (Ledger 0.11.1 and later): each
+organization's admins fill in the module's form for their books, and
+`ctx.settings.get()` returns the values of the organization the code runs in
+(`onChange` is called inside that organization). New organizations start
+from the defaults. `ctx.llm` and `ctx.gmail` are shared by the whole server.
 
 Work outside a request (timers, startup) runs in the main books. Repeat it
 for every organization with `forEach`:
