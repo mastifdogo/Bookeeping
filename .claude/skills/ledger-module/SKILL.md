@@ -43,7 +43,11 @@ Decide, and state briefly to the user:
   currencies together.
 - **Books**: what it posts to the ledger, if anything. Post only through
   `ctx.ledger.createJournalEntry(entry, req.user)` (balanced per currency),
-  undo with `reverseJournalEntry`. Account codes the module uses are
+  undo with `reverseJournalEntry`. Link every entry to the record it came
+  from (`links: [{ ref, label, href }]` on `createJournalEntry`, or
+  `ctx.ledger.linkJournalEntry`; Ledger 0.11.2) so people can jump from the
+  journal to the invoice or bank line, and find a record's entries with
+  `ctx.ledger.linkedEntries(ref)`. Account codes the module uses are
   **settings** (e.g. `receivable_account`, default `1200`), never hard-coded.
 - **Settings**: everything the user configures (API keys as `secret`
   fields, account codes, options) goes in the manifest's `settings.fields`.
@@ -51,12 +55,15 @@ Decide, and state briefly to the user:
   organization (Ledger 0.11.1): read them with `ctx.settings.get()` where
   they're used, never cache one copy for the whole server.
 - **Dashboard**: what deserves a notification or a to-do (`ctx.dashboard`).
-- **AI, Gmail, search**: AI goes through `ctx.llm` (the admin's provider,
-  never the module's own key), mail through `ctx.gmail` (never your own
-  OAuth/IMAP), and records worth finding through `ctx.search.provide`. These
-  need Ledger 0.10.0, and the admin must allow the module under Settings →
-  AI / Gmail: say so in the README and show `ctx.llm.status()` /
-  `ctx.gmail.status()` in the UI when it isn't allowed yet.
+- **AI, Gmail, search**: AI goes through `ctx.llm` (the admin's LLM
+  connections, never the module's own key), mail through `ctx.gmail` (never
+  your own OAuth/IMAP), and records worth finding through
+  `ctx.search.provide`. These need Ledger 0.10.0, and the admin must allow
+  the module under Settings → LLM API / Gmail: say so in the README and show
+  `ctx.llm.status()` / `ctx.gmail.status()` in the UI when it isn't allowed
+  yet. Pictures (receipts, photos) go in `images: [{ media_type, data }]`
+  (Ledger 0.11.2): they reach the connection set up for images, which may be
+  a different model than the one for text; check `status().images.configured`.
 - **AI only proposes; a person approves**: anything an LLM decides
   (`ctx.llm` output) must be approved by a human before it takes effect:
   posting or reversing entries, sending mail, changing or deleting records,

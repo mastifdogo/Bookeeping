@@ -1321,7 +1321,7 @@ async function loadModules(t: any, app: any, mods: Record<string, string | { cod
 	await app.modules.loadAll(app);
 }
 
-test("AI provider shared with modules", async (t) => {
+test("LLM API connections shared with modules", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;
 	const { app, call } = ta;
@@ -1331,28 +1331,40 @@ test("AI provider shared with modules", async (t) => {
 			ctx.route("GET", "/status", () => ctx.llm.status());
 			ctx.route("POST", "/ask", (req) => ctx.llm.json({ system: "Be brief.", prompt: req.body.q, schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } }));
 			ctx.route("POST", "/chat", (req) => ctx.llm.complete({ messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }, { role: "user", content: req.body.q }] }));
+			ctx.route("POST", "/look", (req) => ctx.llm.complete({ prompt: req.body.q, images: [{ media_type: "image/png", data: "iVBORw0KGgo=" }], connection: req.body.connection }));
 		}`,
 		other: `export default function (ctx) { ctx.route("POST", "/ask", () => ctx.llm.complete({ prompt: "x" })); }`,
 	});
+	const claude = { id: "main", name: "Claude", provider: "anthropic", api_key: "sk-test", base_url: ai.base, model: "claude-sonnet-5-5", uses: ["text"] };
 
 	let r = await call("GET", "/integrations/llm");
 	expectStatus(r, 200);
 	assert.equal(r.json().available, false);
-	expectStatus(await call("PUT", "/integrations/llm", { provider: "anthropic" }), 409);
+	expectStatus(await call("PUT", "/integrations/llm", { connections: [claude] }), 409);
 	await mkdir(app.integrations.dir, { mode: 0o700 });
 
 	// Not set up yet: modules get a clear 409.
 	r = await call("POST", "/m/sorter/ask", { q: "hello" });
 	expectStatus(r, 409);
-	assert.match(r.json().error.message, /Settings → AI/);
+	assert.match(r.json().error.message, /Settings → LLM API/);
 
-	r = await call("PUT", "/integrations/llm", { provider: "anthropic", api_key: "sk-test", base_url: ai.base, model: "claude-sonnet-5-5", allow_modules: ["sorter"] });
+	r = await call("PUT", "/integrations/llm", { connections: [claude], allow_modules: ["sorter"] });
 	expectStatus(r, 200);
 	assert.equal(r.json().config.configured, true);
-	assert.equal(r.json().config.has_api_key, true);
+	assert.equal(r.json().config.images_configured, false);
+	assert.equal(r.json().config.connections[0].has_api_key, true);
 	assert.equal(JSON.stringify(r.json()).includes("sk-test"), false); // the key never leaves the server
 	assert.deepEqual(r.json().modules.map((m: any) => m.id).sort(), ["other", "sorter"]);
-	for (const bad of [{ provider: "gpt" }, { base_url: "ftp://x" }, { allow_modules: ["Bad Id"] }, { max_tokens: 10 }, { key: 1 }]) {
+	for (const bad of [
+		{ connections: [{ ...claude, provider: "gpt" }] },
+		{ connections: [{ ...claude, base_url: "ftp://x" }] },
+		{ connections: [claude, claude] },
+		{ connections: [{ ...claude, id: "text" }] },
+		{ connections: [{ ...claude, uses: ["video"] }] },
+		{ connections: [{ ...claude, max_tokens: 10 }] },
+		{ allow_modules: ["Bad Id"] },
+		{ provider: "anthropic" },
+	]) {
 		expectStatus(await call("PUT", "/integrations/llm", bad), 422);
 	}
 
@@ -1372,24 +1384,75 @@ test("AI provider shared with modules", async (t) => {
 	assert.equal(ai.requests.at(-1)!.body.messages.length, 3);
 	r = await call("POST", "/m/other/ask");
 	expectStatus(r, 403); // not allowed
-	assert.match(r.json().error.message, /allow it under Settings → AI/);
-	assert.deepEqual((await call("GET", "/m/sorter/status")).json(), { configured: true, allowed: true, provider: "anthropic", model: "claude-sonnet-5-5", readsPdf: true });
+	assert.match(r.json().error.message, /allow it under Settings → LLM API/);
 
-	// Ollama and OpenAI-compatible servers.
-	await call("PUT", "/integrations/llm", { provider: "ollama", model: "qwen3:14b", api_key: "" });
-	r = await call("POST", "/m/sorter/ask", { q: "local?" });
-	assert.deepEqual(r.json().data, { answer: "local?" });
+	// Images need a connection for images.
+	r = await call("POST", "/m/sorter/look", { q: "what is this?" });
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /images/);
+	// A second connection, a local vision model, answers requests with pictures; the key of "main" is kept.
+	const { api_key: _key, ...claudeNoKey } = claude;
+	r = await call("PUT", "/integrations/llm", {
+		connections: [claudeNoKey, { id: "vision", name: "Local vision", provider: "ollama", model: "qwen2.5vl:7b", base_url: ai.base, uses: ["images"] }],
+	});
+	expectStatus(r, 200);
+	assert.equal(r.json().config.images_configured, true);
+	assert.equal(r.json().config.connections[0].has_api_key, true);
+	r = await call("POST", "/m/sorter/look", { q: "what is this?" });
+	expectStatus(r, 200);
+	let last = ai.requests.at(-1)!;
+	assert.equal(last.path, "/api/chat");
+	assert.deepEqual(last.body.messages.at(-1).images, ["iVBORw0KGgo="]);
+	assert.equal((await call("POST", "/m/sorter/ask", { q: "text?" })).json().data.answer, "text?");
+	assert.equal(ai.requests.at(-1)!.path, "/v1/messages", "text still goes to Claude");
+	// A module can pick a connection by id: pictures to Claude.
+	r = await call("POST", "/m/sorter/look", { q: "and Claude?", connection: "main" });
+	expectStatus(r, 200);
+	last = ai.requests.at(-1)!;
+	assert.equal(last.path, "/v1/messages");
+	assert.equal(last.body.messages.at(-1).content[0].type, "image");
+	expectStatus(await call("POST", "/m/sorter/look", { q: "x", connection: "nope" }), 409);
+	expectStatus(await call("POST", "/integrations/llm/test", { connection: "vision" }), 200);
 	assert.equal(ai.requests.at(-1)!.path, "/api/chat");
-	await call("PUT", "/integrations/llm", { provider: "openai", base_url: ai.base + "/v1", model: "local-model" });
-	r = await call("POST", "/m/sorter/ask", { q: "compatible?" });
-	assert.deepEqual(r.json().data, { answer: "compatible?" });
-	assert.equal(ai.requests.at(-1)!.path, "/v1/chat/completions");
+	const status = (await call("GET", "/m/sorter/status")).json();
+	assert.equal(status.configured, true);
+	assert.equal(status.provider, "anthropic");
+	assert.deepEqual(status.images, { configured: true, provider: "ollama", model: "qwen2.5vl:7b" });
+	assert.equal(status.readsPdf, false);
+	assert.deepEqual(status.connections.map((x: any) => x.id), ["main", "vision"]);
 
-	// Usage per module.
+	// OpenAI-compatible servers get pictures as data URLs.
+	await call("PUT", "/integrations/llm", { connections: [claudeNoKey, { id: "vision", name: "LM Studio", provider: "openai", model: "local-vl", base_url: ai.base + "/v1", uses: ["images"] }] });
+	r = await call("POST", "/m/sorter/look", { q: "compatible?" });
+	expectStatus(r, 200);
+	last = ai.requests.at(-1)!;
+	assert.equal(last.path, "/v1/chat/completions");
+	assert.equal(last.body.messages.at(-1).content[1].image_url.url, "data:image/png;base64,iVBORw0KGgo=");
+
+	// Usage per module and connection.
 	r = await call("GET", "/integrations/llm");
 	const usage = Object.fromEntries(r.json().usage.last_30_days.map((u: any) => [u.source, [u.calls, u.failed]]));
-	// Only calls that reach the provider are logged (not the refused ones).
-	assert.deepEqual(usage, { sorter: [4, 0], ledger: [1, 0] });
+	// Only calls that reach a provider are logged (not the refused ones).
+	assert.deepEqual(usage, { sorter: [6, 0], ledger: [2, 0] });
+	assert.equal(r.json().usage.recent[0].connection, "vision");
+});
+
+test("LLM API settings from Ledger 0.11.1 become one connection", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await mkdir(app.integrations.dir, { mode: 0o700 });
+	await writeFile(path.join(app.integrations.dir, "llm.json"), JSON.stringify({ provider: "anthropic", model: "claude-haiku-5-5", base_url: "", api_key: "sk-old", effort: "medium", max_tokens: 8000, allow_modules: ["x-mod"] }));
+	const r = await call("GET", "/integrations/llm");
+	expectStatus(r, 200);
+	const cfg = r.json().config;
+	assert.equal(cfg.connections.length, 1);
+	assert.deepEqual(
+		{ ...cfg.connections[0], configured: undefined },
+		{ id: "main", name: "Main", provider: "anthropic", model: "claude-haiku-5-5", base_url: "", effort: "medium", max_tokens: 8000, uses: ["text", "images"], has_api_key: true, configured: undefined },
+	);
+	assert.deepEqual(cfg.allow_modules, ["x-mod"]);
+	assert.equal(cfg.images_configured, true);
 });
 
 test("Gmail shared with modules", async (t) => {
@@ -1715,4 +1778,50 @@ test("module settings belong to each organization", async (t) => {
 	expectStatus(await call("POST", "/users", { username: "vic", password: "vic-password", role: "viewer", organization: { mode: "existing", organization_id: 2 } }), 201);
 	r = await request("POST", "/api/v1/auth/login", { body: { username: "vic", password: "vic-password" } });
 	expectStatus(await request("GET", "/api/v1/modules/greeter/settings", { cookie: `${SESSION_COOKIE}=${sessionFrom(r).value}` }), 403);
+});
+
+test("journal entries link to module records", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	for (const a of [
+		{ code: "1000", name: "Bank", type: "asset", currency: "CAD" },
+		{ code: "4000", name: "Sales", type: "revenue", currency: "CAD" },
+	]) expectStatus(await call("POST", "/accounts", a), 201);
+	await loadModules(t, app, {
+		sales: `export default function (ctx) {
+			ctx.route("POST", "/invoice", (req) => ctx.ledger.createJournalEntry({ entry_date: "2026-11-01", description: "Invoice 31",
+				lines: [{ account_code: "1000", debit_cents: 5000 }, { account_code: "4000", credit_cents: 5000 }],
+				links: req.body.links }, req.user));
+			ctx.route("POST", "/link/:id", (req) => ctx.ledger.linkJournalEntry(req.params.id, req.body, req.user));
+			ctx.route("DELETE", "/link/:id/:ref", async (req) => ({ removed: await ctx.ledger.unlinkJournalEntry(req.params.id, req.params.ref) }));
+			ctx.route("GET", "/linked", (req) => ctx.ledger.linkedEntries(req.query.get("ref") ?? undefined));
+		}`,
+	});
+	let r = await call("POST", "/m/sales/invoice", { links: [{ ref: "invoice:31", label: "Invoice 31 · Acme", href: "/apps/sales?invoice=31" }] });
+	expectStatus(r, 200);
+	const id = r.json().id;
+	assert.deepEqual(r.json().links.map((l: any) => [l.module_id, l.ref, l.label, l.href]), [["sales", "invoice:31", "Invoice 31 · Acme", "/apps/sales?invoice=31"]]);
+
+	// A bad link posts nothing.
+	const before = await ta.countRows("journal_entries");
+	expectStatus(await call("POST", "/m/sales/invoice", { links: [{ ref: "x", label: "X", href: "https://evil.example" }] }), 422);
+	expectStatus(await call("POST", "/m/sales/invoice", { links: [{ ref: "", label: "X" }] }), 422);
+	assert.equal(await ta.countRows("journal_entries"), before);
+
+	// Links added later show on the entry and in the journal.
+	expectStatus(await call("POST", `/m/sales/link/${id}`, { ref: "payment:7", label: "Payment 7" }), 200);
+	r = await call("GET", `/journal-entries/${id}`);
+	assert.deepEqual(r.json().links.map((l: any) => l.ref), ["invoice:31", "payment:7"]);
+	assert.equal((await call("GET", "/journal-entries")).json().data[0].links.length, 2);
+	assert.deepEqual((await call("GET", "/m/sales/linked?ref=payment:7")).json(), [{ entry_id: id, ref: "payment:7", label: "Payment 7", href: "", reversed: false }]);
+
+	// Reversing doesn't remove links; the module sees the entry is reversed.
+	expectStatus(await call("POST", `/journal-entries/${id}/reverse`, {}), 201);
+	assert.equal((await call("GET", "/m/sales/linked?ref=invoice:31")).json()[0].reversed, true);
+
+	assert.deepEqual((await call("DELETE", `/m/sales/link/${id}/payment:7`)).json(), { removed: true });
+	assert.deepEqual((await call("DELETE", `/m/sales/link/${id}/payment:7`)).json(), { removed: false });
+	expectStatus(await call("POST", "/m/sales/link/999999", { ref: "a", label: "A" }), 404);
+	expectStatus(await call("POST", "/m/sales/link/abc", { ref: "a", label: "A" }), 404);
 });

@@ -139,7 +139,7 @@ rest of Ledger runs normally.
 | `ledger.*` | Ledger's own functions; see below. |
 | `dashboard.*` | Notifications and to-dos on Ledger's dashboard (Ledger 0.8.0 and later); see below. |
 | `settings.*` | Values of the settings the manifest declares (Ledger 0.9.0 and later); see below. |
-| `llm.*` | The AI provider set up under Settings → AI (Ledger 0.10.0 and later); see below. |
+| `llm.*` | The LLM connections set up under Settings → LLM API (Ledger 0.10.0 and later); see below. |
 | `gmail.*` | The Gmail account connected under Settings → Gmail (Ledger 0.10.0 and later); see below. |
 | `search.provide(fn)` | Adds your results to Ledger's search bar (Ledger 0.10.0 and later); see below. |
 | `HttpError` | `throw new ctx.HttpError(404, "no such invoice")` answers with that status and message. |
@@ -181,6 +181,9 @@ amounts can be numbers, bigints or digit strings.
 | `listJournalEntries({ from, to, accountCode, limit, offset })`, `getJournalEntry(id)` | |
 | `createJournalEntry({ entry_date, description, reference, lines: [{ account_code, debit_cents, credit_cents, memo }] }, req.user)` | Pass `req.user` so the entry is recorded as posted by that user. Invalid entries throw, and the API answers 422 with the details. |
 | `reverseJournalEntry(id, { entry_date, description }, req.user)` | |
+| `linkJournalEntry(id, { ref, label, href }, req.user)` | Links an entry to one of the module's records (Ledger 0.11.2 and later). `createJournalEntry` also takes `links: [{ ref, label, href }]`. |
+| `unlinkJournalEntry(id, ref)` | Removes one of the module's links. |
+| `linkedEntries(ref?)` | `[{ entry_id, ref, label, href, reversed }]` for one record, or all of the module's links. |
 | `trialBalance({ asOf, currency })`, `balanceSheet({ asOf, currency })`, `incomeStatement({ from, to, currency })` | |
 
 **`ctx.dashboard`** puts notifications and to-dos on Ledger's dashboard,
@@ -217,9 +220,16 @@ await ctx.dashboard.list({ kind: "todo", open: true }); // your module's items
 
 ## AI (`ctx.llm`)
 
-An admin chooses one AI provider under **Settings → AI**: Claude (Anthropic
-API), Ollama, or any OpenAI-compatible server, and ticks the modules allowed
-to use it. Modules never see the API key. Every call is logged per module.
+An admin sets up LLM connections under **Settings → LLM API**: Claude
+(Anthropic API), Ollama, or any OpenAI-compatible server, and ticks the
+modules allowed to use them. Modules never see the API keys. Every call is
+logged per module and connection.
+
+Since Ledger 0.11.2 there can be several connections, each used for text,
+for images and documents, or both: for example Claude for text and a local
+vision model for receipts. A request with `images` or `documents` goes to
+the first connection for images, anything else to the first one for text.
+Pass `connection: "<id>"` to use a particular one.
 
 What the AI decides is only ever a suggestion: a module stores it as pending,
 shows it, and acts (posts an entry, sends mail, changes or deletes a record)
@@ -227,7 +237,7 @@ only after a person with the right role approves it in the module's page.
 Nothing happens on AI output alone, including in background jobs.
 
 ```js
-const s = await ctx.llm.status(); // { configured, allowed, provider, model, readsPdf }
+const s = await ctx.llm.status(); // { configured, allowed, provider, model, readsPdf, images: { configured, provider, model }, connections }
 
 // Plain text
 const { text } = await ctx.llm.complete({ system: "You are a bookkeeper.", prompt: "Summarise: …", maxTokens: 500 });
@@ -242,11 +252,14 @@ const { data } = await ctx.llm.json({
 // A conversation, and PDFs (read by Claude; others get the text only)
 await ctx.llm.complete({ messages: [{ role: "user", content: "…" }, { role: "assistant", content: "…" }, { role: "user", content: "…" }] });
 await ctx.llm.json({ prompt: "Read this bill", schema, documents: [{ media_type: "application/pdf", data: base64, name: "bill.pdf" }] });
+
+// Pictures (PNG, JPEG, GIF, WebP; at most 20), sent to the connection for images
+await ctx.llm.json({ prompt: "Read this receipt", schema, images: [{ media_type: "image/jpeg", data: base64 }] });
 ```
 
 Results: `{ text, data?, model, usage: { input_tokens, output_tokens } }`.
 Errors throw an `HttpError`, which a route handler can let through: 409 when
-no provider is set up, 403 when the module isn't allowed, 502 when the
+no connection for that kind of request is set up, 403 when the module isn't allowed, 502 when the
 provider fails, 422 when the model declines. The messages say where to fix
 it. `maxTokens` is capped by the admin's limit.
 

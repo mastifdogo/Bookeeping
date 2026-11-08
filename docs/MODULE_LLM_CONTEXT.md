@@ -161,8 +161,11 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
 | `accountLedger(code, { from?, to? })` | `{ account, opening_balance_cents, closing_balance_cents, lines: [{ journal_entry_id, line_id, entry_date, description, reference, memo, debit_cents, credit_cents, running_balance_cents }] }` |
 | `listJournalEntries({ from?, to?, accountCode?, limit? (1-500, default 50), offset? })` | `JournalEntry[]`, newest first |
 | `getJournalEntry(id)` | `JournalEntry` |
-| `createJournalEntry({ entry_date, description, reference?, lines: [{ account_code, debit_cents?, credit_cents?, memo? }] }, req.user)` | `JournalEntry`. Amounts: number, bigint or digit string. Pass `req.user` to attribute it. Invalid → throws (API answers 422). |
+| `createJournalEntry({ entry_date, description, reference?, lines: [{ account_code, debit_cents?, credit_cents?, memo? }], links?: [{ ref, label, href? }] }, req.user)` | `JournalEntry`. Amounts: number, bigint or digit string. Pass `req.user` to attribute it. `links` (Ledger ≥ 0.11.2) are saved in the same transaction. Invalid → throws (API answers 422). |
 | `reverseJournalEntry(id, { entry_date?, description? }, req.user)` | the reversing `JournalEntry` |
+| `linkJournalEntry(id, { ref, label, href? }, req.user)` | `JournalEntry` (Ledger ≥ 0.11.2). Links the entry to one of your records; the same `ref` again updates it. |
+| `unlinkJournalEntry(id, ref)` | `true`, or `false` if there was no such link (only your own links) |
+| `linkedEntries(ref?)` | `[{ entry_id, ref, label, href, reversed }]`: entries linked to that record (all of your links without `ref`) |
 | `trialBalance({ asOf?, currency? })` | `{ as_of, rows: [{ account_code, account_name, account_type, currency, debit_cents, credit_cents }], totals: [{ currency, debit_cents, credit_cents }] }` |
 | `balanceSheet({ asOf?, currency? })` | `{ as_of, currencies: [{ currency, assets, liabilities, equity: ReportLine[], net_income_cents, total_assets_cents, total_liabilities_cents, total_equity_cents, balanced }] }` |
 | `incomeStatement({ from?, to?, currency? })` | `{ from, to, currencies: [{ currency, revenue, expenses: ReportLine[], total_revenue_cents, total_expenses_cents, net_income_cents }] }` |
@@ -171,7 +174,15 @@ Dates are `"YYYY-MM-DD"` strings. `ReportLine = { account_code, account_name, am
 
 `Account = { code, name, type, currency, description, is_active, balance_cents, created_at, updated_at }`
 
-`JournalEntry = { id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, posted_at, totals: [{ currency, amount_cents }], lines: [{ id, line_number, account_code, account_name, currency, debit_cents, credit_cents, memo }] }`
+`JournalEntry = { id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, posted_at, totals: [{ currency, amount_cents }], lines: [{ id, line_number, account_code, account_name, currency, debit_cents, credit_cents, memo }], links: [{ module_id, ref, label, href, created_at }] }`
+
+**Links** (Ledger ≥ 0.11.2): link each entry you post to the record it came
+from (an invoice, a bank line, a bill): `ref` is your own key
+(`"invoice:31"`, ≤ 200 chars), `label` what people see (`"Invoice 31 ·
+Acme"`), `href` where it opens in Ledger (`/apps/<id>?invoice=31`, optional).
+Ledger shows them on the entry and in the journal. Use `linkedEntries(ref)` to
+find a record's entries (e.g. to see whether an invoice was posted or
+reversed) instead of storing entry ids only in your own tables.
 
 ### Settings (manifest `settings`, Ledger ≥ 0.9.0)
 
@@ -278,22 +289,29 @@ const api = (path, opts = {}) =>
 ### ctx.llm (Ledger ≥ 0.10.0)
 
 **Never call an AI API yourself and never ask for an AI API key in your
-settings.** The admin sets one provider (Claude, Ollama or an
-OpenAI-compatible server) under Settings → AI and ticks which modules may
-use it; the key never reaches modules.
+settings.** The admin sets up LLM connections (Claude, Ollama or an
+OpenAI-compatible server) under Settings → LLM API and ticks which modules
+may use them; keys never reach modules. Since Ledger 0.11.2 there can be
+several connections: one for text and one for images and documents (e.g. a
+local vision model). Requests with `images` or `documents` go to the
+connection for images, others to the one for text; `connection: "<id>"`
+picks one by id.
 
 ```js
-const st = await ctx.llm.status(); // { configured, allowed, provider, model, readsPdf }
+const st = await ctx.llm.status();
+// { configured, allowed, provider, model, readsPdf, images: { configured, provider, model }, connections: [{ id, name, uses, provider, model }] }
 const { text } = await ctx.llm.complete({ system: "…", prompt: "…", maxTokens: 800 });
 const { data } = await ctx.llm.json({ system: "…", prompt: "…", schema: { type: "object", properties: { … }, required: [ … ] } });
 // also: messages: [{ role: "user" | "assistant", content }], documents: [{ media_type: "application/pdf", data: base64, name }]
+//       images: [{ media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp", data: base64 }] (≤ 20; Ledger ≥ 0.11.2)
+//       connection: "vision" (a connection id) or "text" / "images"
 // result: { text, data?, model, usage: { input_tokens, output_tokens } }
 ```
 
 Errors are `HttpError`s (409 not set up, 403 module not allowed, 502 provider
 failed, 422 declined) whose messages tell the user where to fix it. Let them
 propagate from route handlers, or catch them and show `status()` in the UI
-("Ask an admin to allow <module> under Settings → AI"). Batch work (e.g. 40
+("Ask an admin to allow <module> under Settings → LLM API"). Batch work (e.g. 40
 transactions per call) rather than one call per item. Use `json()` with a
 strict schema for anything the code parses.
 
@@ -416,7 +434,8 @@ database.
 - [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`), with a drawn `nav.icon` that fits the module
 - [ ] background jobs that touch the books run through `ctx.orgs.forEach` so every organization gets them
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
-- [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → AI / Gmail
+- [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → LLM API / Gmail
+- [ ] entries posted from module records carry `links` (Ledger ≥ 0.11.2)
 - [ ] every action an LLM proposes waits for a person to approve it (pending suggestions in the UI; nothing posted, sent or changed on AI output alone)
 - [ ] searchable records exposed with `ctx.search.provide`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`

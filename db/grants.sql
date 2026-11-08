@@ -27,6 +27,7 @@ GRANT SELECT, INSERT, DELETE          ON llm_usage                              
 GRANT SELECT, INSERT, UPDATE, DELETE  ON module_files                            TO :"app_role";
 GRANT SELECT, INSERT, UPDATE          ON organizations                           TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON memberships                             TO :"app_role";
+GRANT SELECT, INSERT, UPDATE, DELETE  ON journal_entry_links                     TO :"app_role";
 -- Read-only, so pg_dump (run as this role for backups) can include it.
 GRANT SELECT                          ON schema_migrations                       TO :"app_role";
 

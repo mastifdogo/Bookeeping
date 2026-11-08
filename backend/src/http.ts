@@ -907,7 +907,14 @@ async function handlePutLlm(c: Ctx): Promise<void> {
 async function handleTestLlm(c: Ctx): Promise<void> {
 	await requireIntegrations(c.app.integrations.dir);
 	const started = Date.now();
-	const r = await llmComplete(c.app, "ledger", { prompt: "Reply with the single word OK.", maxTokens: 50 });
+	const body = await decodeBody(c, false, (v) => {
+		const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
+		if (v !== null && v !== undefined && (!o || Object.keys(o).some((k) => k !== "connection") || (o.connection !== undefined && typeof o.connection !== "string"))) {
+			throw new DecodeError('expected {"connection": "<id>"}');
+		}
+		return (o ?? {}) as { connection?: string };
+	});
+	const r = await llmComplete(c.app, "ledger", { prompt: "Reply with the single word OK.", maxTokens: 50, connection: body?.connection });
 	writeJSON(c.res, 200, { text: r.text.trim().slice(0, 200), model: r.model, duration_ms: Date.now() - started });
 }
 

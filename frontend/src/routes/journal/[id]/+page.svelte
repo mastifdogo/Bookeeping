@@ -1,11 +1,14 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import Amount from '#lib/components/Amount.svelte';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, today, unwrap } from '#lib/api/client.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
+	// Module names for links, from the sidebar's module entries.
+	const moduleName = (id: string) => page.data.modules?.find((m: { id: string }) => m.id === id)?.label ?? id;
 	let e = $derived(data.entry);
 
 	let reversing = $state(false);
@@ -71,6 +74,20 @@
 	</div>
 </div>
 
+{#if e.links.length > 0}
+	<div class="card links">
+		<div class="muted small">Linked records</div>
+		<ul>
+			{#each e.links as l (l.module_id + ':' + l.ref)}
+				<li>
+					{#if l.href}<a href={l.href}>{l.label}</a>{:else}{l.label}{/if}
+					<span class="muted small">from {moduleName(l.module_id)}</span>
+				</li>
+			{/each}
+		</ul>
+	</div>
+{/if}
+
 <div class="table-wrap">
 	<table>
 		<thead>
@@ -100,3 +117,14 @@
 		</tfoot>
 	</table>
 </div>
+
+<style>
+	.links ul {
+		list-style: none;
+		margin: 0.35rem 0 0;
+		padding: 0;
+	}
+	.links li {
+		padding: 0.15rem 0;
+	}
+</style>

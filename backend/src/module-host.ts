@@ -15,16 +15,16 @@ import { HttpError } from "./errors.ts";
 import { log } from "./log.ts";
 import { compatible, scanInstalled, type InstalledModule, type ModuleManifest } from "./modules.ts";
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts } from "./accounts.ts";
-import { createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry } from "./ledger.ts";
+import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { moduleValues, saveSettings, type SettingValue } from "./module-settings.ts";
 import type { SearchProvider } from "./search.ts";
-import { llmComplete, llmReady, readLlmConfig, type LlmRequest } from "./llm.ts";
+import { connectionReady, llmComplete, pickConnection, readLlmConfig, type LlmRequest } from "./llm.ts";
 import { gmailFor } from "./gmail.ts";
 import { filesFor, type FileSummary } from "./module-files.ts";
 import { currentOrg, forEachOrg, getOrganization, listOrganizations, type OrgKind } from "./orgs.ts";
 import { listBySource, postItem, removeByKey, setClosedByKey, type ItemInput, type ItemKind } from "./dashboard.ts";
-import { isCurrency, publicUser, type AccountCreate, type Currency, type JournalEntryCreate, type User } from "./types.ts";
+import { isCurrency, publicUser, type EntryLinkInput, type AccountCreate, type Currency, type JournalEntryCreate, type User } from "./types.ts";
 
 export type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 const METHODS: readonly Method[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -104,6 +104,14 @@ function toEntry(e: unknown): JournalEntryCreate {
 	};
 }
 
+/** A journal entry id from a module (number, bigint or digits); anything else is "not found". */
+function entryIdOf(v: unknown): bigint {
+	if (typeof v === "bigint" && v > 0n) return v;
+	if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return BigInt(v);
+	if (typeof v === "string" && /^[1-9]\d{0,17}$/.test(v)) return BigInt(v);
+	throw new HttpError(404, "no such journal entry", "not_found");
+}
+
 const cur = (c: string | null | undefined): Currency | null => (c && isCurrency(c.toUpperCase()) ? (c.toUpperCase() as Currency) : null);
 
 // Users passed to modules: the internal id stays out of reach of the module's
@@ -167,14 +175,26 @@ function makeContext(app: App, m: LoadedModule) {
 			},
 		},
 		/**
-		 * The AI provider set up under Settings → AI (an admin must allow this
-		 * module there). complete() returns { text, model, usage }; json() also
-		 * parses the answer against a JSON schema into data.
+		 * The LLM connections set up under Settings → LLM API (an admin must
+		 * allow this module there). complete() returns { text, model, usage };
+		 * json() also parses the answer against a JSON schema into data.
+		 * Requests with images or documents go to the connection for images,
+		 * others to the one for text, unless r.connection names one.
 		 */
 		llm: {
 			status: async () => {
 				const c = await readLlmConfig(app.integrations.dir);
-				return { configured: llmReady(c), allowed: c.allow_modules.includes(id), provider: c.provider || null, model: c.model || null, readsPdf: c.provider === "anthropic" };
+				const text = pickConnection(c, "text");
+				const images = pickConnection(c, "images");
+				return {
+					configured: text !== null,
+					allowed: c.allow_modules.includes(id),
+					provider: text?.provider ?? null,
+					model: text?.model || null,
+					images: { configured: images !== null, provider: images?.provider ?? null, model: images?.model || null },
+					readsPdf: images?.provider === "anthropic",
+					connections: c.connections.filter(connectionReady).map((x) => ({ id: x.id, name: x.name, uses: [...x.uses], provider: x.provider, model: x.model })),
+				};
 			},
 			complete: (r: LlmRequest) => llmComplete(app, id, { ...r, schema: undefined }),
 			json: (r: LlmRequest & { schema: object }) => {
@@ -261,8 +281,23 @@ function makeContext(app: App, m: LoadedModule) {
 					offset: Math.max(f.offset ?? 0, 0),
 				}),
 			getJournalEntry: (entryId: number | bigint) => getJournalEntry(app, BigInt(entryId)),
-			/** Posts a balanced entry; pass the request's user so it is attributed to them. */
-			createJournalEntry: (entry: unknown, user?: { username: string }) => createJournalEntry(app, toEntry(entry), actorOf(user)),
+			/**
+			 * Posts a balanced entry; pass the request's user so it is attributed
+			 * to them. entry.links: [{ ref, label, href? }] links it to this
+			 * module's records in the same transaction.
+			 */
+			createJournalEntry: (entry: unknown, user?: { username: string }) => {
+				const links = (entry as { links?: unknown } | null)?.links;
+				if (links !== undefined && (!Array.isArray(links) || links.length > 50)) throw new HttpError(422, "links must be a list of at most 50 { ref, label, href? }");
+				return createJournalEntry(app, toEntry(entry), actorOf(user), links ? { moduleId: id, links: links as EntryLinkInput[] } : undefined);
+			},
+			/** Links an existing entry to one of this module's records ({ ref, label, href? }); the same ref again updates it. */
+			linkJournalEntry: (entryId: number | bigint | string, link: EntryLinkInput, user?: { username: string }) =>
+				linkJournalEntry(app, entryIdOf(entryId), id, link, actorOf(user)),
+			/** Removes this module's link with that ref from an entry; false if there was none. */
+			unlinkJournalEntry: (entryId: number | bigint | string, ref: string) => unlinkJournalEntry(app, entryIdOf(entryId), id, ref),
+			/** Entries linked to one of this module's records (all of them without ref): [{ entry_id, ref, label, href, reversed }]. */
+			linkedEntries: (ref?: string) => linkedEntries(app, id, ref === undefined ? undefined : String(ref)),
 			reverseJournalEntry: (entryId: number | bigint, opts: { entry_date?: string; description?: string } = {}, user?: { username: string }) =>
 				reverseJournalEntry(app, BigInt(entryId), opts, actorOf(user)),
 			trialBalance: (opts: { asOf?: string; currency?: string } = {}) => getTrialBalance(app, opts.asOf ?? null, cur(opts.currency)),

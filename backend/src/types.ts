@@ -96,6 +96,22 @@ export interface JournalEntry {
 	posted_at: Date;
 	totals: CurrencyTotal[];
 	lines: JournalLine[];
+	/** Module records linked to this entry. */
+	links: EntryLink[];
+}
+
+export interface EntryLink {
+	module_id: string;
+	ref: string;
+	label: string;
+	href: string;
+	created_at: Date;
+}
+
+export interface EntryLinkInput {
+	ref: string;
+	label: string;
+	href?: string;
 }
 
 export interface ReverseRequest {

@@ -313,3 +313,22 @@ tfoot td {
 		border: none;
 	}
 }
+/* A journal entry's link to a module record. */
+.link-chip {
+	display: inline-block;
+	margin-left: 0.4rem;
+	font-size: 0.75rem;
+	padding: 0.02rem 0.45rem;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	color: var(--muted);
+	white-space: nowrap;
+	max-width: 14rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: middle;
+}
+a.link-chip:hover {
+	color: var(--accent);
+	border-color: var(--accent);
+}

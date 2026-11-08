@@ -1223,7 +1223,7 @@ paths:
     get:
       tags: [Integrations]
       operationId: getLlm
-      summary: The AI provider shared with modules, and its usage (admin)
+      summary: The LLM API connections shared with modules, and their usage (admin)
       responses:
         '200':
           description: OK
@@ -1234,20 +1234,38 @@ paths:
     put:
       tags: [Integrations]
       operationId: putLlm
-      summary: Set the AI provider (admin); api_key omitted or null keeps it, "" clears it
+      summary: Set the LLM API connections and the modules allowed to use them (admin)
+      description: |
+        `connections` replaces the list. A connection's `api_key` omitted or
+        null keeps the saved key of the connection with the same id; "" clears
+        it. Requests with images or documents go to the first connection whose
+        `uses` has "images", the rest to the first with "text", unless a
+        module names a connection id.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
-                provider: { type: string, enum: ['', anthropic, ollama, openai] }
-                model: { type: string }
-                base_url: { type: string }
-                api_key: { type: string, nullable: true }
-                effort: { type: string, enum: [low, medium, high] }
-                max_tokens: { type: integer }
+                connections:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [id, name, provider]
+                    properties:
+                      id: { type: string, pattern: '^[a-z][a-z0-9-]{0,31}$' }
+                      name: { type: string }
+                      provider: { type: string, enum: [anthropic, ollama, openai] }
+                      model: { type: string }
+                      base_url: { type: string }
+                      api_key: { type: string, nullable: true }
+                      effort: { type: string, enum: [low, medium, high] }
+                      max_tokens: { type: integer }
+                      uses: { type: array, items: { type: string, enum: [text, images] } }
                 allow_modules: { type: array, items: { type: string } }
       responses:
         '200':
@@ -1262,7 +1280,12 @@ paths:
     post:
       tags: [Integrations]
       operationId: testLlm
-      summary: Send a tiny prompt to check the provider works (admin)
+      summary: Send a tiny prompt to check a connection works (admin; the one for text by default)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, properties: { connection: { type: string } } }
       responses:
         '200':
           description: OK
@@ -1942,7 +1965,7 @@ components:
         memo: { type: string }
     JournalEntry:
       type: object
-      required: [id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, posted_at, totals, lines]
+      required: [id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, posted_at, totals, lines, links]
       properties:
         id: { type: integer, format: int64 }
         entry_date: { type: string, format: date }
@@ -1975,6 +1998,19 @@ components:
         lines:
           type: array
           items: { $ref: '#/components/schemas/JournalLine' }
+        links:
+          type: array
+          description: Module records linked to this entry (an invoice, a bank transaction, a bill)
+          items: { $ref: '#/components/schemas/EntryLink' }
+    EntryLink:
+      type: object
+      required: [module_id, ref, label, href, created_at]
+      properties:
+        module_id: { type: string, example: sales }
+        ref: { type: string, description: "The module's key for the record", example: 'invoice:31' }
+        label: { type: string, example: 'Invoice 31 · Acme' }
+        href: { type: string, description: "Where it opens in Ledger ('' for nowhere)", example: '/apps/sales?invoice=31' }
+        created_at: { type: string, format: date-time }
     ReverseRequest:
       type: object
       additionalProperties: false
@@ -2485,17 +2521,29 @@ components:
         available: { type: boolean }
         config:
           type: object
-          required: [provider, model, base_url, has_api_key, effort, max_tokens, allow_modules, configured, providers, defaults]
+          required: [connections, allow_modules, configured, images_configured, providers, uses, defaults]
           properties:
-            provider: { type: string }
-            model: { type: string }
-            base_url: { type: string }
-            has_api_key: { type: boolean }
-            effort: { type: string }
-            max_tokens: { type: integer }
+            connections:
+              type: array
+              items:
+                type: object
+                required: [id, name, provider, model, base_url, has_api_key, effort, max_tokens, uses, configured]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  provider: { type: string, enum: [anthropic, ollama, openai] }
+                  model: { type: string }
+                  base_url: { type: string }
+                  has_api_key: { type: boolean }
+                  effort: { type: string, enum: [low, medium, high] }
+                  max_tokens: { type: integer }
+                  uses: { type: array, items: { type: string, enum: [text, images] } }
+                  configured: { type: boolean }
             allow_modules: { type: array, items: { type: string } }
-            configured: { type: boolean }
+            configured: { type: boolean, description: Something answers text requests }
+            images_configured: { type: boolean, description: Something answers requests with images or documents }
             providers: { type: array, items: { type: string } }
+            uses: { type: array, items: { type: string } }
             defaults:
               type: object
               additionalProperties:
@@ -2524,9 +2572,10 @@ components:
               type: array
               items:
                 type: object
-                required: [source, model, input_tokens, output_tokens, ok, error, duration_ms, created_at]
+                required: [source, connection, model, input_tokens, output_tokens, ok, error, duration_ms, created_at]
                 properties:
                   source: { type: string }
+                  connection: { type: string }
                   model: { type: string }
                   input_tokens: { type: integer, nullable: true }
                   output_tokens: { type: integer, nullable: true }

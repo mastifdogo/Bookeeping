@@ -78,7 +78,12 @@
 					<tr class="clickable" onclick={(ev) => openRow(ev, `/journal/${e.id}`)}>
 						<td class="mono">{e.entry_date}</td>
 						<td><a class="quiet" href="/journal/{e.id}">{e.id}</a></td>
-						<td>{e.description}</td>
+						<td>
+							{e.description}
+							{#each e.links as l (l.module_id + ':' + l.ref)}
+								{#if l.href}<a class="link-chip" href={l.href} title="Linked from {l.module_id}">{l.label}</a>{:else}<span class="link-chip" title="Linked from {l.module_id}">{l.label}</span>{/if}
+							{/each}
+						</td>
 						<td>{e.reference}</td>
 						<td class="small mono">{[...new Set(e.lines.map((l) => l.account_code))].join(', ')}</td>
 						<td class="num"><EntryTotals totals={e.totals} /></td>

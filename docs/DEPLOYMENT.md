@@ -20,7 +20,7 @@ What runs where:
 | `/usr/local/sbin/ledger-user` | root wrapper: runs `ledger user …` with the service config |
 | `ledger-backup.service` / `.timer` | database backups (`ledger backup run`) to TrueNAS and/or Google Drive on the schedule set in the app (see step 8) |
 | `/var/lib/ledger/backup/` | backup settings, Google credentials and the last result (user `ledger`, 0700) |
-| `/var/lib/ledger/integrations/` | Settings → AI and Gmail: API key, OAuth tokens (user `ledger`, 0700; not in backups) |
+| `/var/lib/ledger/integrations/` | Settings → LLM API and Gmail: API keys, OAuth tokens (user `ledger`, 0700; not in backups) |
 | `ledger-update.timer` / `.path` | automatic updates from GitHub Releases on the schedule set in the app (see step 9) |
 | `/var/lib/ledger/update-config/` | the update schedule, written by the app (user `ledger`) |
 | `/var/lib/ledger/update-status/` | the updater's last result, written by root, shown in the app |

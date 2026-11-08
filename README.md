@@ -169,7 +169,7 @@ backend/src/module-settings.ts  Module settings declared in ledger-module.json
 backend/src/cli.ts        `ledger user add|role|passwd|disable|enable|list`
 backend/src/module-files.ts  Files modules hand each other (ctx.files)
 backend/src/search.ts     The search bar (accounts, entries, module providers)
-backend/src/llm.ts        Settings → AI and ctx.llm (Anthropic, Ollama, OpenAI-compatible)
+backend/src/llm.ts        Settings → LLM API and ctx.llm (Anthropic, Ollama, OpenAI-compatible)
 backend/src/gmail.ts      Settings → Gmail (OAuth with PKCE) and ctx.gmail
 backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
 backend/src/updater.ts    `ledger update run`: the root updater (GitHub Releases, verify, install, rollback, reboot)
@@ -311,11 +311,12 @@ and settings, accounts, journal entries by text, `#number` or amount
 
 ### AI and Gmail for modules
 
-**Settings → AI** sets one AI provider (Claude, Ollama or an
-OpenAI-compatible server) and **Settings → Gmail** connects one Gmail account
+**Settings → LLM API** holds one or more LLM connections (Claude, Ollama or
+an OpenAI-compatible server), e.g. one for text and a vision model for
+images and documents, and **Settings → Gmail** connects one Gmail account
 (Google OAuth: read, and optionally send). Modules use them through
 `ctx.llm` and `ctx.gmail` without ever seeing the keys, and only if an admin
-allows each module there. AI usage is logged per module.
+allows each module there. Usage is logged per module and connection.
 
 ### Dashboard
 

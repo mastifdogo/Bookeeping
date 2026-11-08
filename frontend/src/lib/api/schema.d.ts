@@ -852,9 +852,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The AI provider shared with modules, and its usage (admin) */
+        /** The LLM API connections shared with modules, and their usage (admin) */
         get: operations["getLlm"];
-        /** Set the AI provider (admin); api_key omitted or null keeps it, "" clears it */
+        /**
+         * Set the LLM API connections and the modules allowed to use them (admin)
+         * @description `connections` replaces the list. A connection's `api_key` omitted or
+         *     null keeps the saved key of the connection with the same id; "" clears
+         *     it. Requests with images or documents go to the first connection whose
+         *     `uses` has "images", the rest to the first with "text", unless a
+         *     module names a connection id.
+         */
         put: operations["putLlm"];
         post?: never;
         delete?: never;
@@ -872,7 +879,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Send a tiny prompt to check the provider works (admin) */
+        /** Send a tiny prompt to check a connection works (admin; the one for text by default) */
         post: operations["testLlm"];
         delete?: never;
         options?: never;
@@ -1386,6 +1393,26 @@ export interface components {
             /** @description Per-currency sum of debits (always equal to the sum of credits), ordered by currency */
             totals: components["schemas"]["CurrencyTotal"][];
             lines: components["schemas"]["JournalLine"][];
+            /** @description Module records linked to this entry (an invoice, a bank transaction, a bill) */
+            links: components["schemas"]["EntryLink"][];
+        };
+        EntryLink: {
+            /** @example sales */
+            module_id: string;
+            /**
+             * @description The module's key for the record
+             * @example invoice:31
+             */
+            ref: string;
+            /** @example Invoice 31 · Acme */
+            label: string;
+            /**
+             * @description Where it opens in Ledger ('' for nowhere)
+             * @example /apps/sales?invoice=31
+             */
+            href: string;
+            /** Format: date-time */
+            created_at: string;
         };
         ReverseRequest: {
             /**
@@ -1817,15 +1844,27 @@ export interface components {
         LlmInfo: {
             available: boolean;
             config: {
-                provider: string;
-                model: string;
-                base_url: string;
-                has_api_key: boolean;
-                effort: string;
-                max_tokens: number;
+                connections: {
+                    id: string;
+                    name: string;
+                    /** @enum {string} */
+                    provider: "anthropic" | "ollama" | "openai";
+                    model: string;
+                    base_url: string;
+                    has_api_key: boolean;
+                    /** @enum {string} */
+                    effort: "low" | "medium" | "high";
+                    max_tokens: number;
+                    uses: ("text" | "images")[];
+                    configured: boolean;
+                }[];
                 allow_modules: string[];
+                /** @description Something answers text requests */
                 configured: boolean;
+                /** @description Something answers requests with images or documents */
+                images_configured: boolean;
                 providers: string[];
+                uses: string[];
                 defaults: {
                     [key: string]: {
                         model: string;
@@ -1844,6 +1883,7 @@ export interface components {
                 }[];
                 recent: {
                     source: string;
+                    connection: string;
                     model: string;
                     input_tokens: number | null;
                     output_tokens: number | null;
@@ -3374,14 +3414,19 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @enum {string} */
-                    provider?: "" | "anthropic" | "ollama" | "openai";
-                    model?: string;
-                    base_url?: string;
-                    api_key?: string | null;
-                    /** @enum {string} */
-                    effort?: "low" | "medium" | "high";
-                    max_tokens?: number;
+                    connections?: {
+                        id: string;
+                        name: string;
+                        /** @enum {string} */
+                        provider: "anthropic" | "ollama" | "openai";
+                        model?: string;
+                        base_url?: string;
+                        api_key?: string | null;
+                        /** @enum {string} */
+                        effort?: "low" | "medium" | "high";
+                        max_tokens?: number;
+                        uses?: ("text" | "images")[];
+                    }[];
                     allow_modules?: string[];
                 };
             };
@@ -3407,7 +3452,13 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    connection?: string;
+                };
+            };
+        };
         responses: {
             /** @description OK */
             200: {

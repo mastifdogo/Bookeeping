@@ -1,4 +1,5 @@
-import { api, unwrapLoad } from '#lib/api/client.ts';
+import { redirect } from '@sveltejs/kit';
 import type { PageLoad } from './$types';
 
-export const load: PageLoad = async ({ fetch }) => ({ info: unwrapLoad(await api(fetch).GET('/integrations/llm')) });
+// The tab was called "AI" before Ledger 0.11.2.
+export const load: PageLoad = () => redirect(308, '/settings/llm');

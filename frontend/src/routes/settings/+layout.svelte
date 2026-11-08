@@ -10,7 +10,7 @@
 		{ href: '/settings/account', label: 'Account', title: '', admin: false },
 		{ href: '/settings/sidebar', label: 'Sidebar', title: '', admin: false },
 		{ href: '/settings/users', label: 'Users', title: '', admin: true },
-		{ href: '/settings/ai', label: 'AI', title: '', admin: true },
+		{ href: '/settings/llm', label: 'LLM API', title: '', admin: true },
 		{ href: '/settings/gmail', label: 'Gmail', title: '', admin: true },
 		{ href: '/settings/backups', label: 'Backups', title: '', admin: true },
 		{ href: '/settings/import-export', label: 'Import & export', title: '', admin: false },

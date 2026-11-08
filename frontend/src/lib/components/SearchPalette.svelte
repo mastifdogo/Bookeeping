@@ -32,7 +32,7 @@
 	];
 	const ADMIN_PAGES: Hit[] = [
 		{ title: 'Users and roles', subtitle: 'Settings', href: '/settings/users' },
-		{ title: 'AI provider', subtitle: 'Settings', href: '/settings/ai' },
+		{ title: 'LLM API', subtitle: 'Settings: AI connections for modules', href: '/settings/llm' },
 		{ title: 'Gmail', subtitle: 'Settings', href: '/settings/gmail' },
 		{ title: 'Backups', subtitle: 'Settings', href: '/settings/backups' },
 		{ title: 'Modules', subtitle: 'Settings', href: '/settings/modules' },
