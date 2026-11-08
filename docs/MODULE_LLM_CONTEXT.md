@@ -60,7 +60,11 @@ README.md              what it does and how to use it
 - `id`: 2–32 chars, `^[a-z][a-z0-9-]{1,31}$`, permanent. DB schema is
   `mod_<id>` with `-` → `_` (e.g. `mod_invoicing`).
 - `version`: `x.y.z`. `ledger`: optional `>=x.y.z`; use `>=0.9.1` (needed
-  for drawn icons; `settings` needs 0.9.0, `ctx.dashboard` 0.8.0).
+  for drawn icons; `settings` needs 0.9.0, `ctx.dashboard` 0.8.0, `files`
+  and `ctx.orgs` 0.11.0).
+- `files`: optional (Ledger ≥ 0.11.0), `{"accepts": ["statement", "bill"]}`:
+  the kinds of file other modules may hand this one through `ctx.files`
+  (`transaction`, `receipt`, `statement`, `bill`). Needs `server`.
 - `nav`: optional sidebar entry (requires `ui`); `label` ≤ 24 chars; `icon`:
   - a name: `hammer wrench invoice cart chart users mail calendar box dollar bank wallet piggy receipt tag truck home briefcase clock globe key lock star heart bell file folder cloud database link send phone printer gift bot sparkles pie target scale percent calculator`; or
   - your own drawing (Ledger ≥ 0.9.1): `{"path": "<SVG path data on a 24x24 grid>", "fill": false}`.
@@ -109,12 +113,16 @@ export default async function register(ctx) {
 | `llm.*` | The shared AI provider (Ledger ≥ 0.10.0): `status()`, `complete()`, `json()`, below. |
 | `gmail.*` | The shared Gmail account (Ledger ≥ 0.10.0): `status()`, `search()`, `message()`, `attachment()`, `raw()`, `send()`, below. |
 | `search.provide(fn)` | Adds results to Ledger's search bar (Ledger ≥ 0.10.0), below. |
+| `files.*` | Hand files (statements, bills, receipts, transactions) to other modules and receive them (Ledger ≥ 0.11.0), below. |
+| `orgs.*` | The organizations (separate books) on this server: `current()`, `list()`, `forEach(fn)` (Ledger ≥ 0.11.0), below. |
 | `HttpError` | `throw new ctx.HttpError(status, message)` → that status with JSON error body. |
 | `response(status, body?)` | Return it to choose the status (e.g. 201). |
 | `log.info/warn/error(msg, attrs?)` | JSON log lines (journalctl -u ledger). |
 
-**Handler** `req`: `{ method, path, params, query: URLSearchParams, body, user: { username, role } }`.
-`role` is `admin`, `bookkeeper` or `viewer` (Ledger ≥ 0.10.0). Ledger already
+**Handler** `req`: `{ method, path, params, query: URLSearchParams, body, user: { username, role, organization: { id, name, kind } } }`.
+`role` is `admin`, `bookkeeper` or `viewer` (Ledger ≥ 0.10.0), the user's
+role in the organization the request works in (`organization`, Ledger ≥
+0.11.0; see "Organizations" below). Ledger already
 answers 403 to non-GET requests from viewers; check `req.user.role === "admin"`
 yourself for module-setup actions only admins should do.
 `body` is parsed JSON (request must send `Content-Type: application/json`;
@@ -318,6 +326,57 @@ Return at most `limit` results; `href` must start with `/` (`/apps/<id>?…`
 passes the query string to your page, Ledger ≥ 0.10.1); answer within 2 s
 (parameterized `ILIKE` on indexed columns).
 
+### ctx.files (Ledger ≥ 0.11.0)
+
+Modules hand each other files labelled `transaction`, `receipt`,
+`statement` or `bill`, without posting anything: e.g. a downloads module
+passes a bank statement to a module that sorts statements into entries. The
+receiver lists the kinds it takes in its manifest (`"files": {"accepts": […]}`).
+
+```js
+ctx.files.targets("statement");            // → [{ id, name, accepts }] running modules that take statements
+const f = await ctx.files.send({ to: "autosort", kind: "statement", filename: "oct.csv", data: buffer,
+  contentType: "text/csv", meta: { account_code: "1000" }, note: "October" }, req.user); // → summary
+await ctx.files.outbox({ status, kind, limit });  // what this module sent → [summary]
+
+// Receiving side
+ctx.files.onReceive((summary) => { /* queue work; don't block */ });
+await ctx.files.inbox({ status: "new", kind, limit }); // → [summary]
+const file = await ctx.files.get(id);      // → { ...summary, data: Buffer } (sender or recipient)
+await ctx.files.update(id, { status: "done", result: "12 transactions imported" }); // recipient only
+await ctx.files.remove(id);                // recipient any time; sender while status is "new"
+```
+
+Summary: `{ id, sender, recipient, kind, filename, content_type,
+size_bytes, sha256, meta, note, status, result, sent_by, created_at,
+updated_at }`; `status` is `new`, `accepted`, `done` or `rejected`. `data`
+is a Buffer, Uint8Array or base64 text, at most 25 MB; `meta` ≤ 16 KB as
+JSON. Sending to a module that isn't running or doesn't accept the kind
+answers 409. Files belong to the organization the request works in.
+
+### Organizations (Ledger ≥ 0.11.0)
+
+A server can hold several organizations (a business, someone's personal
+books), each with its own database: accounts, entries, files and **your
+module's schema and data** are separate per organization. Each request runs
+in the user's current organization, and `ctx.db`, `ctx.ledger`,
+`ctx.dashboard`, `ctx.files` and `ctx.search` follow it automatically: write
+your module as if there were one set of books. Settings (`ctx.settings`),
+`ctx.llm` and `ctx.gmail` are server-wide.
+
+Background work (timers, `onReceive` outside a request, startup) runs in the
+main books. To do it for every organization:
+
+```js
+await ctx.orgs.forEach(async (org) => { /* ctx.db, ctx.ledger here use org's books */ }); // org: { id, name, kind }
+await ctx.orgs.current();  // → { id, name, kind } of the request's organization (1 = main books)
+await ctx.orgs.list();     // → [{ id, name, kind }]
+```
+
+`kind` is `business` or `personal`. Don't store organization ids in your own
+tables to separate data: each organization's data is already in its own
+database.
+
 ## 6. Security rules
 
 - Parameterized SQL only (`$1`); never interpolate user input into SQL. Only
@@ -342,7 +401,8 @@ passes the query string to your page, Ledger ≥ 0.10.1); answer within 2 s
 
 ## 8. Checklist for your answer
 
-- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`), with a drawn `nav.icon` that fits the module
+- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`), with a drawn `nav.icon` that fits the module
+- [ ] background jobs that touch the books run through `ctx.orgs.forEach` so every organization gets them
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → AI / Gmail
 - [ ] searchable records exposed with `ctx.search.provide`

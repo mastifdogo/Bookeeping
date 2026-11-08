@@ -17,8 +17,8 @@ Paths below are relative to the Ledger repository root (this checkout).
 
 Read **`docs/MODULE_LLM_CONTEXT.md`** in full before writing anything. It is
 the authoritative, compact reference: manifest fields, the `ctx` API and its
-return shapes, `ctx.dashboard`, `ctx.settings`, migrations, the UI contract,
-security rules and the release checklist. `docs/MODULES.md` has the longer
+return shapes, `ctx.dashboard`, `ctx.settings`, `ctx.files`, `ctx.orgs`,
+migrations, the UI contract, security rules and the release checklist. `docs/MODULES.md` has the longer
 explanation. Real modules to learn from: mastifdogo/invoice-costumer-module
 (Sales), mastifdogo/llm-api-module and mastifdogo/tailscale-module.
 
@@ -55,9 +55,21 @@ Decide, and state briefly to the user:
   need Ledger 0.10.0, and the admin must allow the module under Settings →
   AI / Gmail: say so in the README and show `ctx.llm.status()` /
   `ctx.gmail.status()` in the UI when it isn't allowed yet.
-- **Roles**: `req.user.role` is `admin`, `bookkeeper` or `viewer`. Ledger
-  blocks viewers from non-GET routes; restrict module setup to admins
-  yourself.
+- **Files from other modules**: statements, bills, receipts or transaction
+  lists another module produces (downloads, email) arrive through
+  `ctx.files`, never by reading another module's schema. A module that takes
+  them declares `"files": {"accepts": [...]}` in its manifest and handles
+  `ctx.files.onReceive` / `inbox()`, then marks each file `done` or
+  `rejected` with a `result`; a module that produces them offers "send to …"
+  from `ctx.files.targets(kind)`. Needs Ledger 0.11.0.
+- **Organizations**: each organization's books (and the module's schema) are
+  a separate database, and requests already run in the user's current one.
+  Don't add organization columns. Background jobs that touch the books loop
+  with `ctx.orgs.forEach` (Ledger 0.11.0); otherwise they only see the main
+  books.
+- **Roles**: `req.user.role` is `admin`, `bookkeeper` or `viewer` in the
+  request's organization. Ledger blocks viewers from non-GET routes;
+  restrict module setup to admins yourself.
 - **UI**: one self-contained `ui/index.html` (plain HTML/CSS/JS, light and
   dark mode, works from ~260px wide).
 - **Icon**: draw one that says what the module does: `nav.icon` as

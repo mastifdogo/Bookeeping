@@ -160,12 +160,14 @@ backend/src/accounts.ts   Chart of accounts, account ledger, trial balance
 backend/src/files.ts      General Ledger CSV export, file listing/download, uploads
 backend/src/import.ts     All-or-nothing CSV import of journal entries
 backend/src/auth.ts       Users, bcrypt passwords, sessions
+backend/src/orgs.ts       Organizations: per-organization databases and request routing
 backend/src/reports.ts    Balance sheet and income statement
 backend/src/dashboard.ts  Dashboard summary, notifications and to-dos
 backend/src/reconcile.ts  Reconciling accounts against statements
 backend/src/backup.ts     `ledger backup run`: dumps to TrueNAS and/or Google Drive
 backend/src/module-settings.ts  Module settings declared in ledger-module.json
 backend/src/cli.ts        `ledger user add|role|passwd|disable|enable|list`
+backend/src/module-files.ts  Files modules hand each other (ctx.files)
 backend/src/search.ts     The search bar (accounts, entries, module providers)
 backend/src/llm.ts        Settings → AI and ctx.llm (Anthropic, Ollama, OpenAI-compatible)
 backend/src/gmail.ts      Settings → Gmail (OAuth with PKCE) and ctx.gmail
@@ -274,15 +276,32 @@ it.
 
 ### Users and roles
 
-- **Admin**: everything, including users, modules, backups, updates, AI and
-  Gmail.
+- **Admin**: everything in their books. Admins of the main books also run
+  the server: users, organizations, modules, backups, updates, AI and Gmail.
 - **Bookkeeper**: works in the books (entries, accounts, reconciliation,
   imports, modules' pages).
 - **Viewer**: reads the books and reports; changes nothing.
 
 The API enforces roles on every request (403 otherwise). Ledger always keeps
-at least one active admin. Users can't be deleted, because entries record
-who posted them; disable them instead.
+at least one active admin of the main books. Users can't be deleted, because
+entries record who posted them; disable them instead.
+
+### Organizations
+
+One server can keep several sets of books apart: the main books plus any
+number of organizations (a business, or someone's personal books). Each
+organization has its own PostgreSQL database with the same schema, rules and
+grants, so accounts, entries, CSV files and modules' data never mix. Users,
+logins and server settings live in the main database.
+
+When adding a user under **Settings → Users**, choose their books: the main
+books, an existing organization (they get its accounts and entries), or a
+new business or personal organization of their own, optionally starting
+with a basic chart of accounts. A user's role applies per organization, and
+anyone in more than one switches between them at the top of the sidebar.
+The app asks root to create a new organization's database (the updater runs
+`deploy/create-org-db.sh` through `ledger-update.path`, in seconds);
+upgrades, module installs and backups cover every organization.
 
 ### Search
 

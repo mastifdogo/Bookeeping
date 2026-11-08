@@ -68,6 +68,7 @@ migrations/001_*.sql   database migrations (optional)
 | `nav` | Optional sidebar entry that opens the UI inside Ledger (users can hide or move it under Settings → Sidebar; a hidden module stays reachable from its tab under Settings): `label` (up to 24 characters) and an optional `icon`. See [Icons](#icons). Requires `ui`. |
 | `migrations` | Optional directory of `NNN_name.sql` files. |
 | `settings` | Optional settings form, shown on the module's own tab under Settings (Ledger 0.9.0 and later). See [Settings](#settings). |
+| `files` | Optional `{"accepts": ["statement", "bill"]}`: the kinds of file other modules may hand this one (Ledger 0.11.0 and later). See [Files between modules](#files-between-modules-ctxfiles). Requires `server`. |
 
 Paths are relative to the repository root and cannot contain `..` or hidden
 (`.name`) parts.
@@ -287,6 +288,74 @@ its start.
 Your results appear under your module's name in Ledger's search bar. `href`
 must be a path inside Ledger. Answer within 2 seconds; slow or failing
 providers are skipped.
+
+## Files between modules (`ctx.files`)
+
+Ledger 0.11.0 and later. Modules can pass each other files labelled
+`transaction`, `receipt`, `statement` or `bill`, without posting anything to
+the books: a downloads module hands a bank statement to a module that turns
+statements into entries, an email module hands bills to a payables module.
+The receiver declares what it takes in its manifest:
+
+```json
+"files": { "accepts": ["statement", "bill"] }
+```
+
+Sending:
+
+```js
+const targets = ctx.files.targets("statement"); // running modules that take statements: [{ id, name, accepts }]
+const sent = await ctx.files.send(
+	{ to: "autosort", kind: "statement", filename: "oct.csv", contentType: "text/csv", data: buffer, meta: { account_code: "1000" }, note: "October" },
+	req.user, // records who sent it
+);
+const mine = await ctx.files.outbox({ status: "done" });
+```
+
+Receiving:
+
+```js
+ctx.files.onReceive((file) => queue.push(file.id)); // right after another module sends one
+const waiting = await ctx.files.inbox({ status: "new" });
+const file = await ctx.files.get(id); // summary plus data (a Buffer)
+await ctx.files.update(id, { status: "done", result: "12 transactions imported" });
+```
+
+A file's summary is `{ id, sender, recipient, kind, filename, content_type,
+size_bytes, sha256, meta, note, status, result, sent_by, created_at,
+updated_at }`. `status` starts as `new`; the recipient moves it to
+`accepted`, `done` or `rejected` and may leave a `result` the sender can
+show. The recipient can `remove(id)` a file at any time, the sender only
+while it is still `new`. Files are at most 25 MB; `meta` at most 16 KB of
+JSON. Sending to a module that isn't running or doesn't accept that kind
+fails with 409. Settings → Modules shows what each module takes.
+
+## Organizations (`ctx.orgs`)
+
+Ledger 0.11.0 and later. One server can hold several organizations, each
+with books of its own in a separate database: accounts, entries, CSV files,
+files between modules, and each module's schema. Users switch between the
+organizations they belong to in the sidebar.
+
+Requests run in the user's current organization, and `ctx.db`,
+`ctx.ledger`, `ctx.dashboard`, `ctx.files` and `ctx.search` follow it, so a
+module is written as if there were one set of books. `req.user.role` is the
+user's role in that organization and `req.user.organization` is
+`{ id, name, kind }` (`kind`: `business` or `personal`; id 1 is the main
+books). Settings, `ctx.llm` and `ctx.gmail` are shared by the whole server.
+
+Work outside a request (timers, startup) runs in the main books. Repeat it
+for every organization with `forEach`:
+
+```js
+setInterval(() => ctx.orgs.forEach(async (org) => {
+	const due = await ctx.db.query(`SELECT count(*)::int AS n FROM ${ctx.schema}.invoices WHERE due < now()`);
+	if (due.rows[0].n) await ctx.dashboard.notify({ key: "overdue", title: `${due.rows[0].n} invoices overdue` });
+}), 3600_000);
+```
+
+`ctx.orgs.current()` and `ctx.orgs.list()` return `{ id, name, kind }` and
+the list of organizations.
 
 ## Settings
 

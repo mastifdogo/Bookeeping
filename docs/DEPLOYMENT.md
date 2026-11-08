@@ -312,7 +312,9 @@ Backups are set up in the app under **Settings → Backups**:
   days.
 
 Each backup is `ledger-<UTC timestamp>.dump` (PostgreSQL custom format,
-checked with `pg_restore --list` before it is sent). If a destination fails,
+checked with `pg_restore --list` before it is sent), plus
+`ledger-<database>-<UTC timestamp>.dump` for each other organization's books
+(e.g. `ledger-ledger_org2-…`; Google Drive keeps the newest N of each). If a destination fails,
 the dashboard says so. Settings and the Google credentials are kept in
 `/var/lib/ledger/backup/` (not in the database, so not inside the dumps).
 
@@ -349,6 +351,10 @@ systemctl start ledger
 The dump is fed on standard input because the `postgres` user can't read the
 share. Restoring brings back the triggers and constraints, so the restored
 ledger is enforced exactly like the original.
+
+An organization's dump restores the same way into its own database (its
+name is in the file name, e.g. `ledger_org2`, and in the main database's
+`organizations` table), with that name in place of `ledger`.
 
 Test a restore now and then (into a scratch database name) so you know the
 backups work.
@@ -411,8 +417,16 @@ users, passwords and sessions carry over unchanged, and `GOMEMLIMIT` in
 Database changes ship as numbered files in `db/migrations/`. `install.sh`
 applies the new ones (as `ledger_owner`, each in a transaction, recorded in
 `schema_migrations`) before replacing the program, then re-applies the
-grants; automatic updates do the same. To run them by hand:
-`sh /usr/local/share/ledger/migrate-db.sh`.
+grants, in the main database and in every organization's; automatic updates
+do the same. To run them by hand:
+`sh /usr/local/share/ledger/migrate-db.sh` (and with `DB_NAME=ledger_org2`
+for an organization's database).
+
+New organizations' databases are created by root: the app writes
+`/var/lib/ledger/update-config/orgs-run-now`, `ledger-update.path` starts
+`ledger update run`, which runs `/usr/local/share/ledger/create-org-db.sh`
+and the installed modules' migrations. If the path unit isn't enabled, the
+organization stays "being created" until the next `ledger update run`.
 
 ## 10. Troubleshooting
 
