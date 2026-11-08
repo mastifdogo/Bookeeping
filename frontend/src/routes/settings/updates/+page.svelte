@@ -70,6 +70,26 @@
 	}
 	onDestroy(() => clearInterval(timer));
 
+	// Following Ledger's repository after a rename on GitHub (same repository only).
+	let editingRepo = $state(false);
+	let repoInput = $state('');
+	let repoSaved = $state('');
+	async function saveRepo(e: SubmitEvent) {
+		e.preventDefault();
+		error = null;
+		repoSaved = '';
+		busy = true;
+		try {
+			info = unwrap(await api().PUT('/system/update/repo', { body: { repo: repoInput } }));
+			repoSaved = `Updates now come from ${info.repo.current}.`;
+			editingRepo = false;
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function checkNow() {
 		error = null;
 		busy = true;
@@ -92,6 +112,24 @@
 			<span class="muted">· latest on GitHub: {info.status.latest_version}</span>
 		{/if}
 	</p>
+	{#if repoSaved}<div class="notice ok">{repoSaved}</div>{/if}
+	{#if editingRepo}
+		<form class="repo-edit" onsubmit={saveRepo}>
+			<input bind:value={repoInput} required aria-label="Ledger's repository" placeholder="owner/name or https://github.com/owner/name" />
+			<button class="primary" disabled={busy}>Save</button>
+			<button type="button" onclick={() => (editingRepo = false)}>Cancel</button>
+		</form>
+		<p class="muted small">
+			For when Ledger's repository was renamed or moved on GitHub. Only the same repository is accepted (GitHub keeps its id
+			across renames), because the updater installs from it with full rights.
+		</p>
+	{:else}
+		<p class="small">
+			Updates come from <a href="https://github.com/{info.repo.current}" target="_blank" rel="noreferrer">github.com/{info.repo.current}</a>
+			{#if info.updater_installed}<button class="link" onclick={() => ((editingRepo = true), (repoInput = info.repo.current))}>Change</button>{/if}
+			{#if info.repo.current !== info.repo.installed}<span class="muted">(renamed from {info.repo.installed})</span>{/if}
+		</p>
+	{/if}
 	{#if !info.updater_installed}
 		<div class="notice error">
 			Automatic updates aren't set up on this server. They are installed with the release (<code>deploy/install.sh</code>).
@@ -156,3 +194,23 @@
 		<a href="/settings/backups">Backups</a>. If the new version doesn't start, it puts the previous one back.
 	</p>
 </form>
+
+<style>
+	.repo-edit {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+	}
+	.repo-edit input {
+		flex: 1;
+		min-width: 14rem;
+	}
+	button.link {
+		background: none;
+		border: none;
+		padding: 0 0.3rem;
+		color: var(--accent);
+		cursor: pointer;
+		font: inherit;
+	}
+</style>

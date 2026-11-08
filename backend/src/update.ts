@@ -17,6 +17,14 @@ import { ValidationError } from "./errors.ts";
 
 export const SCHEDULE_FILE = "schedule.json";
 export const RUN_NOW_FILE = "run-now";
+/** Ledger's own repository, as renamed in the app (only renames of the same repository are honoured). */
+export const REPO_FILE = "repo";
+export const DEFAULT_UPDATE_REPO = "mastifdogo/Bookeeping";
+
+/** The repository set by whoever installed Ledger: LEDGER_UPDATE_REPO, or the default. */
+export function baseUpdateRepo(): string {
+	return process.env.LEDGER_UPDATE_REPO || DEFAULT_UPDATE_REPO;
+}
 export const STATUS_FILE = "status.json";
 
 export interface UpdateDirs {
@@ -200,6 +208,17 @@ export async function readStatus(dirs: UpdateDirs): Promise<UpdateStatus | null>
 	} catch {
 		return null;
 	}
+}
+
+/** The repository name saved in the app, or null. */
+export async function readUpdateRepo(dirs: UpdateDirs): Promise<string | null> {
+	const s = (await readSmallFile(path.join(dirs.config, REPO_FILE)))?.trim() ?? "";
+	return /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(s) ? s : null;
+}
+
+export async function writeUpdateRepo(dirs: UpdateDirs, repo: string | null): Promise<void> {
+	if (repo === null) await fsp.rm(path.join(dirs.config, REPO_FILE), { force: true });
+	else await writeFileAtomic(path.join(dirs.config, REPO_FILE), repo + "\n", 0o640);
 }
 
 /** Whether the root updater is installed (its directories exist). */

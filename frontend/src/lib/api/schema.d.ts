@@ -897,6 +897,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system/update/repo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Follow Ledger's repository to its new name (after a rename or transfer on GitHub)
+         * @description Only the same GitHub repository (same repository id) is accepted, since
+         *     the root updater installs from it. GitHub's current spelling is saved.
+         */
+        put: operations["putUpdateRepo"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/system/update/check": {
         parameters: {
             query?: never;
@@ -1011,7 +1032,11 @@ export interface paths {
         delete: operations["removeModule"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Point a module at its repository's new name (after a rename on GitHub)
+         * @description The repository's latest release must hold the same module (same manifest id).
+         */
+        patch: operations["renameModuleRepo"];
         trace?: never;
     };
 }
@@ -1338,6 +1363,13 @@ export interface components {
         UpdateInfo: {
             /** @example v0.6.0 */
             current_version: string;
+            /** @description Where updates come from; current differs from installed after a rename saved in the app */
+            repo: {
+                /** @example mastifdogo/Bookeeping */
+                current: string;
+                /** @description LEDGER_UPDATE_REPO */
+                installed: string;
+            };
             /** @description False when the server was not installed from a release */
             updater_installed: boolean;
             schedule: components["schemas"]["UpdateSchedule"];
@@ -3247,6 +3279,33 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    putUpdateRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModuleRepo"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateInfo"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
     checkForUpdate: {
         parameters: {
             query?: never;
@@ -3450,6 +3509,36 @@ export interface operations {
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    renameModuleRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModuleRepo"];
+            };
+        };
+        responses: {
+            /** @description Saved; the installer records the new name at its next sync */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModulesInfo"];
+                };
+            };
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

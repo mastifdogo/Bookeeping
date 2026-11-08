@@ -64,6 +64,27 @@
 		}
 	}
 
+	// Pointing a module at its repository's new name (after a rename on GitHub).
+	let editing = $state<string | null>(null);
+	let newRepo = $state('');
+	let renamed = $state('');
+	async function saveRepo(e: SubmitEvent, id: string) {
+		e.preventDefault();
+		error = null;
+		renamed = '';
+		busy = true;
+		try {
+			info = unwrap(await api().PATCH('/modules/{moduleId}', { params: { path: { moduleId: id } }, body: { repo: newRepo } }));
+			renamed = `Saved. ${id} now comes from ${info.modules.find((m) => m.id === id)?.repo ?? newRepo}; Ledger records it at the next module sync.`;
+			editing = null;
+			poll();
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function remove(id: string, name: string) {
 		if (!confirm(`Remove ${name}? Its data stays in the database and comes back if you add it again.`)) return;
 		error = null;
@@ -102,6 +123,7 @@
 </p>
 
 <ErrorNotice {error} />
+{#if renamed}<div class="notice ok">{renamed}</div>{/if}
 
 {#if !info.installer_available}
 	<div class="notice error">
@@ -121,7 +143,21 @@
 					<tr>
 						<td>
 							<strong>{m.name}</strong>
-							{#if m.repo}<div class="muted small"><a href="https://github.com/{m.repo}" target="_blank" rel="noreferrer">{m.repo}</a></div>{/if}
+							{#if editing === m.id && m.id}
+								<form class="repo-edit" onsubmit={(e) => saveRepo(e, m.id!)}>
+									<input bind:value={newRepo} required aria-label="New repository for {m.name}" placeholder="owner/name or https://github.com/owner/name" />
+									<button class="primary" disabled={busy}>Save</button>
+									<button type="button" onclick={() => (editing = null)}>Cancel</button>
+								</form>
+								<div class="muted small">The repository must hold this same module (id <code>{m.id}</code>), e.g. after you renamed it on GitHub.</div>
+							{:else if m.repo}
+								<div class="muted small">
+									<a href="https://github.com/{m.repo}" target="_blank" rel="noreferrer">{m.repo}</a>
+									{#if m.id && m.state !== 'removing' && info.installer_available}
+										<button class="link" onclick={() => ((editing = m.id), (newRepo = m.repo ?? ''))} title="Use this module's repository under a new name">Change</button>
+									{/if}
+								</div>
+							{/if}
 							{#if m.description}<div class="small">{m.description}</div>{/if}
 						</td>
 						<td>{m.version ?? '—'}</td>
@@ -180,3 +216,24 @@
 		</div>
 	{/if}
 </form>
+
+<style>
+	.repo-edit {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		margin: 0.3rem 0;
+	}
+	.repo-edit input {
+		flex: 1;
+		min-width: 14rem;
+	}
+	button.link {
+		background: none;
+		border: none;
+		padding: 0 0.3rem;
+		color: var(--accent);
+		cursor: pointer;
+		font: inherit;
+	}
+</style>

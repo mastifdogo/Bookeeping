@@ -284,3 +284,29 @@ test("manifest settings are validated", () => {
 		assert.throws(() => validateManifest({ ...base, settings }), /validation failed/, JSON.stringify(settings));
 	}
 });
+
+test("syncModules follows a renamed repository", async (t) => {
+	const { dirs, gh, ops, opts } = await world(t);
+	await gh.publish("o/hello", "v1.0.0", HELLO);
+	await writeDesired(dirs, [{ repo: "o/hello", id: "hello" }]);
+	await syncModules(opts);
+	gh.rename("o/hello", "o/hello-module");
+	await writeDesired(dirs, [{ repo: "o/hello-module", id: "hello" }]);
+
+	// Same release under the new name: nothing reinstalled or removed, only the source updated.
+	ops.calls.length = 0;
+	let r = await syncModules(opts);
+	assert.equal(r.changed, false);
+	assert.deepEqual(ops.calls, []);
+	assert.equal(r.results.length, 1);
+	assert.match(r.results[0]!.message, /Now installed from o\/hello-module/);
+	let installed = await scanInstalled(opts.modulesDir);
+	assert.deepEqual([installed.length, installed[0]!.source?.repo, installed[0]!.source?.tag], [1, "o/hello-module", "v1.0.0"]);
+
+	// A new release under the new name updates it in place.
+	await gh.publish("o/hello-module", "v1.1.0", HELLO);
+	r = await syncModules(opts);
+	assert.equal(r.results[0]!.state, "updated");
+	installed = await scanInstalled(opts.modulesDir);
+	assert.deepEqual([installed.length, installed[0]!.source?.repo, installed[0]!.source?.tag], [1, "o/hello-module", "v1.1.0"]);
+});

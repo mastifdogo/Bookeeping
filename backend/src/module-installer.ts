@@ -148,13 +148,24 @@ export async function syncModules(o: ModuleSyncOptions): Promise<{ changed: bool
 	const backupOf = (id: string) => path.join(o.modulesDir, `.old-${id}`);
 
 	for (const d of desired) {
-		const inst = installed.find((i) => i.source?.repo === d.repo) ?? installed.find((i) => d.id !== null && i.manifest.id === d.id && !i.source);
+		// By repository, or by id: the same module after its repository was
+		// renamed (only if no other entry still asks for the old repository).
+		const inst =
+			installed.find((i) => i.source?.repo === d.repo) ??
+			installed.find((i) => d.id !== null && i.manifest.id === d.id && !desired.some((o) => o !== d && o.repo === i.source?.repo));
 		const result: ModuleResult = { repo: d.repo, id: inst?.manifest.id ?? d.id, state: "unchanged", version: inst?.manifest.version ?? null, message: "", at: now() };
 		results.push(result);
 		const stage = path.join(o.modulesDir, `.stage-${d.repo.replace("/", "--")}`);
 		try {
 			const rel = await latestModuleRelease(o.apiBase, d.repo);
 			if (inst?.source?.tag === rel.tag) {
+				if (inst.source.repo !== d.repo) {
+					// Renamed repository, same release: only record where it comes from now.
+					const source: ModuleSource = { ...inst.source, repo: d.repo };
+					await writeFileAtomic(path.join(inst.dir, SOURCE_FILE), JSON.stringify(source, null, 2) + "\n", 0o644);
+					result.message = `Now installed from ${d.repo} (${rel.tag}).`;
+					continue;
+				}
 				result.message = `Up to date (${rel.tag}).`;
 				continue;
 			}
@@ -199,7 +210,7 @@ export async function syncModules(o: ModuleSyncOptions): Promise<{ changed: bool
 
 	// Modules taken off the list.
 	for (const inst of installed) {
-		const wanted = desired.some((d) => inst.source?.repo === d.repo || (d.id !== null && d.id === inst.manifest.id && !inst.source));
+		const wanted = desired.some((d) => inst.source?.repo === d.repo || (d.id !== null && d.id === inst.manifest.id));
 		if (wanted) continue;
 		const backup = backupOf(inst.manifest.id);
 		await fsp.rm(backup, { recursive: true, force: true });

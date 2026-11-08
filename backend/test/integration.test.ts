@@ -821,6 +821,38 @@ test("modules: runtime, UI and management API", async (t) => {
 	await stat(path.join(app.update.config, "modules-run-now"));
 	const added = r.json().modules.find((m: { repo: string }) => m.repo === "someone/ledger-hello");
 	assert.equal(added.state, "running"); // matched to the installed copy by id
+
+	// The repository was renamed on GitHub: point the module at the new name.
+	gh.rename("someone/ledger-hello", "someone/hello-module");
+	await gh.publish("someone/other", "v1.0.0", hello, async (stage) => {
+		const m = JSON.parse(await readFile(path.join(stage, "ledger-module.json"), "utf8"));
+		await writeFile(path.join(stage, "ledger-module.json"), JSON.stringify({ ...m, id: "other" }));
+	});
+	r = await call("PATCH", "/modules/hello", { repo: "https://github.com/someone/hello-module" });
+	expectStatus(r, 202);
+	assert.deepEqual(JSON.parse(await readFile(path.join(app.update.config, "modules.json"), "utf8")), [{ repo: "someone/hello-module", id: "hello" }]);
+	r = await call("PATCH", "/modules/hello", { repo: "someone/other" }); // a different module
+	expectStatus(r, 422);
+	assert.equal(r.json().error.details[0].message, 'someone/other holds the module "other", not "hello"');
+	expectStatus(await call("PATCH", "/modules/hello", { repo: "not a repo" }), 422);
+	expectStatus(await call("PATCH", "/modules/nonexistent", { repo: "someone/hello-module" }), 404);
+
+	// Ledger's own repository: only the same GitHub repository (renamed) is accepted.
+	process.env.LEDGER_UPDATE_REPO = "mastifdogo/Bookeeping";
+	t.after(() => delete process.env.LEDGER_UPDATE_REPO);
+	gh.repo("mastifdogo/Bookeeping");
+	gh.rename("mastifdogo/Bookeeping", "mastifdogo/ledger");
+	r = await call("GET", "/system/update");
+	assert.deepEqual(r.json().repo, { current: "mastifdogo/Bookeeping", installed: "mastifdogo/Bookeeping" });
+	r = await call("PUT", "/system/update/repo", { repo: "github.com/mastifdogo/ledger" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().repo, { current: "mastifdogo/ledger", installed: "mastifdogo/Bookeeping" });
+	r = await call("PUT", "/system/update/repo", { repo: "someone/other" });
+	expectStatus(r, 422);
+	assert.match(r.text, /different repository/);
+	r = await call("PUT", "/system/update/repo", { repo: "mastifdogo/Bookeeping" }); // back to the installed name (GitHub redirects)
+	assert.equal(r.json().repo.current, "mastifdogo/ledger"); // GitHub's current spelling is kept
+
 	r = await call("DELETE", "/modules/hello");
 	expectStatus(r, 202);
 	assert.deepEqual(JSON.parse(await readFile(path.join(app.update.config, "modules.json"), "utf8")), []);

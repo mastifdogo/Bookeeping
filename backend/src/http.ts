@@ -36,13 +36,16 @@ import {
 	plainJson,
 } from "./decode.ts";
 import {
+	baseUpdateRepo,
 	nextScheduledTime,
 	readSchedule,
+	readUpdateRepo,
 	readStatus,
 	requestRunNow,
 	updaterInstalled,
 	validateSchedule,
 	writeSchedule,
+	writeUpdateRepo,
 } from "./update.ts";
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listCurrencies, updateAccount } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry, type EntryFilter } from "./ledger.ts";
@@ -88,7 +91,7 @@ import { CONTENT_TYPES, staticHandler } from "./static.ts";
 import { promises as fsp } from "node:fs";
 import pathMod from "node:path";
 import { MAX_MODULES, normalizeRepo, readDesired, readModuleResults, requestModuleSync, writeDesired, compatible, type DesiredModule } from "./modules.ts";
-import { fetchManifest, githubApi, latestModuleRelease } from "./github.ts";
+import { fetchManifest, githubApi, latestModuleRelease, repoIdentity } from "./github.ts";
 
 const MAX_BODY_BYTES = 1 << 20; // 1 MiB for JSON
 const MULTIPART_OVERHEAD = 64 << 10;
@@ -855,9 +858,11 @@ async function handleImportJournalEntries(c: Ctx): Promise<void> {
 async function updateInfo(c: Ctx) {
 	const schedule = await readSchedule(c.app.update);
 	const next = nextScheduledTime(schedule, Date.now());
+	const saved = await readUpdateRepo(c.app.update);
 	return {
 		current_version: c.app.version,
 		updater_installed: await updaterInstalled(c.app.update),
+		repo: { current: saved ?? baseUpdateRepo(), installed: baseUpdateRepo() },
 		schedule,
 		next_run_at: next === null ? null : new Date(next).toISOString(),
 		status: await readStatus(c.app.update),
@@ -878,6 +883,36 @@ async function handlePutUpdateSchedule(c: Ctx): Promise<void> {
 	const schedule = validateSchedule(plainJson(await decodeBody(c, true, (v) => v)));
 	await requireUpdater(c);
 	await writeSchedule(c.app.update, schedule);
+	writeJSON(c.res, 200, await updateInfo(c));
+}
+
+/**
+ * Ledger's own repository after a rename on GitHub. Only the same repository
+ * (same GitHub id) is accepted: the root updater installs from it.
+ */
+async function handlePutUpdateRepo(c: Ctx): Promise<void> {
+	const { repo: input } = await decodeBody(c, true, decodeRepoBody);
+	await requireUpdater(c);
+	const repo = normalizeRepo(input);
+	const err = new ValidationError();
+	if (!repo) {
+		err.add("repo", "must be a GitHub repository, e.g. owner/name or its github.com URL");
+		err.throwIfAny();
+	}
+	const base = baseUpdateRepo();
+	let current: { id: number; full_name: string };
+	let next: { id: number; full_name: string };
+	try {
+		[current, next] = await Promise.all([repoIdentity(githubApi(), base), repoIdentity(githubApi(), repo!)]);
+	} catch (e) {
+		throw new HttpError(422, `couldn't check ${repo} on GitHub: ${(e as Error).message}`, "validation_failed");
+	}
+	if (current.id !== next.id) {
+		err.add("repo", `${repo} is a different repository from ${base}; Ledger only follows its own repository when it is renamed or moved`);
+		err.throwIfAny();
+	}
+	// Store GitHub's current spelling; the installed name needs no file.
+	await writeUpdateRepo(c.app.update, next.full_name === base ? null : next.full_name);
 	writeJSON(c.res, 200, await updateInfo(c));
 }
 
@@ -1006,6 +1041,32 @@ async function handleAddModule(c: Ctx): Promise<void> {
 		desired.push({ repo: p.repo, id: p.manifest.id });
 		await writeDesired(c.app.update, desired);
 	}
+	await requestModuleSync(c.app.update);
+	writeJSON(c.res, 202, await modulesInfo(c));
+}
+
+/**
+ * Points an installed module at its repository's new name (after a rename on
+ * GitHub). The repository must hold the same module: its manifest id must match.
+ */
+async function handleRenameModuleRepo(c: Ctx): Promise<void> {
+	const { repo } = await decodeBody(c, true, decodeRepoBody);
+	await requireUpdater(c);
+	const id = c.params.id ?? "";
+	const loaded = c.app.modules.modules.get(id);
+	const desired = await readDesired(c.app.update);
+	const entry = desired.find((d) => d.id === id) ?? desired.find((d) => !!loaded?.repo && d.repo === loaded.repo);
+	if (!entry) throw new NotFoundError();
+	const p = await previewModule(repo);
+	if (p.manifest.id !== id) {
+		const v = new ValidationError();
+		v.add("repo", `${p.repo} holds the module "${p.manifest.id}", not "${id}"`);
+		v.throwIfAny();
+	}
+	if (desired.some((d) => d !== entry && d.repo === p.repo)) throw new ConflictError(`${p.repo} is already on the list`);
+	entry.repo = p.repo;
+	entry.id = id;
+	await writeDesired(c.app.update, desired);
 	await requestModuleSync(c.app.update);
 	writeJSON(c.res, 202, await modulesInfo(c));
 }
@@ -1178,12 +1239,14 @@ const ROUTES: Route[] = [
 	route("GET", "/system/update", "admin", handleGetUpdate),
 	route("PUT", "/system/update/schedule", "admin", handlePutUpdateSchedule),
 	route("POST", "/system/update/check", "admin", handleCheckUpdate),
+	route("PUT", "/system/update/repo", "admin", handlePutUpdateRepo),
 
 	route("GET", "/modules", true, handleListModules),
 	route("POST", "/modules", "admin", handleAddModule),
 	route("POST", "/modules/preview", "admin", handlePreviewModule),
 	route("POST", "/modules/sync", "admin", handleSyncModules),
 	route("DELETE", "/modules/:id", "admin", handleRemoveModule),
+	route("PATCH", "/modules/:id", "admin", handleRenameModuleRepo),
 	route("GET", "/modules/:id/settings", "admin", handleGetModuleSettings),
 	route("PUT", "/modules/:id/settings", "admin", handlePutModuleSettings),
 ];

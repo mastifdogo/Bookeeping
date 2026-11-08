@@ -13,6 +13,10 @@ export interface FakeGitHub {
 	base: string;
 	/** Publishes `dir` as the latest release `tag` of `repo` (e.g. "o/hello"). */
 	publish(repo: string, tag: string, dir: string, edit?: (stage: string) => Promise<void>): Promise<void>;
+	/** Renames a repository: the new name serves everything, the old one redirects (same id). */
+	rename(from: string, to: string): void;
+	/** Gives a repository an id without releases (for repository-identity checks). */
+	repo(name: string): void;
 	requests: string[];
 }
 
@@ -20,9 +24,26 @@ export async function fakeGitHub(t: TestContext): Promise<FakeGitHub> {
 	const root = await mkdtemp(path.join(tmpdir(), "ledger-fakegh-"));
 	const releases = new Map<string, { tag: string; tarball: string; manifest: Buffer }>();
 	const requests: string[] = [];
+	// Repository ids; an old name (after a rename) points at the same id.
+	const ids = new Map<string, number>();
+	const canonical = new Map<number, string>();
+	let nextId = 1000;
+	const idOf = (name: string) => {
+		if (!ids.has(name)) {
+			ids.set(name, ++nextId);
+			canonical.set(nextId, name);
+		}
+		return ids.get(name)!;
+	};
 	const server: Server = createServer(async (req, res) => {
 		const url = req.url ?? "";
 		requests.push(url);
+		const repoInfo = /^\/repos\/([^/]+\/[^/?]+)$/.exec(url);
+		if (repoInfo && ids.has(repoInfo[1]!)) {
+			const id = ids.get(repoInfo[1]!)!;
+			res.writeHead(200, { "Content-Type": "application/json" });
+			return res.end(JSON.stringify({ id, full_name: canonical.get(id) }));
+		}
 		let m = /^\/repos\/([^/]+\/[^/]+)\/releases\/latest$/.exec(url);
 		if (m && releases.has(m[1]!)) {
 			const r = releases.get(m[1]!)!;
@@ -64,6 +85,17 @@ export async function fakeGitHub(t: TestContext): Promise<FakeGitHub> {
 			const tarball = path.join(root, `${repo.replace("/", "-")}-${tag}.tar.gz`);
 			execFileSync("tar", ["-czf", tarball, "-C", path.join(root, "stage"), top]);
 			releases.set(repo, { tag, tarball, manifest: await readFile(path.join(stage, "ledger-module.json")) });
+			idOf(repo);
+		},
+		rename(from, to) {
+			const id = idOf(from);
+			ids.set(to, id);
+			canonical.set(id, to);
+			const r = releases.get(from);
+			if (r) releases.set(to, r);
+		},
+		repo(name) {
+			idOf(name);
 		},
 	};
 }

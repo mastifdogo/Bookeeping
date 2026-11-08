@@ -1243,6 +1243,29 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /system/update/repo:
+    put:
+      tags: [System]
+      operationId: putUpdateRepo
+      summary: Follow Ledger's repository to its new name (after a rename or transfer on GitHub)
+      description: |
+        Only the same GitHub repository (same repository id) is accepted, since
+        the root updater installs from it. GitHub's current spelling is saved.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModuleRepo' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdateInfo' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /system/update/check:
     post:
       tags: [System]
@@ -1396,6 +1419,31 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Modules]
+      operationId: renameModuleRepo
+      summary: Point a module at its repository's new name (after a rename on GitHub)
+      description: The repository's latest release must hold the same module (same manifest id).
+      parameters:
+        - name: moduleId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-z][a-z0-9-]{1,31}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModuleRepo' }
+      responses:
+        '202':
+          description: Saved; the installer records the new name at its next sync
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesInfo' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
 components:
@@ -1859,9 +1907,16 @@ components:
         last_scheduled_for: { type: string, format: date-time, nullable: true }
     UpdateInfo:
       type: object
-      required: [current_version, updater_installed, schedule, next_run_at, status]
+      required: [current_version, updater_installed, repo, schedule, next_run_at, status]
       properties:
         current_version: { type: string, example: v0.6.0 }
+        repo:
+          type: object
+          required: [current, installed]
+          description: Where updates come from; current differs from installed after a rename saved in the app
+          properties:
+            current: { type: string, example: mastifdogo/Bookeeping }
+            installed: { type: string, description: LEDGER_UPDATE_REPO, or the default }
         updater_installed: { type: boolean, description: False when the server was not installed from a release }
         schedule: { $ref: '#/components/schemas/UpdateSchedule' }
         next_run_at: { type: string, format: date-time, nullable: true }

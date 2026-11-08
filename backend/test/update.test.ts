@@ -19,6 +19,8 @@ import {
 	type UpdateSchedule,
 } from "../src/update.ts";
 import { runUpdater, type SystemOps } from "../src/updater.ts";
+import { chooseUpdateRepo } from "../src/updater.ts";
+import { fakeGitHub } from "./fake-github.ts";
 
 const sched = (over: Partial<UpdateSchedule> = {}): UpdateSchedule => ({ ...DEFAULT_SCHEDULE, enabled: true, ...over });
 
@@ -290,4 +292,15 @@ test("updater: posts the outcome to the dashboard", async (t) => {
 	await writeFile(path.join(f.dirs.config, "run-now"), "x");
 	const out = await runUpdater({ ...opts(f, "v0.7.0", Date.now()), notify: () => Promise.reject(new Error("no db")) });
 	assert.equal(out.ran, true);
+});
+
+test("updates follow a renamed repository, never a different one", async (t) => {
+	const gh = await fakeGitHub(t);
+	gh.repo("me/ledger");
+	gh.repo("someone/else");
+	gh.rename("me/ledger", "me/bookkeeping");
+	assert.equal(await chooseUpdateRepo("me/ledger", null, gh.base), "me/ledger");
+	assert.equal(await chooseUpdateRepo("me/ledger", "me/bookkeeping", gh.base), "me/bookkeeping");
+	assert.equal(await chooseUpdateRepo("me/ledger", "someone/else", gh.base), "me/ledger"); // a different repository: ignored
+	assert.equal(await chooseUpdateRepo("me/ledger", "nobody/missing", gh.base), "me/ledger"); // can't check: ignored
 });

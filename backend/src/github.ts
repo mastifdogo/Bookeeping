@@ -17,6 +17,16 @@ async function getJson(url: string): Promise<unknown> {
 	return res.json();
 }
 
+/**
+ * A repository's permanent id and current name. GitHub keeps the id when a
+ * repository is renamed or transferred, and redirects the old name.
+ */
+export async function repoIdentity(apiBase: string, repo: string): Promise<{ id: number; full_name: string }> {
+	const body = (await getJson(`${apiBase}/repos/${repo}`)) as { id?: unknown; full_name?: unknown };
+	if (typeof body.id !== "number" || typeof body.full_name !== "string") throw new Error("GitHub returned no repository id");
+	return { id: body.id, full_name: body.full_name };
+}
+
 export interface ModuleRelease {
 	tag: string;
 	/** Source archive of the tagged release. */

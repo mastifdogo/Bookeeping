@@ -365,7 +365,10 @@ At the scheduled time, `ledger-update.service` (root) runs:
 
 1. It asks GitHub for the latest release of `mastifdogo/Bookeeping`. Set
    `LEDGER_UPDATE_REPO=owner/name` in `/etc/ledger/ledger.env` to follow a
-   fork.
+   fork. If the repository is renamed or moved on GitHub, an admin can enter
+   its new name under Settings → Updates → **Change**; the updater accepts it
+   only if GitHub confirms it is the same repository (same repository id), so
+   the web app can never point the root updater at someone else's code.
 2. If that release is newer than the installed one, it downloads the
    tarball and `SHA256SUMS` and verifies the checksum.
 3. It backs up the database (the same dump as the nightly backup), keeps a

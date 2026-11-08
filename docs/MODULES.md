@@ -99,6 +99,12 @@ archive; no build artifacts are needed. To publish a version:
 3. Create a release from the tag on GitHub. Pre-releases and drafts are
    ignored.
 
+Renamed the module's repository on GitHub? Under Settings → Modules, press
+**Change** next to its repository and enter the new name. Ledger checks that
+the repository holds the same module (same `id`), keeps the installed copy
+and its data, and installs from the new name from then on. (GitHub also
+redirects the old name, so nothing breaks in the meantime.)
+
 Installed modules are updated:
 
 - on Ledger's update schedule (**Settings → Updates**)
