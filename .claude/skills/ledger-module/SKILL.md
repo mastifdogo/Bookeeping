@@ -57,6 +57,16 @@ Decide, and state briefly to the user:
   need Ledger 0.10.0, and the admin must allow the module under Settings →
   AI / Gmail: say so in the README and show `ctx.llm.status()` /
   `ctx.gmail.status()` in the UI when it isn't allowed yet.
+- **AI only proposes; a person approves**: anything an LLM decides
+  (`ctx.llm` output) must be approved by a human before it takes effect:
+  posting or reversing entries, sending mail, changing or deleting records,
+  marking files done, calling outside services. Save the AI's result as a
+  pending suggestion (in the module's own table, with what it would do and
+  why), show it in the UI, and act only when a user with the right role
+  approves it (a POST from the UI, attributed with `req.user`); let them edit
+  or reject it. A dashboard to-do ("5 suggestions to review") is a good
+  pointer. Never act on AI output from a background job or `onReceive`
+  without that approval, and never offer an "auto-approve" setting.
 - **Files from other modules**: statements, bills, receipts or transaction
   lists another module produces (downloads, email) arrive through
   `ctx.files`, never by reading another module's schema. A module that takes

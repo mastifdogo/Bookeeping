@@ -297,6 +297,15 @@ propagate from route handlers, or catch them and show `status()` in the UI
 transactions per call) rather than one call per item. Use `json()` with a
 strict schema for anything the code parses.
 
+**Human approval.** AI output is a suggestion, never an action. Anything
+`ctx.llm` decides (an entry to post or reverse, an email to send, a record
+to change or delete, a file to mark done, an outside call) is stored as a
+pending suggestion with what it would do and why, shown in the UI, and
+carried out only when a user with the right role approves it (an explicit
+POST from the UI, passing `req.user`); users can edit or reject it.
+Background jobs and `onReceive` handlers may call the AI and store
+suggestions, but never act on them. No "auto-approve" setting.
+
 ### ctx.gmail (Ledger ≥ 0.10.0)
 
 **Never implement OAuth, IMAP or an Apps Script bridge for Gmail.** The admin
@@ -408,6 +417,7 @@ database.
 - [ ] background jobs that touch the books run through `ctx.orgs.forEach` so every organization gets them
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → AI / Gmail
+- [ ] every action an LLM proposes waits for a person to approve it (pending suggestions in the UI; nothing posted, sent or changed on AI output alone)
 - [ ] searchable records exposed with `ctx.search.provide`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries

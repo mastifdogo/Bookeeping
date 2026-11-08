@@ -221,6 +221,11 @@ An admin chooses one AI provider under **Settings → AI**: Claude (Anthropic
 API), Ollama, or any OpenAI-compatible server, and ticks the modules allowed
 to use it. Modules never see the API key. Every call is logged per module.
 
+What the AI decides is only ever a suggestion: a module stores it as pending,
+shows it, and acts (posts an entry, sends mail, changes or deletes a record)
+only after a person with the right role approves it in the module's page.
+Nothing happens on AI output alone, including in background jobs.
+
 ```js
 const s = await ctx.llm.status(); // { configured, allowed, provider, model, readsPdf }
 
