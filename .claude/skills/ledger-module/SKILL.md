@@ -90,7 +90,12 @@ Decide, and state briefly to the user:
   request's organization. Ledger blocks viewers from non-GET routes;
   restrict module setup to admins yourself.
 - **UI**: one self-contained `ui/index.html` (plain HTML/CSS/JS, light and
-  dark mode, works from ~260px wide).
+  dark mode, works from ~260px wide). Every account dropdown (categorizing
+  transactions, picking accounts) ends with "+ New account…", which asks
+  Ledger to open its New account dialog over the page with the
+  `ledger-new-account` message (Ledger 0.11.3; snippet in the context file)
+  and then selects the account it created, so nothing the user filled in is
+  lost.
 - **Icon**: draw one that says what the module does: `nav.icon` as
   `{"path": "<24x24 SVG path data>"}`, or pick a built-in name.
 

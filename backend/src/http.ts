@@ -62,6 +62,7 @@ import {
 	applyConfigChange,
 	backupsInstalled,
 	listShareDumps,
+	checkShare,
 	nextBackupTime,
 	pollDeviceFlow,
 	publicConfig,
@@ -800,7 +801,7 @@ async function backupsInfo(c: Ctx) {
 		config: publicConfig(config),
 		status,
 		next_run: nextBackupTime(config),
-		share_files: available && config.truenas.enabled ? await listShareDumps(config.truenas.path) : [],
+		share_files: available && config.share.enabled ? await listShareDumps(config.share, pathMod.join(c.app.backup.dir, "tmp")) : [],
 	};
 }
 
@@ -833,8 +834,13 @@ async function handleRunBackup(c: Ctx): Promise<void> {
 
 async function handleTestShare(c: Ctx): Promise<void> {
 	await requireBackups(c);
-	const body = await decodeBody(c, true, (v) => plainJson(v) as { path?: unknown });
-	writeJSON(c.res, 200, await testShare(typeof body?.path === "string" ? body.path : ""));
+	// The settings as they are on the page (not saved yet); a missing password means the saved one.
+	const body = await decodeBody(c, true, (v) => (v && typeof v === "object" && !Array.isArray(v) ? (plainJson(v) as Record<string, unknown>) : null));
+	if (!body) throw new DecodeError("expected the share settings");
+	const err = new ValidationError();
+	const t = checkShare({ keep_days: 30, ...body, enabled: true }, (await readConfig(c.app.backup.dir)).share, err);
+	err.throwIfAny();
+	writeJSON(c.res, 200, await testShare(t, pathMod.join(c.app.backup.dir, "tmp")));
 }
 
 async function handleGoogleConnect(c: Ctx): Promise<void> {
@@ -1440,7 +1446,7 @@ const ROUTES: Route[] = [
 	route("GET", "/backups", "server", handleGetBackups),
 	route("PUT", "/backups/config", "server", handlePutBackupConfig),
 	route("POST", "/backups/run", "server", handleRunBackup),
-	route("POST", "/backups/truenas/test", "server", handleTestShare),
+	route("POST", "/backups/share/test", "server", handleTestShare),
 	route("POST", "/backups/google/connect", "server", handleGoogleConnect),
 	route("POST", "/backups/google/poll", "server", handleGooglePoll),
 	route("POST", "/backups/google/disconnect", "server", handleGoogleDisconnect),

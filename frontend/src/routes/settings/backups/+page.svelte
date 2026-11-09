@@ -17,7 +17,7 @@
 
 	type Form = {
 		schedule: BackupInfo['config']['schedule'];
-		truenas: BackupInfo['config']['truenas'];
+		share: Omit<BackupInfo['config']['share'], 'has_password'> & { password: string };
 		google: { enabled: boolean; client_id: string; client_secret: string; keep_count: number };
 	};
 	let info = $state<BackupInfo>(undefined!);
@@ -29,7 +29,7 @@
 		info = i;
 		form = {
 			schedule: { ...i.config.schedule, days: [...i.config.schedule.days] },
-			truenas: { ...i.config.truenas },
+			share: (({ has_password: _, ...rest }) => ({ ...rest, password: '' }))(i.config.share),
 			google: { enabled: i.config.google.enabled, client_id: i.config.google.client_id, client_secret: '', keep_count: i.config.google.keep_count }
 		};
 	}
@@ -72,15 +72,21 @@
 	const save = (e?: SubmitEvent) => {
 		e?.preventDefault();
 		return act(async () => {
-			const google = { ...form.google, client_secret: form.google.client_secret || null };
-			load(unwrap(await api().PUT('/backups/config', { body: { ...form, google } })));
+			load(unwrap(await api().PUT('/backups/config', { body: body() })));
 			saved = true;
 		});
 	};
 
+	/** Settings to send: blank secrets keep the saved ones. */
+	const body = () => ({
+		schedule: form.schedule,
+		share: { ...form.share, password: form.share.password || null },
+		google: { ...form.google, client_secret: form.google.client_secret || null }
+	});
+
 	const testShare = () =>
 		act(async () => {
-			shareTest = unwrap(await api().POST('/backups/truenas/test', { body: { path: form.truenas.path } }));
+			shareTest = unwrap(await api().POST('/backups/share/test', { body: { ...form.share, password: form.share.password || null } }));
 		});
 
 	// While a backup runs, refresh every few seconds.
@@ -111,8 +117,7 @@
 	// Google: save the client first, then show Google's code and wait for approval.
 	const connect = () =>
 		act(async () => {
-			const google = { ...form.google, client_secret: form.google.client_secret || null };
-			load(unwrap(await api().PUT('/backups/config', { body: { ...form, google } })));
+			load(unwrap(await api().PUT('/backups/config', { body: body() })));
 			const r = unwrap(await api().POST('/backups/google/connect'));
 			device = r;
 			deviceMsg = 'Waiting for you to approve…';
@@ -172,7 +177,7 @@
 	{#if info.status.results.length}
 		<ul class="results">
 			{#each info.status.results as r (r.target)}
-				<li class:bad={!r.ok}>{r.ok ? '✓' : '✗'} <strong>{r.target === 'truenas' ? 'TrueNAS' : 'Google Drive'}</strong>: {r.message}</li>
+				<li class:bad={!r.ok}>{r.ok ? '✓' : '✗'} <strong>{r.target === 'share' ? 'Network share' : 'Google Drive'}</strong>: {r.message}</li>
 			{/each}
 		</ul>
 	{/if}
@@ -207,40 +212,70 @@
 
 	<section class="card">
 		<h2>
-			<label class="inline big"><input type="checkbox" bind:checked={form.truenas.enabled} /> TrueNAS share</label>
+			<label class="inline big"><input type="checkbox" bind:checked={form.share.enabled} /> Network share (SMB)</label>
 		</h2>
 		<p class="muted small">
-			A dataset on your TrueNAS, mounted into this container (a Proxmox bind mount). ZFS snapshots and replication
-			then cover the backups too.
+			A shared folder on a NAS or another computer: TrueNAS, Synology, QNAP, Unraid, Windows, a Samba server… Ledger saves
+			each backup there and removes ones older than you choose.
 		</p>
+		<div class="segmented" role="radiogroup" aria-label="How Ledger reaches the share">
+			<label class:on={form.share.mode === 'smb'}><input type="radio" value="smb" bind:group={form.share.mode} /> Connect to the share</label>
+			<label class:on={form.share.mode === 'folder'}><input type="radio" value="folder" bind:group={form.share.mode} /> Folder mounted into this container</label>
+		</div>
+		{#if form.share.mode === 'smb'}
+			<div class="row">
+				<label style="flex:1; min-width:12rem">Server <input bind:value={form.share.server} required placeholder="nas.local or 192.168.1.20" autocomplete="off" /></label>
+				<label style="flex:1; min-width:9rem">Share <input bind:value={form.share.share} required placeholder="backups" autocomplete="off" /></label>
+				<label style="flex:1; min-width:9rem">Folder in the share <input bind:value={form.share.directory} placeholder="ledger" autocomplete="off" /></label>
+			</div>
+			<div class="row">
+				<label style="flex:1; min-width:10rem">User name <input bind:value={form.share.username} autocomplete="off" placeholder="guest if empty" /></label>
+				<label style="flex:1; min-width:10rem">
+					Password
+					<input type="password" bind:value={form.share.password} autocomplete="new-password" placeholder={info.config.share.has_password ? '•••••••• (saved)' : ''} />
+				</label>
+				<label style="min-width:8rem">Domain <input bind:value={form.share.domain} autocomplete="off" placeholder="optional" style="width:9rem" /></label>
+			</div>
+			<p class="muted small">
+				Shown as <code>\\{form.share.server || 'server'}\{form.share.share || 'share'}{form.share.directory ? '\\' + form.share.directory.replaceAll('/', '\\') : ''}</code>.
+				The folder is created if it's missing. Give Ledger a user of its own that may write only to this share.
+			</p>
+		{:else}
+			<p class="muted small">
+				For a share mounted on the Proxmox host and bind-mounted into this container (ZFS snapshots and replication
+				then cover the backups too).
+			</p>
+			<div class="row">
+				<label style="flex:1; min-width:16rem">
+					Folder in the container
+					<input bind:value={form.share.path} required placeholder="/app/csv_data/backups" />
+				</label>
+			</div>
+			<details>
+				<summary class="small">How to mount a share into the container</summary>
+				<ol class="small">
+					<li>On the NAS, share a folder over NFS or SMB with the Proxmox host.</li>
+					<li>
+						On the Proxmox host, mount it, e.g. <strong>Datacenter → Storage → Add → NFS / SMB/CIFS</strong> (it appears under
+						<code>/mnt/pve/&lt;name&gt;</code>).
+					</li>
+					<li>
+						Bind-mount it into this container (on the host): <code>pct set &lt;CTID&gt; -mp0 /mnt/pve/&lt;name&gt;,mp=/app/csv_data</code>,
+						then restart the container.
+					</li>
+					<li>
+						Unprivileged containers map uid 990 to 100990 on the host: on the host run
+						<code>chown 100990:100990 /mnt/pve/&lt;name&gt;</code> (or allow that uid on the share).
+					</li>
+					<li>Press <strong>Test</strong> below. Paths under <code>/app/csv_data</code> or <code>/mnt</code> can be used.</li>
+				</ol>
+			</details>
+		{/if}
 		<div class="row">
-			<label style="flex:1; min-width:16rem">
-				Folder in the container
-				<input bind:value={form.truenas.path} required placeholder="/app/csv_data/backups" />
-			</label>
-			<label>Keep for (days) <input type="number" min="1" max="3650" bind:value={form.truenas.keep_days} required style="width:7rem" /></label>
+			<label>Keep for (days) <input type="number" min="1" max="3650" bind:value={form.share.keep_days} required style="width:7rem" /></label>
 			<button type="button" onclick={testShare} disabled={busy || !info.available}>Test</button>
 		</div>
 		{#if shareTest}<div class="notice {shareTest.ok ? 'ok' : 'error'}">{shareTest.message}</div>{/if}
-		<details>
-			<summary class="small">How to mount a TrueNAS share</summary>
-			<ol class="small">
-				<li>On TrueNAS, share a dataset over NFS (or SMB) with the Proxmox host.</li>
-				<li>
-					On the Proxmox host, mount it, e.g. <strong>Datacenter → Storage → Add → NFS</strong> (it appears under
-					<code>/mnt/pve/&lt;name&gt;</code>).
-				</li>
-				<li>
-					Bind-mount it into this container (on the host): <code>pct set &lt;CTID&gt; -mp0 /mnt/pve/&lt;name&gt;,mp=/app/csv_data</code>,
-					then restart the container.
-				</li>
-				<li>
-					Unprivileged containers map uid 990 to 100990 on the host: on the host run
-					<code>chown 100990:100990 /mnt/pve/&lt;name&gt;</code> (or allow that uid on the TrueNAS share).
-				</li>
-				<li>Press <strong>Test</strong> above. Paths under <code>/app/csv_data</code> or <code>/mnt</code> can be used.</li>
-			</ol>
-		</details>
 		{#if info.share_files.length}
 			<h3 class="small muted">Newest backups on the share</h3>
 			<table class="files">
@@ -368,6 +403,39 @@
 	}
 	.files {
 		max-width: 520px;
+	}
+	.segmented {
+		display: inline-flex;
+		flex-wrap: wrap;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		overflow: hidden;
+		margin: 0.25rem 0 0.5rem;
+	}
+	.segmented label {
+		display: flex;
+		flex-direction: row;
+		align-items: center;
+		padding: 0.4rem 0.8rem;
+		cursor: pointer;
+		color: var(--text);
+		border-right: 1px solid var(--border);
+	}
+	.segmented label:last-child {
+		border-right: none;
+	}
+	.segmented label.on {
+		background: var(--accent);
+		color: var(--accent-text);
+	}
+	.segmented input {
+		position: absolute;
+		opacity: 0;
+		pointer-events: none;
+	}
+	.segmented label:has(input:focus-visible) {
+		outline: 2px solid var(--accent);
+		outline-offset: -2px;
 	}
 	.code {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

@@ -398,7 +398,7 @@ fi
 
 # --- Packages ------------------------------------------------------------------
 log "installing PostgreSQL (this takes a minute)"
-ct_sh "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 && apt-get update -q && apt-get install -y -q postgresql curl ca-certificates && apt-get clean"
+ct_sh "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 && apt-get update -q && apt-get install -y -q postgresql curl ca-certificates smbclient && apt-get clean"
 
 # --- Ledger --------------------------------------------------------------------
 push_release

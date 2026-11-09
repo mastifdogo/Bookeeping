@@ -11,7 +11,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"gen:api": "npx -y openapi-typescript@7 ../api/openapi.yaml -o src/lib/api/schema.d.ts",
-		"test": "node --test --experimental-strip-types src/lib/money.test.ts"
+		"test": "node --test --experimental-strip-types src/lib/money.test.ts src/lib/account-codes.test.ts"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^4.0.0",

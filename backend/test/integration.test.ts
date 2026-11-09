@@ -1059,7 +1059,7 @@ test("reconciliation", async (t) => {
 	expectStatus(await call("POST", "/reconciliations", { account_code: "1000" }), 422);
 });
 
-test("backups: settings, TrueNAS and Google Drive", async (t) => {
+test("backups: settings, a mounted share and Google Drive", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;
 	const { app, call } = ta;
@@ -1082,7 +1082,7 @@ test("backups: settings, TrueNAS and Google Drive", async (t) => {
 	await mkdir(path.dirname(share));
 	const settings = {
 		schedule: { enabled: true, days: [1, 3, 5], time: "01:15", timezone: "America/Winnipeg" },
-		truenas: { enabled: true, path: share, keep_days: 7 },
+		share: { enabled: true, mode: "folder", path: share, keep_days: 7 },
 		google: { enabled: false, client_id: "123-abc.apps.googleusercontent.com", client_secret: "secret-1", keep_count: 2 },
 	};
 	r = await call("PUT", "/backups/config", settings);
@@ -1094,22 +1094,26 @@ test("backups: settings, TrueNAS and Google Drive", async (t) => {
 	assert.equal(JSON.stringify(info).includes("secret-1"), false); // secrets stay on the server
 	// Invalid settings.
 	for (const bad of [
-		{ ...settings, truenas: { ...settings.truenas, path: "/etc/backups" } },
-		{ ...settings, truenas: { ...settings.truenas, path: "relative" } },
+		{ ...settings, share: { ...settings.share, path: "/etc/backups" } },
+		{ ...settings, share: { ...settings.share, path: "relative" } },
 		{ ...settings, schedule: { ...settings.schedule, days: [] } },
+		{ ...settings, share: { ...settings.share, mode: "smb", server: "bad host!", share: "backups" } },
+		{ ...settings, share: { ...settings.share, mode: "smb", server: "nas.local", share: "a/b" } },
+		{ ...settings, share: { ...settings.share, mode: "smb", server: "nas.local", share: "backups", directory: "../up" } },
+		{ ...settings, truenas: settings.share },
 		{ ...settings, google: { ...settings.google, enabled: true, client_id: "" } },
 		{ ...settings, google: { ...settings.google, client_id: "nope" } },
 		{ extra: 1 },
 	]) {
 		expectStatus(await call("PUT", "/backups/config", bad), 422);
 	}
-	r = await call("POST", "/backups/truenas/test", { path: share });
+	r = await call("POST", "/backups/share/test", { mode: "folder", path: share });
 	assert.equal(r.json().ok, true, r.text);
-	r = await call("POST", "/backups/truenas/test", { path: path.join(root, "missing", "dir") });
+	r = await call("POST", "/backups/share/test", { mode: "folder", path: path.join(root, "missing", "dir") });
 	assert.equal(r.json().ok, false);
 	assert.match(r.json().message, /mounted/);
 
-	// A backup to TrueNAS (pg_dump replaced by a stub file).
+	// A backup to the mounted share (pg_dump replaced by a stub file).
 	const dump = async (f: string) => writeFile(f, "PGDMP fake dump");
 	let out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump });
 	assert.equal(out.status.state, "ok", out.status.message);
@@ -1120,7 +1124,7 @@ test("backups: settings, TrueNAS and Google Drive", async (t) => {
 	info = (await call("GET", "/backups")).json();
 	assert.equal(info.status.state, "ok");
 	assert.equal(info.share_files.length, 1);
-	assert.ok(info.status.last_ok.truenas);
+	assert.ok(info.status.last_ok.share);
 	// A scheduled run only happens when due.
 	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "scheduled", dump, now: () => Date.parse("2026-10-27T12:00:00Z") });
 	assert.equal(out.ran, false); // a Tuesday
@@ -1148,7 +1152,7 @@ test("backups: settings, TrueNAS and Google Drive", async (t) => {
 	assert.deepEqual(g.files.map((f) => f.name).sort(), ["ledger-20261102T100000Z.dump", "ledger-20261103T100000Z.dump"]);
 	assert.equal(g.files[0]!.parents[0], "folder-1");
 
-	// Drive access revoked: TrueNAS still works, so a warning, posted to the dashboard.
+	// Drive access revoked: the share still works, so a warning, posted to the dashboard.
 	g.revokedGrant = true;
 	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump });
 	assert.equal(out.status.state, "warning");
@@ -1166,7 +1170,7 @@ test("backups: settings, TrueNAS and Google Drive", async (t) => {
 	assert.deepEqual(dash.notifications, []); // cleared by the successful backup
 
 	// Nothing turned on: an error.
-	r = await call("PUT", "/backups/config", { ...settings, truenas: { ...settings.truenas, enabled: false } });
+	r = await call("PUT", "/backups/config", { ...settings, share: { ...settings.share, enabled: false } });
 	expectStatus(r, 200);
 	await call("POST", "/backups/google/disconnect");
 	assert.deepEqual(g.revoked, ["refresh-1"]);
@@ -1824,4 +1828,63 @@ test("journal entries link to module records", async (t) => {
 	assert.deepEqual((await call("DELETE", `/m/sales/link/${id}/payment:7`)).json(), { removed: false });
 	expectStatus(await call("POST", "/m/sales/link/999999", { ref: "a", label: "A" }), 404);
 	expectStatus(await call("POST", "/m/sales/link/abc", { ref: "a", label: "A" }), 404);
+});
+
+test("backups: settings from Ledger 0.11.2 (TrueNAS folder) carry over", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await mkdir(app.backup.dir, { mode: 0o700 });
+	await writeFile(path.join(app.backup.dir, "config.json"), JSON.stringify({ truenas: { enabled: true, path: "/app/csv_data/nightly", keep_days: 14 } }));
+	await writeFile(path.join(app.backup.dir, "status.json"), JSON.stringify({ state: "ok", results: [{ target: "truenas", ok: true, message: "x" }], last_ok: { truenas: "2026-11-01T02:30:00.000Z", google: null } }));
+	const info = (await call("GET", "/backups")).json();
+	assert.equal(info.config.share.mode, "folder");
+	assert.equal(info.config.share.path, "/app/csv_data/nightly");
+	assert.equal(info.config.share.keep_days, 14);
+	assert.equal(info.status.last_ok.share, "2026-11-01T02:30:00.000Z");
+	assert.equal(info.status.results[0].target, "share");
+});
+
+// Needs a real SMB server: TEST_SMB=//127.0.0.1/backups and TEST_SMB_USER, TEST_SMB_PASSWORD.
+test("backups: straight to an SMB share", async (t) => {
+	const target = process.env.TEST_SMB;
+	if (!target) return t.skip("TEST_SMB not set");
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await mkdir(app.backup.dir, { mode: 0o700 });
+	const [, server, shareName] = /^\/\/([^/]+)\/(.+)$/.exec(target)!;
+	const dir = `ledger-test-${process.pid}`;
+	const smb = { enabled: true, mode: "smb", server, share: shareName, directory: `${dir}/nightly`, username: process.env.TEST_SMB_USER ?? "", password: process.env.TEST_SMB_PASSWORD ?? "", domain: "", keep_days: 7 };
+	const schedule = { enabled: false, days: [1], time: "02:30", timezone: "UTC" };
+	const google = { enabled: false, client_id: "", keep_count: 5 };
+
+	let r = await call("POST", "/backups/share/test", { ...smb, password: "wrong" });
+	expectStatus(r, 200);
+	assert.equal(r.json().ok, false);
+	assert.match(r.json().message, /user name or password is wrong/);
+	r = await call("POST", "/backups/share/test", { ...smb, share: "no-such-share" });
+	assert.match(r.json().message, /no share by that name/);
+	r = await call("POST", "/backups/share/test", smb);
+	assert.equal(r.json().ok, true, r.text);
+
+	r = await call("PUT", "/backups/config", { schedule, share: smb, google });
+	expectStatus(r, 200);
+	assert.equal(r.json().config.share.has_password, true);
+	assert.equal(JSON.stringify(r.json()).includes(smb.password), false);
+	// Saving again without the password keeps it.
+	const { password: _pw, ...noPassword } = smb;
+	expectStatus(await call("PUT", "/backups/config", { schedule, share: noPassword, google }), 200);
+	assert.equal((await call("POST", "/backups/share/test", noPassword)).json().ok, true);
+
+	const dump = async (f: string) => writeFile(f, "PGDMP fake dump");
+	// An old dump (10 days) is removed after a new one is saved.
+	let out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now: () => Date.parse("2026-11-01T02:30:00Z") });
+	assert.equal(out.status.state, "ok", out.status.message);
+	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now: () => Date.parse("2026-11-11T02:30:00Z") });
+	assert.equal(out.status.state, "ok", out.status.message);
+	assert.match(out.status.results[0]!.message, /removed 1 older than 7 days/);
+	const info = (await call("GET", "/backups")).json();
+	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-20261111T023000Z.dump"]);
+	assert.equal(info.share_files[0].size_bytes, "PGDMP fake dump".length);
 });

@@ -1,4 +1,5 @@
-// Database backups to a TrueNAS share (a directory mounted into the
+// Database backups to a network share (SMB/CIFS: TrueNAS, Synology, Windows,
+// Samba, ... reached with smbclient, or any folder mounted into the
 // container), to Google Drive, or both, on a schedule set in the app.
 //
 //   ledger backup run            back up now (ledger-backup.service; the updater
@@ -37,10 +38,20 @@ export interface BackupSchedule {
 	timezone: string;
 }
 
-export interface TrueNasTarget {
+export interface ShareTarget {
 	enabled: boolean;
-	/** The share's directory inside the container. */
+	/** "smb": Ledger connects to the SMB share itself; "folder": a directory already mounted into the container. */
+	mode: "smb" | "folder";
+	/** folder: the directory inside the container. */
 	path: string;
+	/** smb: the server's name or IP address, the share's name and a folder inside it. */
+	server: string;
+	share: string;
+	directory: string;
+	username: string;
+	password: string;
+	/** smb: the workgroup or Windows domain ("" for none). */
+	domain: string;
 	/** Dumps older than this many days are deleted. */
 	keep_days: number;
 }
@@ -60,14 +71,14 @@ export interface GoogleTarget {
 
 export interface BackupConfig {
 	schedule: BackupSchedule;
-	truenas: TrueNasTarget;
+	share: ShareTarget;
 	google: GoogleTarget;
 }
 
 export type BackupState = "idle" | "running" | "ok" | "warning" | "error";
 
 export interface TargetResult {
-	target: "truenas" | "google";
+	target: "share" | "google";
 	ok: boolean;
 	message: string;
 }
@@ -83,7 +94,7 @@ export interface BackupStatus {
 	results: TargetResult[];
 	last_scheduled_for: string | null;
 	/** When each destination last received a backup. */
-	last_ok: { truenas: string | null; google: string | null };
+	last_ok: { share: string | null; google: string | null };
 }
 
 const EMPTY_STATUS: BackupStatus = {
@@ -96,7 +107,7 @@ const EMPTY_STATUS: BackupStatus = {
 	size_bytes: null,
 	results: [],
 	last_scheduled_for: null,
-	last_ok: { truenas: null, google: null },
+	last_ok: { share: null, google: null },
 };
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -119,7 +130,18 @@ export function defaultConfig(env: NodeJS.ProcessEnv = process.env): BackupConfi
 	const keep = Number.parseInt(env.BACKUP_KEEP_DAYS ?? "", 10);
 	return {
 		schedule: { enabled: true, days: [0, 1, 2, 3, 4, 5, 6], time: "02:30", timezone: localTimeZone() },
-		truenas: { enabled: true, path: env.BACKUP_DIR || "/app/csv_data/backups", keep_days: Number.isInteger(keep) && keep >= 1 && keep <= 3650 ? keep : 30 },
+		share: {
+			enabled: true,
+			mode: "folder",
+			path: env.BACKUP_DIR || "/app/csv_data/backups",
+			server: "",
+			share: "",
+			directory: "ledger-backups",
+			username: "",
+			password: "",
+			domain: "",
+			keep_days: Number.isInteger(keep) && keep >= 1 && keep <= 3650 ? keep : 30,
+		},
 		google: { enabled: false, client_id: "", client_secret: "", refresh_token: "", folder_id: "", account: "", keep_count: 30 },
 	};
 }
@@ -129,8 +151,10 @@ export async function readConfig(dir: string): Promise<BackupConfig> {
 	const text = await readSmallFile(path.join(dir, CONFIG_FILE));
 	if (text === null) return def;
 	try {
-		const v = JSON.parse(text) as Partial<BackupConfig>;
-		return { schedule: { ...def.schedule, ...v.schedule }, truenas: { ...def.truenas, ...v.truenas }, google: { ...def.google, ...v.google } };
+		const v = JSON.parse(text) as Partial<BackupConfig> & { truenas?: Partial<ShareTarget> };
+		// Ledger ≤ 0.11.2 called the share "truenas" and only wrote to a mounted folder.
+		const share = v.share ?? (v.truenas ? { ...v.truenas, mode: "folder" as const } : {});
+		return { schedule: { ...def.schedule, ...v.schedule }, share: { ...def.share, ...share }, google: { ...def.google, ...v.google } };
 	} catch {
 		return def;
 	}
@@ -144,8 +168,9 @@ export async function readBackupStatus(dir: string): Promise<BackupStatus> {
 	const text = await readSmallFile(path.join(dir, STATUS_FILE));
 	if (text === null) return { ...EMPTY_STATUS };
 	try {
-		const v = JSON.parse(text) as Partial<BackupStatus>;
-		return { ...EMPTY_STATUS, ...v, last_ok: { ...EMPTY_STATUS.last_ok, ...v.last_ok } };
+		const v = JSON.parse(text) as Partial<BackupStatus> & { last_ok?: { truenas?: string | null } };
+		const results = (v.results ?? []).map((r) => ({ ...r, target: (r.target as string) === "truenas" ? ("share" as const) : r.target }));
+		return { ...EMPTY_STATUS, ...v, results, last_ok: { share: v.last_ok?.share ?? v.last_ok?.truenas ?? null, google: v.last_ok?.google ?? null } };
 	} catch {
 		return { ...EMPTY_STATUS };
 	}
@@ -161,7 +186,7 @@ export async function backupsInstalled(dir: string): Promise<boolean> {
 }
 
 /** A share path Ledger may write to; throws ValidationError otherwise. */
-export function checkSharePath(p: string, err: ValidationError, field = "truenas.path"): string {
+export function checkSharePath(p: string, err: ValidationError, field = "share.path"): string {
 	const norm = path.posix.normalize(p);
 	if (!p.startsWith("/") || norm !== p.replace(/\/+$/, "") || p.includes("\0")) err.add(field, "must be an absolute path such as /app/csv_data/backups");
 	else if (!allowedRoots().some((r) => norm.startsWith(r + "/"))) err.add(field, `must be inside ${allowedRoots().join(" or ")}`);
@@ -176,7 +201,7 @@ export function checkSharePath(p: string, err: ValidationError, field = "truenas
 export function publicConfig(c: BackupConfig) {
 	return {
 		schedule: c.schedule,
-		truenas: c.truenas,
+		share: { ...c.share, password: undefined, has_password: c.share.password !== "" },
 		google: {
 			enabled: c.google.enabled,
 			client_id: c.google.client_id,
@@ -205,7 +230,7 @@ export function applyConfigChange(c: BackupConfig, v: unknown): BackupConfig {
 		for (const key of Object.keys(x)) if (!keys.includes(key)) err.add(`${k}.${key}`, "unknown field");
 		return x as Record<string, unknown>;
 	};
-	for (const k of Object.keys(o)) if (!["schedule", "truenas", "google"].includes(k)) err.add(k, "unknown field");
+	for (const k of Object.keys(o)) if (!["schedule", "share", "google"].includes(k)) err.add(k, "unknown field");
 	const next: BackupConfig = structuredClone(c);
 
 	const s = obj("schedule", ["enabled", "days", "time", "timezone"]);
@@ -220,13 +245,8 @@ export function applyConfigChange(c: BackupConfig, v: unknown): BackupConfig {
 		next.schedule = { enabled: s.enabled as boolean, days: [...((days as number[]) ?? [])].sort((a, b) => a - b), time: s.time as string, timezone: s.timezone as string };
 	}
 
-	const t = obj("truenas", ["enabled", "path", "keep_days"]);
-	if (t) {
-		if (typeof t.enabled !== "boolean") err.add("truenas.enabled", "must be true or false");
-		const p = typeof t.path === "string" ? checkSharePath(t.path, err) : (err.add("truenas.path", "is required"), "");
-		if (!Number.isInteger(t.keep_days) || (t.keep_days as number) < 1 || (t.keep_days as number) > 3650) err.add("truenas.keep_days", "must be 1 to 3650 days");
-		next.truenas = { enabled: t.enabled as boolean, path: p, keep_days: t.keep_days as number };
-	}
+	const t = obj("share", ["enabled", "mode", "path", "server", "share", "directory", "username", "password", "domain", "keep_days"]);
+	if (t) next.share = checkShare(t, c.share, err);
 
 	const g = obj("google", ["enabled", "client_id", "client_secret", "keep_count"]);
 	if (g) {
@@ -253,11 +273,163 @@ export function applyConfigChange(c: BackupConfig, v: unknown): BackupConfig {
 }
 
 // ---------------------------------------------------------------------------
-// TrueNAS (a mounted directory)
+// Network share: SMB through smbclient, or a mounted directory
 // ---------------------------------------------------------------------------
 
+const SMB_NAME = /^[^\\/:*?"<>|;\x00-\x1f]{1,80}$/;
+
+/**
+ * Validates share settings from the page. password: omitted or null keeps the
+ * saved one (when the server and user stay the same), "" clears it.
+ */
+export function checkShare(t: Record<string, unknown>, cur: ShareTarget, err: ValidationError): ShareTarget {
+	const str = (k: string) => (typeof t[k] === "string" ? (t[k] as string).trim() : t[k] === undefined ? "" : (err.add(`share.${k}`, "must be text"), ""));
+	if (typeof t.enabled !== "boolean") err.add("share.enabled", "must be true or false");
+	const mode = t.mode === undefined ? "smb" : t.mode;
+	if (mode !== "smb" && mode !== "folder") err.add("share.mode", "must be smb or folder");
+	if (!Number.isInteger(t.keep_days) || (t.keep_days as number) < 1 || (t.keep_days as number) > 3650) err.add("share.keep_days", "must be 1 to 3650 days");
+	const server = str("server").replace(/^\\\\|^smb:\/\//, "").replace(/\/+$/, "");
+	const share = str("share").replace(/^\/+|\/+$/g, "");
+	const directory = str("directory").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+	const username = str("username");
+	const domain = str("domain");
+	let path_ = cur.path;
+	if (mode === "folder") path_ = typeof t.path === "string" ? checkSharePath(t.path, err) : (err.add("share.path", "is required"), "");
+	if (mode === "smb") {
+		if (!/^[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$|^\[[0-9A-Fa-f:]+\]$/.test(server)) err.add("share.server", "must be a server name or IP address, e.g. truenas.local or 192.168.1.20");
+		if (!SMB_NAME.test(share)) err.add("share.share", "must be the share's name, e.g. backups");
+		if (directory !== "" && (directory.length > 200 || !directory.split("/").every((d) => SMB_NAME.test(d) && d !== "." && d !== ".."))) err.add("share.directory", "must be a folder inside the share, e.g. ledger/backups");
+		if (username.length > 100 || /[\x00-\x1f]/.test(username)) err.add("share.username", "is not valid");
+		if (domain.length > 100 || /[\x00-\x1f]/.test(domain)) err.add("share.domain", "is not valid");
+	}
+	let password = server === cur.server && username === cur.username ? cur.password : "";
+	if (t.password !== undefined && t.password !== null) {
+		if (typeof t.password !== "string" || t.password.length > 200 || /[\x00-\x1f]/.test(t.password)) err.add("share.password", "is not valid");
+		else password = t.password;
+	}
+	return { enabled: t.enabled as boolean, mode: mode as ShareTarget["mode"], path: path_, server, share, directory, username, password, domain, keep_days: t.keep_days as number };
+}
+
+/** Where a dump goes, for messages: \\server\share\folder or the mounted path. */
+export function shareLabel(t: ShareTarget): string {
+	return t.mode === "folder" ? t.path : `\\\\${t.server}\\${t.share}${t.directory ? "\\" + t.directory.replaceAll("/", "\\") : ""}`;
+}
+
+/** Runs smbclient against the share with the given commands; throws on any NT_STATUS error. */
+async function smbclient(t: ShareTarget, workDir: string, commands: string[], opts: { ignoreErrors?: boolean } = {}): Promise<string> {
+	await fsp.mkdir(workDir, { recursive: true, mode: 0o700 });
+	// The password goes in a file only this user can read, never on the command line.
+	const auth = path.join(workDir, `.smb-auth-${process.pid}-${Date.now()}`);
+	const lines = [`username = ${t.username || "guest"}`, `password = ${t.password}`, ...(t.domain ? [`domain = ${t.domain}`] : [])];
+	await fsp.writeFile(auth, lines.join("\n") + "\n", { mode: 0o600 });
+	// Its own small config: Ledger's services may only write to their state directory.
+	const state = path.join(workDir, "smb");
+	const conf = path.join(state, "smb.conf");
+	await fsp.mkdir(state, { recursive: true, mode: 0o700 });
+	const dirs = ["lock directory", "state directory", "cache directory", "private dir", "ncalrpc dir"].map((k) => `\t${k} = ${state}`);
+	await fsp.writeFile(conf, ["[global]", ...dirs, "\tclient min protocol = SMB2", ""].join("\n"), { mode: 0o600 });
+	try {
+		const out = await runCapture(SMBCLIENT(), ["-s", conf, `//${t.server}/${t.share}`, "-A", auth, "-m", "SMB3", "-t", "20", "-c", commands.join("; ")]);
+		const bad = /(NT_STATUS_[A-Z_]+)/.exec(out);
+		if (bad && !opts.ignoreErrors) throw new Error(smbError(bad[1]!, out));
+		return out;
+	} catch (e) {
+		const m = /(NT_STATUS_[A-Z_]+)/.exec((e as Error).message);
+		if (m && !(e as Error).message.startsWith("SMB:")) throw new Error(smbError(m[1]!, (e as Error).message));
+		if ((e as NodeJS.ErrnoException).code === "ENOENT") throw new Error("smbclient is not installed on the server (apt install smbclient)");
+		throw e;
+	} finally {
+		await fsp.rm(auth, { force: true });
+	}
+}
+
+const SMBCLIENT = () => process.env.LEDGER_SMBCLIENT || "smbclient";
+
+function smbError(status: string, out: string): string {
+	const why: Record<string, string> = {
+		NT_STATUS_LOGON_FAILURE: "the user name or password is wrong",
+		NT_STATUS_ACCESS_DENIED: "that user may not write there",
+		NT_STATUS_BAD_NETWORK_NAME: "there is no share by that name on the server",
+		NT_STATUS_OBJECT_NAME_NOT_FOUND: "the folder could not be created or found",
+		NT_STATUS_OBJECT_PATH_NOT_FOUND: "the folder could not be created or found",
+		NT_STATUS_HOST_UNREACHABLE: "the server can't be reached",
+		NT_STATUS_IO_TIMEOUT: "the server didn't answer",
+		NT_STATUS_CONNECTION_REFUSED: "the server refused the connection (is SMB turned on?)",
+		NT_STATUS_UNSUCCESSFUL: "the server can't be reached",
+		NT_STATUS_DISK_FULL: "the share is full",
+	};
+	return `SMB: ${why[status] ?? out.trim().split("\n").at(-1)} (${status})`;
+}
+
+/** cd commands for the share's folder, creating it first (errors for folders that exist are ignored). */
+async function smbEnterDir(t: ShareTarget, workDir: string): Promise<string[]> {
+	if (!t.directory) return [];
+	const parts = t.directory.split("/");
+	const mk = parts.map((_, i) => `mkdir "${parts.slice(0, i + 1).join("/")}"`);
+	await smbclient(t, workDir, mk, { ignoreErrors: true });
+	return [`cd "${t.directory}"`];
+}
+
+const freeSpace = (out: string) => {
+	const m = /(\d+) blocks of size (\d+)\. (\d+) blocks available/.exec(out);
+	return m ? Number(m[3]) * Number(m[2]) : null;
+};
+
+/** Checks the share can be written to; reports free space. */
+export async function testShare(t: ShareTarget, workDir: string): Promise<{ ok: boolean; message: string; free_bytes: number | null }> {
+	if (t.mode === "folder") return testFolder(t.path);
+	try {
+		const cd = await smbEnterDir(t, workDir);
+		const probe = path.join(workDir, `ledger-write-test-${process.pid}`);
+		await fsp.writeFile(probe, "ok");
+		try {
+			const out = await smbclient(t, workDir, [...cd, `put "${probe}" ".ledger-write-test"`, `del ".ledger-write-test"`, "ls"]);
+			const free = freeSpace(out);
+			return { ok: true, message: `${shareLabel(t)} is writable${free !== null ? `; ${(free / 1024 ** 3).toFixed(1)} GiB free` : ""}.`, free_bytes: free };
+		} finally {
+			await fsp.rm(probe, { force: true });
+		}
+	} catch (e) {
+		return { ok: false, message: `Can't write to ${shareLabel(t)}: ${(e as Error).message}`, free_bytes: null };
+	}
+}
+
+/** The newest dumps on the share, for the settings page. */
+export async function listShareDumps(t: ShareTarget, workDir: string, limit = 10): Promise<{ name: string; size_bytes: number; modified_at: string }[]> {
+	if (t.mode === "folder") return listFolderDumps(t.path, limit);
+	const out = await smbclient(t, workDir, [...(t.directory ? [`cd "${t.directory}"`] : []), "ls"]).catch(() => "");
+	const files = [];
+	for (const line of out.split("\n")) {
+		const m = /^\s+(\S+)\s+[A-Z]*\s+(\d+)\s+\w{3} (\w{3}\s+\d+ [\d:]+ \d{4})$/.exec(line);
+		if (m && DUMP_RE.test(m[1]!)) files.push({ name: m[1]!, size_bytes: Number(m[2]), modified_at: new Date(`${m[3]} UTC`).toISOString() });
+	}
+	return files.sort((a, b) => b.name.localeCompare(a.name)).slice(0, limit);
+}
+
+/** When a dump was made, from its name (ledger[-db]-YYYYMMDDTHHMMSSZ.dump). */
+function dumpTime(name: string): number | null {
+	const m = /(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.dump$/.exec(name);
+	return m ? Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) : null;
+}
+
+async function copyToShare(file: string, t: ShareTarget, now: number, workDir: string): Promise<string> {
+	if (t.mode === "folder") return copyToFolder(file, t, now);
+	const name = path.basename(file);
+	const cd = await smbEnterDir(t, workDir);
+	// Upload under a temporary name, then rename, so a half-written dump never looks complete.
+	await smbclient(t, workDir, [...cd, `put "${file}" ".${name}.tmp"`, `rename ".${name}.tmp" "${name}"`]);
+	const old = (await listShareDumps(t, workDir, 10_000)).filter((f) => {
+		const at = dumpTime(f.name);
+		return f.name !== name && at !== null && now - at > t.keep_days * 86_400_000;
+	});
+	if (old.length > 0) await smbclient(t, workDir, [...cd, ...old.map((f) => `del "${f.name}"`)]);
+	return `Saved ${name} to ${shareLabel(t)}${old.length ? `; removed ${old.length} older than ${t.keep_days} days` : ""}.`;
+}
+
+// A directory mounted into the container.
+
 /** Checks the directory exists and is writable; reports free space. */
-export async function testShare(p: string): Promise<{ ok: boolean; message: string; free_bytes: number | null }> {
+async function testFolder(p: string): Promise<{ ok: boolean; message: string; free_bytes: number | null }> {
 	const err = new ValidationError();
 	const dir = checkSharePath(p, err, "path");
 	err.throwIfAny();
@@ -265,7 +437,7 @@ export async function testShare(p: string): Promise<{ ok: boolean; message: stri
 	const info = await fsp.stat(dir).catch(() => null);
 	if (!info) {
 		const pinfo = await fsp.stat(parent).catch(() => null);
-		if (!pinfo) return { ok: false, message: `${parent} does not exist. Is the TrueNAS share mounted into the container?`, free_bytes: null };
+		if (!pinfo) return { ok: false, message: `${parent} does not exist. Is the share mounted into the container?`, free_bytes: null };
 	} else if (!info.isDirectory()) {
 		return { ok: false, message: `${dir} is not a directory`, free_bytes: null };
 	}
@@ -282,8 +454,7 @@ export async function testShare(p: string): Promise<{ ok: boolean; message: stri
 	return { ok: true, message: `${dir} is writable${free !== null ? `; ${(free / 1024 ** 3).toFixed(1)} GiB free` : ""}.`, free_bytes: free };
 }
 
-/** The newest dumps on the share, for the settings page. */
-export async function listShareDumps(dir: string, limit = 10): Promise<{ name: string; size_bytes: number; modified_at: string }[]> {
+async function listFolderDumps(dir: string, limit = 10): Promise<{ name: string; size_bytes: number; modified_at: string }[]> {
 	const names = await fsp.readdir(dir).catch(() => [] as string[]);
 	const out = [];
 	for (const n of names.filter((x) => DUMP_RE.test(x))) {
@@ -293,7 +464,7 @@ export async function listShareDumps(dir: string, limit = 10): Promise<{ name: s
 	return out.sort((a, b) => b.name.localeCompare(a.name)).slice(0, limit);
 }
 
-async function copyToShare(file: string, t: TrueNasTarget, now: number): Promise<string> {
+async function copyToFolder(file: string, t: ShareTarget, now: number): Promise<string> {
 	await fsp.mkdir(t.path, { recursive: true });
 	const name = path.basename(file);
 	const tmp = path.join(t.path, `.${name}.tmp`);
@@ -496,6 +667,19 @@ async function uploadToDrive(file: string, g: GoogleTarget, ep: GoogleEndpoints)
 // Running a backup
 // ---------------------------------------------------------------------------
 
+/** Runs a command and returns its output (stdout and stderr together); rejects on a non-zero exit or after 10 minutes. */
+function runCapture(cmd: string, args: string[]): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 600_000 });
+		let out = "";
+		const add = (d: Buffer) => (out = (out + d.toString()).slice(-200_000));
+		p.stdout.on("data", add);
+		p.stderr.on("data", add);
+		p.on("error", reject);
+		p.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`${cmd} failed (${code}): ${out.trim().split("\n").slice(-2).join(" / ")}`))));
+	});
+}
+
 function run(cmd: string, args: string[]): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const p = spawn(cmd, args, { stdio: ["ignore", "ignore", "pipe"] });
@@ -561,12 +745,12 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 		};
 		await writeStatus(o.dir, status);
 
-		const targets = [config.truenas.enabled && "truenas", config.google.enabled && "google"].filter(Boolean) as ("truenas" | "google")[];
+		const targets = [config.share.enabled && "share", config.google.enabled && "google"].filter(Boolean) as ("share" | "google")[];
 		const workDir = path.join(o.dir, "tmp");
 		const file = path.join(workDir, name);
 		const files = [file];
 		try {
-			if (targets.length === 0) throw new Error("no backup destination is turned on; choose TrueNAS or Google Drive under Settings → Backups");
+			if (targets.length === 0) throw new Error("no backup destination is turned on; choose a network share or Google Drive under Settings → Backups");
 			await fsp.mkdir(workDir, { recursive: true, mode: 0o700 });
 			// The main database, then each other organization's.
 			const orgs = await client
@@ -584,7 +768,7 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 				try {
 					const messages: string[] = [];
 					for (const d of dumps) {
-						messages.push(t === "truenas" ? await copyToShare(d.file, config.truenas, now()) : await uploadToDrive(d.file, config.google, o.google ?? googleEndpoints()));
+						messages.push(t === "share" ? await copyToShare(d.file, config.share, now(), workDir) : await uploadToDrive(d.file, config.google, o.google ?? googleEndpoints()));
 					}
 					status.results.push({ target: t, ok: true, message: messages.join(" ") });
 					status.last_ok[t] = new Date(now()).toISOString();
@@ -594,7 +778,7 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 			}
 			const okCount = status.results.filter((r) => r.ok).length;
 			status.state = okCount === targets.length ? "ok" : okCount > 0 ? "warning" : "error";
-			const label = (t: string) => (t === "truenas" ? "TrueNAS" : "Google Drive");
+			const label = (t: string) => (t === "share" ? "the network share" : "Google Drive");
 			status.message =
 				status.state === "ok"
 					? `Backed up to ${status.results.map((r) => label(r.target)).join(" and ")}.`

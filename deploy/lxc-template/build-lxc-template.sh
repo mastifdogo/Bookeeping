@@ -104,7 +104,7 @@ done
 # --- Packages and sources --------------------------------------------------------
 packages=(
 	systemd-sysv dbus iproute2 iputils-ping openssh-server ca-certificates
-	curl less nano procps tzdata postgresql
+	curl less nano procps tzdata postgresql smbclient
 )
 # Sources name the distribution's keyring explicitly (signed-by), so the
 # build works on any host: apt on an Ubuntu build machine does not trust

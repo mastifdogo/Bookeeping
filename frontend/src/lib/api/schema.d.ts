@@ -689,7 +689,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/backups/truenas/test": {
+    "/backups/share/test": {
         parameters: {
             query?: never;
             header?: never;
@@ -698,7 +698,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Check that a directory exists and is writable */
+        /**
+         * Check that the network share (as filled in, not saved yet) can be written to
+         * @description Without password, the saved one is used (same server and user).
+         */
         post: operations["testBackupShare"];
         delete?: never;
         options?: never;
@@ -1748,15 +1751,54 @@ export interface components {
             /** @example America/Toronto */
             timezone: string;
         };
-        TrueNasTarget: {
+        /** @description A network share (SMB/CIFS) for backups */
+        ShareTarget: {
             enabled: boolean;
-            /** @description Directory inside the container (under /app/csv_data or /mnt) */
+            /**
+             * @description smb: Ledger connects to the share itself; folder: a directory already mounted into the container
+             * @enum {string}
+             */
+            mode: "smb" | "folder";
+            /** @description folder: directory inside the container (under /app/csv_data or /mnt) */
             path: string;
+            /**
+             * @description smb: server name or IP address
+             * @example truenas.local
+             */
+            server: string;
+            /**
+             * @description smb: the share's name
+             * @example backups
+             */
+            share: string;
+            /**
+             * @description smb: folder inside the share (created if missing)
+             * @example ledger
+             */
+            directory: string;
+            username: string;
+            has_password: boolean;
+            /** @description Workgroup or Windows domain, if needed */
+            domain: string;
             keep_days: number;
+        };
+        ShareTargetChange: {
+            enabled?: boolean;
+            /** @enum {string} */
+            mode?: "smb" | "folder";
+            path?: string;
+            server?: string;
+            share?: string;
+            directory?: string;
+            username?: string;
+            /** @description Omitted or null keeps the saved one; "" clears it */
+            password?: string | null;
+            domain?: string;
+            keep_days?: number;
         };
         BackupConfigChange: {
             schedule?: components["schemas"]["BackupSchedule"];
-            truenas?: components["schemas"]["TrueNasTarget"];
+            share?: components["schemas"]["ShareTargetChange"];
             google?: {
                 enabled: boolean;
                 client_id: string;
@@ -1769,7 +1811,7 @@ export interface components {
             available: boolean;
             config: {
                 schedule: components["schemas"]["BackupSchedule"];
-                truenas: components["schemas"]["TrueNasTarget"];
+                share: components["schemas"]["ShareTarget"];
                 google: {
                     enabled: boolean;
                     client_id: string;
@@ -1793,7 +1835,7 @@ export interface components {
                 size_bytes: number | null;
                 results: {
                     /** @enum {string} */
-                    target: "truenas" | "google";
+                    target: "share" | "google";
                     ok: boolean;
                     message: string;
                 }[];
@@ -1801,7 +1843,7 @@ export interface components {
                 last_scheduled_for: string | null;
                 last_ok: {
                     /** Format: date-time */
-                    truenas: string | null;
+                    share: string | null;
                     /** Format: date-time */
                     google: string | null;
                 };
@@ -3105,9 +3147,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    path: string;
-                };
+                "application/json": components["schemas"]["ShareTargetChange"];
             };
         };
         responses: {

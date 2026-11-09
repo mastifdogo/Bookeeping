@@ -18,7 +18,7 @@ What runs where:
 | `/usr/local/bin/ledger` | launcher for the server and the `ledger user` CLI |
 | `/usr/local/lib/ledger/` | the server (`ledger.mjs`), the web UI (`web/`) and its Node.js runtime (`node`) |
 | `/usr/local/sbin/ledger-user` | root wrapper: runs `ledger user …` with the service config |
-| `ledger-backup.service` / `.timer` | database backups (`ledger backup run`) to TrueNAS and/or Google Drive on the schedule set in the app (see step 8) |
+| `ledger-backup.service` / `.timer` | database backups (`ledger backup run`) to a network share (SMB) and/or Google Drive on the schedule set in the app (see step 8) |
 | `/var/lib/ledger/backup/` | backup settings, Google credentials and the last result (user `ledger`, 0700) |
 | `/var/lib/ledger/integrations/` | Settings → LLM API and Gmail: API keys, OAuth tokens (user `ledger`, 0700; not in backups) |
 | `ledger-update.timer` / `.path` | automatic updates from GitHub Releases on the schedule set in the app (see step 9) |
@@ -300,10 +300,23 @@ Backups are set up in the app under **Settings → Backups**:
 - **Schedule**: days, time and time zone (default: every day at 02:30).
   `ledger-backup.timer` checks every 15 minutes whether one is due. Ledger
   also backs up before installing an update.
-- **TrueNAS share**: a folder in the container (default
-  `/app/csv_data/backups`, the bind mount from step 3; anything under
-  `/app/csv_data` or `/mnt` works). Dumps older than the number of days you
-  set are deleted. ZFS snapshots and replication cover them too.
+- **Network share (SMB)**: any SMB/CIFS share (TrueNAS, Synology, QNAP,
+  Unraid, Windows, Samba). Either
+  - **Connect to the share**: server, share name, a folder inside it
+    (created if missing), user name, password and optional domain. Ledger
+    uploads each dump with `smbclient` (installed by `install.sh` and the
+    templates; `apt install smbclient` otherwise), so nothing needs mounting
+    and it works in unprivileged containers. Give Ledger a share user of its
+    own that may write only there. The password is kept in
+    `/var/lib/ledger/backup/` (mode 0600, not in the dumps). Or
+  - **Folder mounted into this container**: a directory such as
+    `/app/csv_data/backups`, the bind mount from step 3 (anything under
+    `/app/csv_data` or `/mnt` works). ZFS snapshots and replication of that
+    dataset cover the dumps too. Settings from Ledger 0.11.2 and earlier
+    ("TrueNAS share") carry over as this.
+
+  **Test** checks the share can be written to. Dumps older than the number of
+  days you set are deleted.
 - **Google Drive**: uploads to a "Ledger backups" folder and keeps the newest
   N. Ledger uses the `drive.file` permission, so it sees only the files it
   created. You need your own OAuth client (type *TVs and Limited Input
@@ -326,7 +339,8 @@ systemctl list-timers ledger-backup.timer
 
 From Google Drive, download the dump and copy it into the container
 (`pct push <ctid> ledger-….dump /root/ledger.dump` on the Proxmox host)
-before restoring.
+before restoring. From an SMB share, fetch it inside the container:
+`smbclient //nas/backups -U ledger -c 'cd ledger; get ledger-….dump /root/ledger.dump'`.
 
 **Restore** (keeps the current database as `ledger_old`):
 

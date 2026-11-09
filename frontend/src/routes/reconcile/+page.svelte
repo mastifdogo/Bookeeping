@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import Amount from '#lib/components/Amount.svelte';
+	import AccountSelect from '#lib/components/AccountSelect.svelte';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, today, unwrap, type Account, type Reconciliation } from '#lib/api/client.ts';
 	import { naturalBalance, parseSignedAmount } from '#lib/money.ts';
@@ -79,12 +80,7 @@
 	<div class="toolbar" style="margin:0; align-items:flex-end">
 		<label style="flex:1; min-width:14rem">
 			Account
-			<select bind:value={accountCode} required>
-				<option value="" disabled>Choose an account</option>
-				{#each data.accounts as a (a.code)}
-					<option value={a.code}>{a.code} · {a.name} ({a.currency})</option>
-				{/each}
-			</select>
+			<AccountSelect bind:value={accountCode} accounts={data.accounts} label="Account" placeholder="Choose an account" required defaults={{ type: 'asset' }} />
 		</label>
 		<label>Statement date <input type="date" bind:value={statementDate} required /></label>
 		<label>

@@ -55,6 +55,15 @@ if [ -n "$db_url" ] && command -v psql >/dev/null 2>&1; then
 	fi
 fi
 
+# Backups to SMB shares use smbclient (best effort: a missing package only
+# matters if a share is set up that way).
+if ! command -v smbclient >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+	echo "==> installing smbclient (backups to network shares)"
+	DEBIAN_FRONTEND=noninteractive apt-get install -y -q smbclient >/dev/null 2>&1 ||
+		{ apt-get update -q >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -q smbclient >/dev/null 2>&1; } ||
+		echo "    could not install smbclient; backups to an SMB share need it (apt install smbclient)"
+fi
+
 echo "==> files"
 # Replace the program directory as a whole, so files from an older release
 # never linger. The running service keeps its open files until restarted.

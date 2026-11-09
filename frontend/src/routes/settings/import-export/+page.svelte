@@ -76,7 +76,7 @@
 	}
 </script>
 
-<p class="muted">CSV files in the server's data directory (the TrueNAS share). Files are never overwritten.</p>
+<p class="muted">CSV files in the server's data directory. Files are never overwritten.</p>
 
 {#if message}<div class="notice ok">{message}</div>{/if}
 <ErrorNotice {error} />

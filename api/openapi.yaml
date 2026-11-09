@@ -993,20 +993,17 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
-  /backups/truenas/test:
+  /backups/share/test:
     post:
       tags: [System]
       operationId: testBackupShare
-      summary: Check that a directory exists and is writable
+      summary: Check that the network share (as filled in, not saved yet) can be written to
+      description: Without password, the saved one is used (same server and user).
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [path]
-              properties:
-                path: { type: string }
+            schema: { $ref: '#/components/schemas/ShareTargetChange' }
       responses:
         '200':
           description: Result
@@ -2400,18 +2397,40 @@ components:
         days: { type: array, items: { type: integer, minimum: 0, maximum: 6 } }
         time: { type: string, example: '02:30' }
         timezone: { type: string, example: America/Toronto }
-    TrueNasTarget:
+    ShareTarget:
       type: object
-      required: [enabled, path, keep_days]
+      description: A network share (SMB/CIFS) for backups
+      required: [enabled, mode, path, server, share, directory, username, has_password, domain, keep_days]
       properties:
         enabled: { type: boolean }
-        path: { type: string, description: Directory inside the container (under /app/csv_data or /mnt) }
+        mode: { type: string, enum: [smb, folder], description: 'smb: Ledger connects to the share itself; folder: a directory already mounted into the container' }
+        path: { type: string, description: 'folder: directory inside the container (under /app/csv_data or /mnt)' }
+        server: { type: string, description: 'smb: server name or IP address', example: truenas.local }
+        share: { type: string, description: "smb: the share's name", example: backups }
+        directory: { type: string, description: 'smb: folder inside the share (created if missing)', example: ledger }
+        username: { type: string }
+        has_password: { type: boolean }
+        domain: { type: string, description: 'Workgroup or Windows domain, if needed' }
+        keep_days: { type: integer, minimum: 1, maximum: 3650 }
+    ShareTargetChange:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        mode: { type: string, enum: [smb, folder] }
+        path: { type: string }
+        server: { type: string }
+        share: { type: string }
+        directory: { type: string }
+        username: { type: string }
+        password: { type: string, nullable: true, description: 'Omitted or null keeps the saved one; "" clears it' }
+        domain: { type: string }
         keep_days: { type: integer, minimum: 1, maximum: 3650 }
     BackupConfigChange:
       type: object
       properties:
         schedule: { $ref: '#/components/schemas/BackupSchedule' }
-        truenas: { $ref: '#/components/schemas/TrueNasTarget' }
+        share: { $ref: '#/components/schemas/ShareTargetChange' }
         google:
           type: object
           required: [enabled, client_id, keep_count]
@@ -2427,10 +2446,10 @@ components:
         available: { type: boolean, description: Backups are set up on this server }
         config:
           type: object
-          required: [schedule, truenas, google]
+          required: [schedule, share, google]
           properties:
             schedule: { $ref: '#/components/schemas/BackupSchedule' }
-            truenas: { $ref: '#/components/schemas/TrueNasTarget' }
+            share: { $ref: '#/components/schemas/ShareTarget' }
             google:
               type: object
               required: [enabled, client_id, has_client_secret, connected, account, keep_count]
@@ -2458,15 +2477,15 @@ components:
                 type: object
                 required: [target, ok, message]
                 properties:
-                  target: { type: string, enum: [truenas, google] }
+                  target: { type: string, enum: [share, google] }
                   ok: { type: boolean }
                   message: { type: string }
             last_scheduled_for: { type: string, format: date-time, nullable: true }
             last_ok:
               type: object
-              required: [truenas, google]
+              required: [share, google]
               properties:
-                truenas: { type: string, format: date-time, nullable: true }
+                share: { type: string, format: date-time, nullable: true }
                 google: { type: string, format: date-time, nullable: true }
         next_run: { type: string, format: date-time, nullable: true }
         share_files:

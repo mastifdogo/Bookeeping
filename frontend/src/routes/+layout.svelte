@@ -7,6 +7,8 @@
 	import { ICONS, arrangeNav, pageTitle } from '#lib/nav.ts';
 	import NavIcon from '#lib/components/NavIcon.svelte';
 	import SearchPalette from '#lib/components/SearchPalette.svelte';
+	import NewAccountDialog from '#lib/components/NewAccountDialog.svelte';
+	import { requestNewAccount, type NewAccountDefaults } from '#lib/new-account.svelte.ts';
 	import { isSearchKey, requestSearch } from '#lib/search-shortcut.ts';
 	import { MAIN_ID, MIN_PANE_PX, panes, type Pane } from '#lib/panes.svelte.ts';
 	import type { LayoutProps } from './$types';
@@ -102,9 +104,32 @@
 	}
 
 	function onMessage(e: MessageEvent) {
+		if (e.origin === location.origin && e.data?.type === 'ledger-new-account') return newAccountForFrame(e);
 		if (e.origin !== location.origin || e.data?.type !== 'ledger-pane' || typeof e.data.path !== 'string') return;
 		const id = Object.keys(frames).find((k) => frames[k]?.contentWindow === e.source);
 		if (id) panes.navigated(id, e.data.path);
+	}
+
+	// A module's page asks for a new account (e.g. while categorizing):
+	//   parent.postMessage({ type: 'ledger-new-account', id, defaults: { name, type, currency, code } }, location.origin)
+	// and gets { type: 'ledger-new-account-result', id, account } back (account null if cancelled or not allowed).
+	async function newAccountForFrame(e: MessageEvent) {
+		const src = e.source as Window | null;
+		if (!src) return;
+		const reply = (account: unknown) => src.postMessage({ type: 'ledger-new-account-result', id: e.data.id ?? null, account }, location.origin);
+		if (!data.user || data.user.role === 'viewer') return reply(null);
+		const d = (e.data.defaults && typeof e.data.defaults === 'object' ? e.data.defaults : {}) as Record<string, unknown>;
+		const pick = (k: string) => (typeof d[k] === 'string' ? (d[k] as string).slice(0, 1000) : undefined);
+		const defaults: NewAccountDefaults = {
+			code: pick('code'),
+			name: pick('name'),
+			type: (['asset', 'liability', 'equity', 'revenue', 'expense'] as const).find((t) => t === d.type),
+			currency: (['CAD', 'USD'] as const).find((c) => c === d.currency),
+			description: pick('description')
+		};
+		const account = await requestNewAccount(defaults);
+		reply(account ? JSON.parse(JSON.stringify(account)) : null);
+		if (account) invalidateAll();
 	}
 
 	// Moving: drag a pane's header onto another pane. While dragging or
@@ -169,6 +194,8 @@
 {#snippet icon(d: string)}
 	<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path {d} /></svg>
 {/snippet}
+
+{#if data.user}<NewAccountDialog />{/if}
 
 {#if embedded}
 	<main class="embedded">

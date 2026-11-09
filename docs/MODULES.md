@@ -433,6 +433,24 @@ next to the sidebar or in a side-by-side pane (so it should work from about
 - Plain HTML and JavaScript are enough; if you use a framework, commit its
   build output to `ui/`. Releases are installed as-is, with no build step.
 - Supporting `prefers-color-scheme` lets the page match Ledger's dark mode.
+- Account dropdowns should end with **"+ New account…"** (Ledger 0.11.3 and
+  later): post a message to the parent window and Ledger opens its own New
+  account dialog over the module's page, so whatever the user was filling in
+  stays put, then sends the created account back:
+
+```js
+function newAccount(defaults = {}) {
+	const id = crypto.randomUUID();
+	return new Promise((resolve) => {
+		addEventListener("message", function on(e) {
+			if (e.origin !== location.origin || e.data?.type !== "ledger-new-account-result" || e.data.id !== id) return;
+			removeEventListener("message", on);
+			resolve(e.data.account); // { code, name, type, currency, ... } or null (cancelled / viewer)
+		});
+		parent.postMessage({ type: "ledger-new-account", id, defaults }, location.origin); // defaults: { name, type, currency, code, description }
+	});
+}
+```
 
 ## Migrations
 

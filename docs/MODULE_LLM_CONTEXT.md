@@ -276,6 +276,27 @@ CREATE TABLE invoices (
   muted `#97a1ad`, border `#2c333c`, accent `#4c8dff`). Must work from
   ~260px wide (panes) up to full width.
 - Show money as `(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })` plus the currency code.
+- Every account dropdown (categorizing transactions, choosing accounts in
+  settings-like forms) ends with **"+ New account…"** that calls
+  `newAccount()` below, then adds the account to the list and selects it.
+  Prefill what you know (e.g. `{ name: "Coffee shops", type: "expense",
+  currency: "CAD" }`). Hide it for viewers (`req.user.role`).
+
+```js
+// "+ New account…" in your account dropdowns (Ledger ≥ 0.11.3): Ledger opens its
+// New account dialog over your page (nothing typed is lost) and answers with the account.
+function newAccount(defaults = {}) {
+	const id = crypto.randomUUID();
+	return new Promise((resolve) => {
+		addEventListener("message", function on(e) {
+			if (e.origin !== location.origin || e.data?.type !== "ledger-new-account-result" || e.data.id !== id) return;
+			removeEventListener("message", on);
+			resolve(e.data.account); // { code, name, type, currency, ... } or null (cancelled / viewer)
+		});
+		parent.postMessage({ type: "ledger-new-account", id, defaults }, location.origin); // defaults: { name, type, currency, code, description }
+	});
+}
+```
 
 ```js
 const api = (path, opts = {}) =>
@@ -435,6 +456,7 @@ database.
 - [ ] background jobs that touch the books run through `ctx.orgs.forEach` so every organization gets them
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → LLM API / Gmail
+- [ ] account dropdowns end with "+ New account…" (the `ledger-new-account` message, Ledger ≥ 0.11.3)
 - [ ] entries posted from module records carry `links` (Ledger ≥ 0.11.2)
 - [ ] every action an LLM proposes waits for a person to approve it (pending suggestions in the UI; nothing posted, sent or changed on AI output alone)
 - [ ] searchable records exposed with `ctx.search.provide`

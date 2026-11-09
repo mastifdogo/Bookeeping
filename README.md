@@ -164,7 +164,7 @@ backend/src/orgs.ts       Organizations: per-organization databases and request 
 backend/src/reports.ts    Balance sheet and income statement
 backend/src/dashboard.ts  Dashboard summary, notifications and to-dos
 backend/src/reconcile.ts  Reconciling accounts against statements
-backend/src/backup.ts     `ledger backup run`: dumps to TrueNAS and/or Google Drive
+backend/src/backup.ts     `ledger backup run`: dumps to an SMB share and/or Google Drive
 backend/src/module-settings.ts  Module settings declared in ledger-module.json
 backend/src/cli.ts        `ledger user add|role|passwd|disable|enable|list`
 backend/src/module-files.ts  Files modules hand each other (ctx.files)
@@ -338,8 +338,8 @@ reconciliations only mark lines as cleared.
 
 ### Backups
 
-**Settings → Backups** sends database backups to a TrueNAS share, Google
-Drive, or both, on a schedule you choose, with **Back up now** and the result
+**Settings → Backups** sends database backups to a network share (any SMB
+share, or a folder mounted into the container), Google Drive, or both, on a schedule you choose, with **Back up now** and the result
 of the last run. Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#8-backups-and-restore).
 
 ### Sidebar, settings and panes

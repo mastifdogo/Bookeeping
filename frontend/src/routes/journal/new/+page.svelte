@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
+	import AccountSelect from '#lib/components/AccountSelect.svelte';
 	import { ApiError, CURRENCIES, api, today, unwrap, type Currency } from '#lib/api/client.ts';
 	import { formatCents, parseAmount } from '#lib/money.ts';
 	import type { PageProps } from './$types';
@@ -65,6 +66,9 @@
 		}
 		return map;
 	});
+
+	/** New accounts default to the currency the entry already uses. */
+	const lineCurrency = (): Currency | undefined => parsed.find((p) => p.currency)?.currency;
 
 	function addLine() {
 		lines.push(blankLine());
@@ -136,10 +140,7 @@
 					{@const errs = lineErrors.get(i)}
 					<tr>
 						<td>
-							<select bind:value={line.account_code} aria-label="Account for line {i + 1}" style="width:100%" aria-invalid={errs ? 'true' : undefined}>
-								<option value="">Choose account…</option>
-								{#each data.accounts as a (a.code)}<option value={a.code}>{a.code} — {a.name} ({a.currency})</option>{/each}
-							</select>
+							<AccountSelect bind:value={line.account_code} accounts={data.accounts} label="Account for line {i + 1}" invalid={!!errs} defaults={{ currency: lineCurrency() }} />
 							{#if p.problem}<div class="small neg">{p.problem}</div>{/if}
 							{#each errs ?? [] as m (m)}<div class="small neg">{m}</div>{/each}
 						</td>
