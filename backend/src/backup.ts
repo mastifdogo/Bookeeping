@@ -327,7 +327,12 @@ async function smbclient(t: ShareTarget, workDir: string, commands: string[], op
 	const conf = path.join(state, "smb.conf");
 	await fsp.mkdir(state, { recursive: true, mode: 0o700 });
 	const dirs = ["lock directory", "state directory", "cache directory", "private dir", "ncalrpc dir"].map((k) => `\t${k} = ${state}`);
-	await fsp.writeFile(conf, ["[global]", ...dirs, "\tclient min protocol = SMB2", ""].join("\n"), { mode: 0o600 });
+	// ledger.service only allows AF_UNIX/INET/INET6 sockets, so smbclient can't
+	// list the network interfaces itself (netlink); give it one so it doesn't
+	// stop with "Could not determine network interfaces". Names are found by
+	// DNS / /etc/hosts.
+	const conf_ = ["[global]", ...dirs, "\tclient min protocol = SMB2", "\tinterfaces = 127.0.0.1/8", "\tname resolve order = host wins bcast", ""];
+	await fsp.writeFile(conf, conf_.join("\n"), { mode: 0o600 });
 	try {
 		const out = await runCapture(SMBCLIENT(), ["-s", conf, `//${t.server}/${t.share}`, "-A", auth, "-m", "SMB3", "-t", "20", "-c", commands.join("; ")]);
 		const bad = /(NT_STATUS_[A-Z_]+)/.exec(out);
@@ -352,10 +357,11 @@ function smbError(status: string, out: string): string {
 		NT_STATUS_BAD_NETWORK_NAME: "there is no share by that name on the server",
 		NT_STATUS_OBJECT_NAME_NOT_FOUND: "the folder could not be created or found",
 		NT_STATUS_OBJECT_PATH_NOT_FOUND: "the folder could not be created or found",
-		NT_STATUS_HOST_UNREACHABLE: "the server can't be reached",
+		NT_STATUS_HOST_UNREACHABLE: "the server can't be reached (check its name, or use its IP address)",
+		NT_STATUS_NOT_FOUND: "the server's name couldn't be found; use its IP address or full name (e.g. truenas.local)",
 		NT_STATUS_IO_TIMEOUT: "the server didn't answer",
 		NT_STATUS_CONNECTION_REFUSED: "the server refused the connection (is SMB turned on?)",
-		NT_STATUS_UNSUCCESSFUL: "the server can't be reached",
+		NT_STATUS_UNSUCCESSFUL: "the server can't be reached (check its name, or use its IP address)",
 		NT_STATUS_DISK_FULL: "the share is full",
 	};
 	return `SMB: ${why[status] ?? out.trim().split("\n").at(-1)} (${status})`;
