@@ -588,6 +588,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/migrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What migrating from other software can do here (whether an LLM can read the files) */
+        get: operations["getMigrationInfo"];
+        put?: never;
+        /**
+         * Upload an export from other bookkeeping software and see what it is
+         * @description Accepts CSV or tab-separated text (UTF-8, Windows-1252 or UTF-16).
+         *     The LLM set up under Settings → LLM API (or header rules) works out
+         *     what the file holds and how its columns map to Ledger's; nothing is
+         *     written until /migrations/{uploadId}/import. Uploads are kept for two
+         *     hours, for the user who made them.
+         */
+        post: operations["uploadMigration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/migrations/{uploadId}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** What importing would do with a changed mapping */
+        post: operations["previewMigration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/migrations/{uploadId}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import it (all or nothing), or hand a customer/vendor list to a module */
+        post: operations["runMigration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/imports/journal-entries": {
         parameters: {
             query?: never;
@@ -1483,6 +1542,111 @@ export interface components {
         };
         ImportRequest: {
             filename: components["schemas"]["CsvFilename"];
+        };
+        /** @enum {string} */
+        MigrationKind: "accounts" | "general_ledger" | "trial_balance" | "customers" | "vendors";
+        MigrationAccountChoice: {
+            /** @enum {string} */
+            action?: "create" | "map" | "skip";
+            code?: string;
+            name?: string;
+            type?: components["schemas"]["AccountType"];
+            currency?: components["schemas"]["Currency"];
+        };
+        MigrationMapping: {
+            kind: components["schemas"]["MigrationKind"];
+            /** @description Ledger field → the file's column */
+            columns: {
+                [key: string]: string | null;
+            };
+            header_row: number;
+            /** @description Accounts are heading rows with their lines below */
+            account_from_sections: boolean;
+            /** @enum {string} */
+            date_format: "ymd" | "mdy" | "dmy";
+            decimal_comma: boolean;
+            currency: components["schemas"]["Currency"];
+            /**
+             * Format: date
+             * @description trial_balance: date of the opening entry
+             */
+            as_of: string;
+            accounts: {
+                [key: string]: components["schemas"]["MigrationAccountChoice"];
+            };
+        };
+        MigrationMappingChange: {
+            kind?: components["schemas"]["MigrationKind"];
+            columns?: {
+                [key: string]: string | null;
+            };
+            header_row?: number;
+            account_from_sections?: boolean;
+            /** @enum {string} */
+            date_format?: "ymd" | "mdy" | "dmy";
+            decimal_comma?: boolean;
+            currency?: components["schemas"]["Currency"];
+            as_of?: string;
+            accounts?: {
+                [key: string]: components["schemas"]["MigrationAccountChoice"];
+            };
+        };
+        MigrationPlan: {
+            id: string;
+            filename: string;
+            detection: {
+                kind: components["schemas"]["MigrationKind"];
+                confidence: number;
+                summary: string;
+                software: string;
+                /** @enum {string} */
+                source: "ai" | "rules";
+                note: string;
+            };
+            mapping: components["schemas"]["MigrationMapping"];
+            headers: string[];
+            sample: string[][];
+            row_count: number;
+            fields: string[];
+            required: string[];
+            accounts: {
+                label: string;
+                rows: number;
+                exists: boolean;
+                /** @enum {string} */
+                from: "file" | "ledger" | "ai" | "guess" | "you";
+                /** @enum {string} */
+                action: "create" | "map" | "skip";
+                code: string;
+                name: string;
+                type: components["schemas"]["AccountType"];
+                currency: components["schemas"]["Currency"];
+            }[];
+            entries: {
+                count: number;
+                lines: number;
+                from: string | null;
+                to: string | null;
+                preview: {
+                    date: string;
+                    description: string;
+                    reference: string;
+                    lines: components["schemas"]["JournalLineCreate"][];
+                }[];
+            };
+            contacts: {
+                count: number;
+                recipients: {
+                    id: string;
+                    name: string;
+                }[];
+            };
+            issues: {
+                /** @enum {string} */
+                level: "error" | "warning";
+                message: string;
+            }[];
+            ai_available: boolean;
         };
         ImportResult: {
             /** Format: int64 */
@@ -3037,6 +3201,137 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getMigrationInfo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ai_available: boolean;
+                        kinds: components["schemas"]["MigrationKind"][];
+                        max_bytes: number;
+                    };
+                };
+            };
+        };
+    };
+    uploadMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    /**
+                     * @default true
+                     * @enum {string}
+                     */
+                    use_ai?: "true" | "false";
+                };
+            };
+        };
+        responses: {
+            /** @description What was found, and what importing would do */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationPlan"];
+                };
+            };
+            413: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    previewMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                uploadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    mapping?: components["schemas"]["MigrationMappingChange"];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationPlan"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    runMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                uploadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    mapping?: components["schemas"]["MigrationMappingChange"];
+                    /** @description customers / vendors: the module to send the list to */
+                    recipient?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Imported */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        kind: components["schemas"]["MigrationKind"];
+                        accounts_created: number;
+                        entries_created: number;
+                        import_id: number | null;
+                        sent_to: string | null;
+                        file_id: number | null;
+                    };
+                };
+            };
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

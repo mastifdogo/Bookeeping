@@ -28,7 +28,8 @@
 		{ title: 'Trial balance', subtitle: 'Report', href: '/reports/trial-balance' },
 		{ title: 'Account settings, password', subtitle: 'Settings', href: '/settings/account' },
 		{ title: 'Sidebar', subtitle: 'Settings', href: '/settings/sidebar' },
-		{ title: 'Import & export CSV', subtitle: 'Settings', href: '/settings/import-export' }
+		{ title: 'Import & export CSV', subtitle: 'Settings', href: '/settings/import-export' },
+		{ title: 'Migrate from other software', subtitle: 'Settings: import QuickBooks, Xero, Wave… exports', href: '/settings/migrate' }
 	];
 	const ADMIN_PAGES: Hit[] = [
 		{ title: 'Users and roles', subtitle: 'Settings', href: '/settings/users' },

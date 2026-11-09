@@ -80,7 +80,10 @@ Decide, and state briefly to the user:
   them declares `"files": {"accepts": [...]}` in its manifest and handles
   `ctx.files.onReceive` / `inbox()`, then marks each file `done` or
   `rejected` with a `result`; a module that produces them offers "send to …"
-  from `ctx.files.targets(kind)`. Needs Ledger 0.11.0.
+  from `ctx.files.targets(kind)`. Needs Ledger 0.11.0. A module that keeps
+  customers or vendors accepts `customer` / `vendor` lists (Ledger 0.12.0):
+  Ledger's migration from other software sends them there, and the module
+  shows what it would add for the user to approve.
 - **Organizations**: each organization's books (and the module's schema) are
   a separate database, and requests already run in the user's current one.
   Don't add organization columns. Background jobs that touch the books loop

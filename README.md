@@ -226,6 +226,22 @@ Move value between currencies through an FX clearing account in each currency
 
 Reports (trial balance, ledger export) total each currency separately.
 
+### Migrating from other software
+
+**Settings → Import & export → Migrate** takes an export from QuickBooks,
+Xero, Wave, Sage, FreshBooks or a spreadsheet (CSV or tab-separated, any of
+the usual encodings). The LLM set up under Settings → LLM API works out
+what the file is (chart of accounts, general ledger, trial balance,
+customers or vendors), which row holds the column names, how the columns map
+to Ledger's, the date and number formats, and a type for every account it
+sees, matching ones Ledger already has. Without an LLM, column names are
+matched by rules. You see what was understood and what would be created,
+can change the kind, any column and each account (create with a number,
+name and type, or post to an existing one), and nothing is written until you
+press Import. Imports are all or nothing; transactions that don't balance
+are listed by row; the same file can't be imported twice. Customer and
+vendor lists go to a module that accepts them.
+
 ### CSV import
 
 Drop a file in `/app/csv_data` and `POST /api/v1/imports/journal-entries

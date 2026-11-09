@@ -76,6 +76,14 @@
 	}
 </script>
 
+<div class="card migrate">
+	<div>
+		<strong>Moving from other bookkeeping software?</strong>
+		<div class="muted small">Upload an export from QuickBooks, Xero, Wave, Sage or a spreadsheet; AI works out what it is and you check it before importing.</div>
+	</div>
+	<a class="button" href="/settings/migrate">Migrate…</a>
+</div>
+
 <p class="muted">CSV files in the server's data directory. Files are never overwritten.</p>
 
 {#if message}<div class="notice ok">{message}</div>{/if}
@@ -142,6 +150,13 @@ S1,,,4000,,250.00</pre>
 </div>
 
 <style>
+	.migrate {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		align-items: center;
+		justify-content: space-between;
+	}
 	pre {
 		background: var(--bg);
 		border: 1px solid var(--border);

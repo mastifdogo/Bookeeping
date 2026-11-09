@@ -313,6 +313,13 @@ Ledger 0.11.0 and later. Modules can pass each other files labelled
 `transaction`, `receipt`, `statement` or `bill`, without posting anything to
 the books: a downloads module hands a bank statement to a module that turns
 statements into entries, an email module hands bills to a payables module.
+Since Ledger 0.12.0 there are also `customer` and `vendor` lists (CSV). Ledger
+itself sends them (sender `"ledger"`) when someone migrates from other
+bookkeeping software under Settings → Import & export → Migrate: `meta` is
+`{ header_row, columns: { name, email?, phone? } (the file's column names), headers, rows, source }`.
+A module that keeps customers or vendors should accept them, show what it
+would add for the user to approve, then mark the file `done`.
+
 The receiver declares what it takes in its manifest:
 
 ```json

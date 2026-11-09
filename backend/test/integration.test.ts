@@ -1888,3 +1888,269 @@ test("backups: straight to an SMB share", async (t) => {
 	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-20261111T023000Z.dump"]);
 	assert.equal(info.share_files[0].size_bytes, "PGDMP fake dump".length);
 });
+
+// ---------------------------------------------------------------------------
+// Migrating from other bookkeeping software
+// ---------------------------------------------------------------------------
+
+async function uploadMigration(ta: TestApp, filename: string, text: string, useAi = true) {
+	const boundary = "----mig" + Math.random().toString(16).slice(2);
+	const body = Buffer.concat([
+		Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="use_ai"\r\n\r\n${useAi}\r\n`),
+		Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/csv\r\n\r\n`),
+		Buffer.from(text),
+		Buffer.from(`\r\n--${boundary}--\r\n`),
+	]);
+	return ta.request("POST", "/api/v1/migrations", { rawBody: body, headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` }, cookie: `${SESSION_COOKIE}=${ta.token}` });
+}
+
+// A QuickBooks-style "Journal" report: title rows, $ amounts, US dates.
+const QB_JOURNAL = `Acme Renovations
+Journal
+"January 1 - March 31, 2026"
+
+Date,Transaction Type,Num,Name,Memo/Description,Account,Debit,Credit
+01/03/2026,Deposit,1001,,Owner investment,Chequing,"$10,000.00",
+01/03/2026,Deposit,1001,,Owner investment,Owner's Equity,,"$10,000.00"
+01/15/2026,Invoice,1002,Smith Co,Kitchen job,Accounts Receivable (A/R),"$5,650.00",
+01/15/2026,Invoice,1002,Smith Co,Kitchen job,Sales,,"$5,000.00"
+01/15/2026,Invoice,1002,Smith Co,Kitchen job,GST/HST Payable,,$650.00
+02/02/2026,Expense,1003,Staples,Printer paper,Office Supplies,$42.50,
+02/02/2026,Expense,1003,Staples,Printer paper,Chequing,,$42.50
+,,,,,,"$15,692.50","$15,692.50"
+`;
+
+test("migration: a QuickBooks journal export, detected by column names", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	expectStatus(await call("POST", "/accounts", { code: "1000", name: "Chequing", type: "asset", currency: "CAD" }), 201);
+	assert.equal((await call("GET", "/migrations")).json().ai_available, false);
+
+	let r = await uploadMigration(ta, "Journal.csv", QB_JOURNAL);
+	expectStatus(r, 201);
+	let plan = r.json();
+	assert.equal(plan.detection.kind, "general_ledger");
+	assert.equal(plan.detection.source, "rules");
+	assert.match(plan.detection.note, /No LLM connection/);
+	assert.equal(plan.mapping.header_row, 3); // after the title rows (blank lines don't count)
+	assert.deepEqual(
+		[plan.mapping.columns.date, plan.mapping.columns.account, plan.mapping.columns.debit, plan.mapping.columns.credit, plan.mapping.columns.entry_id, plan.mapping.columns.description],
+		["Date", "Account", "Debit", "Credit", "Num", "Memo/Description"],
+	);
+	assert.deepEqual(plan.issues.filter((i: any) => i.level === "error"), []);
+	assert.equal(plan.entries.count, 3);
+	assert.equal(plan.entries.from, "2026-01-03");
+	assert.equal(plan.entries.to, "2026-02-02");
+	const acc = Object.fromEntries(plan.accounts.map((a: any) => [a.label, [a.action, a.code, a.type]]));
+	assert.deepEqual(acc["Chequing"], ["map", "1000", "asset"]); // already in Ledger
+	assert.deepEqual(acc["Owner's Equity"]?.slice(0, 1).concat(acc["Owner's Equity"][2]), ["create", "equity"]);
+	assert.equal(acc["Accounts Receivable (A/R)"][2], "asset");
+	assert.equal(acc["Sales"][2], "revenue");
+	assert.equal(acc["GST/HST Payable"][2], "liability");
+	assert.equal(acc["Office Supplies"][2], "expense");
+
+	// The user changes their mind about one account's code before importing.
+	const id = plan.id;
+	r = await call("POST", `/migrations/${id}/preview`, { mapping: { ...plan.mapping, accounts: { "Office Supplies": { action: "create", code: "6100", type: "expense" } } } });
+	expectStatus(r, 200);
+	plan = r.json();
+	assert.equal(plan.accounts.find((a: any) => a.label === "Office Supplies").code, "6100");
+
+	// Viewers can't import.
+	await createUser(ta.app, "vee", "vee-password", "viewer");
+	r = await ta.request("POST", "/api/v1/auth/login", { body: { username: "vee", password: "vee-password" } });
+	expectStatus(await ta.request("POST", `/api/v1/migrations/${id}/import`, { body: { mapping: plan.mapping }, cookie: `${SESSION_COOKIE}=${sessionFrom(r).value}` }), 403);
+
+	r = await call("POST", `/migrations/${id}/import`, { mapping: plan.mapping });
+	expectStatus(r, 200);
+	assert.equal(r.json().accounts_created, 5);
+	assert.equal(r.json().entries_created, 3);
+	const entries = (await call("GET", "/journal-entries")).json().data;
+	assert.equal(entries.length, 3);
+	assert.equal(entries.find((e: any) => e.description === "Kitchen job").totals[0].amount_cents, 565000);
+	assert.equal((await call("GET", "/accounts/6100")).json().name, "Office Supplies");
+	assert.equal((await call("GET", "/accounts/1000")).json().balance_cents, 995750);
+
+	// The same file again is refused (it's gone from memory, and its content was imported).
+	expectStatus(await call("POST", `/migrations/${id}/import`, { mapping: plan.mapping }), 404);
+	r = await uploadMigration(ta, "Journal.csv", QB_JOURNAL);
+	const again = r.json();
+	expectStatus(await call("POST", `/migrations/${again.id}/import`, { mapping: again.mapping }), 409);
+});
+
+test("migration: transactions that don't balance are refused, with the rows", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const csv = "Date;Account;Debit;Credit;Transaction ID\n05.03.2026;Bank;100,00;;A1\n05.03.2026;Rent;;90,00;A1\n";
+	const r = await uploadMigration(ta, "export.csv", csv);
+	expectStatus(r, 201);
+	const plan = r.json();
+	assert.equal(plan.mapping.decimal_comma, true);
+	const errors = plan.issues.filter((i: any) => i.level === "error").map((i: any) => i.message);
+	assert.equal(errors.length, 1, JSON.stringify(errors));
+	assert.match(errors[0], /Rows 2, 3 \(2026-03-05\): debits and credits differ by 10\.00 CAD/);
+	const res = await ta.call("POST", `/migrations/${plan.id}/import`, { mapping: plan.mapping });
+	expectStatus(res, 422);
+	assert.equal(await ta.countRows("accounts"), 0, "nothing is written");
+});
+
+test("migration: a Xero chart of accounts, and a trial balance for opening balances", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	const coa = `*Code,*Name,*Type,*Tax Code,Description
+090,Business Bank Account,Bank,Tax Exempt,
+200,Sales,Revenue,GST on Income,Income from sales
+400,Advertising,Expense,GST on Expenses,
+610,Accounts Receivable,Current Asset,BAS Excluded,
+800,Accounts Payable,Current Liability,BAS Excluded,
+960,Retained Earnings,Equity,BAS Excluded,
+`;
+	let r = await uploadMigration(ta, "ChartOfAccounts.csv", coa);
+	expectStatus(r, 201);
+	let plan = r.json();
+	assert.equal(plan.detection.kind, "accounts");
+	assert.deepEqual([plan.mapping.columns.code, plan.mapping.columns.name, plan.mapping.columns.type], ["*Code", "*Name", "*Type"]);
+	assert.deepEqual(
+		plan.accounts.map((a: any) => [a.code, a.name, a.type, a.from]),
+		[
+			["090", "Business Bank Account", "asset", "file"],
+			["200", "Sales", "revenue", "file"],
+			["400", "Advertising", "expense", "file"],
+			["610", "Accounts Receivable", "asset", "file"],
+			["800", "Accounts Payable", "liability", "file"],
+			["960", "Retained Earnings", "equity", "file"],
+		],
+	);
+	r = await call("POST", `/migrations/${plan.id}/import`, { mapping: { ...plan.mapping, currency: "USD" } });
+	expectStatus(r, 200);
+	assert.equal(r.json().accounts_created, 6);
+	assert.equal((await call("GET", "/accounts/200")).json().description, "Income from sales");
+	assert.equal((await call("GET", "/accounts/200")).json().currency, "USD");
+
+	// Opening balances; they don't quite balance, so the rest goes to Opening balance equity.
+	const tb = "Trial Balance\nAs of December 31, 2025\n\nAccount,Debit,Credit\nBusiness Bank Account,\"12,500.00\",\nAccounts Payable,,800.00\nRetained Earnings,,\"11,000.00\"\nTOTAL,\"12,500.00\",\"11,800.00\"\n";
+	r = await uploadMigration(ta, "Trial Balance.csv", tb);
+	plan = r.json();
+	assert.equal(plan.detection.kind, "trial_balance");
+	r = await call("POST", `/migrations/${plan.id}/preview`, { mapping: { ...plan.mapping, as_of: "2025-12-31" } });
+	plan = r.json();
+	assert.ok(plan.issues.some((i: any) => i.level === "warning" && /Opening balance equity/.test(i.message)), JSON.stringify(plan.issues));
+	assert.deepEqual(plan.issues.filter((i: any) => i.level === "error"), []);
+	r = await call("POST", `/migrations/${plan.id}/import`, { mapping: plan.mapping });
+	expectStatus(r, 200);
+	assert.equal(r.json().entries_created, 1);
+	assert.equal(r.json().accounts_created, 1); // 3900 Opening balance equity
+	const e = (await call("GET", "/journal-entries")).json().data[0];
+	assert.equal(e.entry_date, "2025-12-31");
+	assert.equal((await call("GET", "/accounts/3900")).json().balance_cents, -70000); // a 700.00 credit (balances are debit-positive)
+});
+
+test("migration: customer lists go to a module that takes them", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const csv = "Customer,Email,Phone\nSmith Co,ap@smith.example,555-0100\nJones Ltd,,555-0101\n";
+	let r = await uploadMigration(ta, "Customers.csv", csv);
+	let plan = r.json();
+	assert.equal(plan.detection.kind, "customers");
+	assert.match(plan.issues[0].message, /No installed module accepts customer lists/);
+
+	await loadModules(t, app, {
+		sales: {
+			manifest: { files: { accepts: ["customer", "bill"] } },
+			code: `let got = [];
+			export default function (ctx) {
+				ctx.files.onReceive(async (f) => { const full = await ctx.files.get(f.id); got.push([f.sender, f.kind, f.meta.columns.name, full.data.toString().split("\\n").length]); });
+				ctx.route("GET", "/got", () => got);
+			}`,
+		},
+	});
+	r = await call("POST", `/migrations/${plan.id}/preview`, {});
+	plan = r.json();
+	assert.deepEqual(plan.contacts, { count: 2, recipients: [{ id: "sales", name: "SALES" }] });
+	r = await call("POST", `/migrations/${plan.id}/import`, { mapping: plan.mapping, recipient: "sales" });
+	expectStatus(r, 200);
+	assert.equal(r.json().sent_to, "sales");
+	await new Promise((res) => setTimeout(res, 50));
+	assert.deepEqual((await call("GET", "/m/sales/got")).json(), [["ledger", "customer", "Customer", 4]]);
+});
+
+test("migration: the AI reads a general ledger report grouped by account", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const report = `General Ledger
+Distribution account,Date,Transaction type,Num,Description,Debit,Credit,Balance
+Chequing,,,,,,,
+,2026-03-01,Expense,77,Coffee for clients,,15.75,-15.75
+,2026-03-02,Deposit,78,Cash sale,200.00,,184.25
+Total for Chequing,,,,,200.00,15.75,
+Meals and Entertainment,,,,,,,
+,2026-03-01,Expense,77,Coffee for clients,15.75,,15.75
+Total for Meals and Entertainment,,,,,15.75,,
+Sales of Product Income,,,,,,,
+,2026-03-02,Deposit,78,Cash sale,,200.00,200.00
+`;
+	// A stand-in for Claude that answers with this detection.
+	const prompts: string[] = [];
+	const { createServer } = await import("node:http");
+	const srv = createServer((req, res) => {
+		let raw = "";
+		req.on("data", (d) => (raw += d));
+		req.on("end", () => {
+			const body = JSON.parse(raw);
+			prompts.push(body.messages[0].content);
+			const answer = {
+				kind: "general_ledger",
+				confidence: 0.94,
+				summary: "A general ledger report from QuickBooks Online, grouped by account, for March 2026.",
+				software: "QuickBooks Online",
+				header_row: 1,
+				account_from_sections: true,
+				date_format: "ymd",
+				decimal_comma: false,
+				currency: "CAD",
+				columns: { date: "Date", account: null, debit: "Debit", credit: "Credit", amount: null, entry_id: "Num", description: "Description", reference: null, memo: null, currency: null, code: null, name: null, type: null, balance: "Balance", email: null, phone: null },
+				accounts: [
+					{ label: "Chequing", type: "asset", existing_code: null },
+					{ label: "Meals and Entertainment", type: "expense", existing_code: null },
+					{ label: "Sales of Product Income", type: "revenue", existing_code: "4000" },
+				],
+			};
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ model: body.model, stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(answer) }], usage: { input_tokens: 900, output_tokens: 200 } }));
+		});
+	});
+	await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+	t.after(() => srv.close());
+	const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+	await mkdir(app.integrations.dir, { mode: 0o700 });
+	expectStatus(await call("PUT", "/integrations/llm", { connections: [{ id: "main", name: "Claude", provider: "anthropic", api_key: "sk-test", base_url: base, uses: ["text"] }] }), 200);
+	expectStatus(await call("POST", "/accounts", { code: "4000", name: "Sales", type: "revenue", currency: "CAD" }), 201);
+
+	const r = await uploadMigration(ta, "General Ledger.csv", report);
+	expectStatus(r, 201);
+	const plan = r.json();
+	assert.equal(plan.detection.source, "ai");
+	assert.equal(plan.detection.software, "QuickBooks Online");
+	assert.equal(plan.mapping.account_from_sections, true);
+	assert.match(prompts[0]!, /File name: General Ledger\.csv/);
+	assert.match(prompts[0]!, /4000, Sales, revenue/); // Ledger's accounts, for matching
+	assert.deepEqual(plan.issues.filter((i: any) => i.level === "error"), []);
+	const acc = Object.fromEntries(plan.accounts.map((a: any) => [a.label, [a.action, a.code, a.type, a.from]]));
+	assert.deepEqual(acc["Sales of Product Income"], ["map", "4000", "revenue", "ledger"]); // the AI matched it
+	assert.deepEqual(acc["Meals and Entertainment"].slice(2), ["expense", "ai"]);
+	assert.equal(plan.entries.count, 2);
+	// Nothing is written until the user imports.
+	assert.equal(await ta.countRows("journal_entries"), 0);
+	const res = await call("POST", `/migrations/${plan.id}/import`, { mapping: plan.mapping });
+	expectStatus(res, 200);
+	assert.equal(res.json().entries_created, 2);
+	assert.equal(res.json().accounts_created, 2);
+	// Without AI, the same file still gets a sensible guess.
+	const noAi = (await uploadMigration(ta, "General Ledger.csv", report, false)).json();
+	assert.equal(noAi.detection.source, "rules");
+	assert.equal(noAi.mapping.account_from_sections, true);
+});

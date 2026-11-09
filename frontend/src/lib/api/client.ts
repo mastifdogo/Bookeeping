@@ -118,6 +118,22 @@ export async function uploadCsv(file: File): Promise<CsvFile> {
 	return body as CsvFile;
 }
 
+export type MigrationPlan = Schemas['MigrationPlan'];
+
+/** Uploads an export from other bookkeeping software for /settings/migrate. */
+export async function uploadMigration(file: File, useAi: boolean): Promise<MigrationPlan> {
+	const form = new FormData();
+	form.append('use_ai', String(useAi));
+	form.append('file', file);
+	const response = await fetch(`${API_BASE}/migrations`, { method: 'POST', body: form });
+	const body = await response.json().catch(() => undefined);
+	if (!response.ok) {
+		if (response.status === 401) onUnauthorized();
+		throw new ApiError(response.status, body?.error ?? { code: 'internal_error', message: response.statusText });
+	}
+	return body as MigrationPlan;
+}
+
 /** Converts any thrown value into display text plus optional details. */
 export function describeError(e: unknown): { message: string; details: string[] } {
 	if (e instanceof ApiError) return { message: e.message, details: e.details };

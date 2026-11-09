@@ -55,7 +55,8 @@ import { importJournalEntries } from "./import.ts";
 import { getDashboard, setItemClosed } from "./dashboard.ts";
 import { search } from "./search.ts";
 import { integrationsAvailable, requireIntegrations, writeIntegration } from "./integrations.ts";
-import { applyLlmChange, llmComplete, llmUsage, publicLlmConfig, readLlmConfig } from "./llm.ts";
+import { applyLlmChange, llmComplete, llmUsage, pickConnection, publicLlmConfig, readLlmConfig } from "./llm.ts";
+import { analyzeUpload, cleanMapping, getUpload, MIGRATION_KINDS, planFor, runMigration } from "./migrate.ts";
 import { applyGmailChange, codeFromPaste, finishAuth, publicGmailConfig, readGmailConfig, REDIRECT_URI, revoke as revokeGmail, startAuth } from "./gmail.ts";
 import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
 import {
@@ -1049,6 +1050,53 @@ async function handleUploadFile(c: Ctx): Promise<void> {
 	writeJSON(c.res, 201, await saveUploadedCsv(c.app, part.filename, part.data));
 }
 
+// Migrating from other bookkeeping software: upload, preview, import.
+
+async function handleMigrationInfo(c: Ctx): Promise<void> {
+	const cfg = await readLlmConfig(c.app.integrations.dir);
+	writeJSON(c.res, 200, { ai_available: pickConnection(cfg, "text") !== null, kinds: MIGRATION_KINDS, max_bytes: MAX_FILE_BYTES });
+}
+
+async function handleMigrationUpload(c: Ctx): Promise<void> {
+	const boundary = formDataBoundary(c.req.headers["content-type"]);
+	if (!boundary) throw new HttpError(400, 'expected a multipart/form-data body with a "file" field', "bad_request");
+	let body: Buffer;
+	try {
+		body = await readBody(c.req, MAX_FILE_BYTES + MULTIPART_OVERHEAD);
+	} catch (err) {
+		if (err instanceof BodyTooLargeError) {
+			c.res.setHeader("Connection", "close");
+			throw new TooLargeError();
+		}
+		throw err;
+	}
+	let parts;
+	try {
+		parts = parseMultipart(body, boundary);
+	} catch (err) {
+		if (err instanceof MultipartError) throw new HttpError(400, "invalid multipart body: " + err.message, "bad_request");
+		throw err;
+	}
+	const part = parts.find((p) => p.name === "file");
+	if (!part) throw new HttpError(400, 'missing "file" field', "bad_request");
+	const useAi = parts.find((p) => p.name === "use_ai")?.data.toString() !== "false";
+	const u = await analyzeUpload(c.app, c.user!.id, part.filename || "import.csv", part.data, useAi);
+	writeJSON(c.res, 201, await planFor(c.app, u, u.mapping));
+}
+
+async function handleMigrationPreview(c: Ctx): Promise<void> {
+	const u = getUpload(c.params.uploadId ?? "", c.user!.id);
+	const body = await decodeBody(c, false, (v) => (v === null || v === undefined ? {} : (plainJson(v) as Record<string, unknown>)));
+	writeJSON(c.res, 200, await planFor(c.app, u, cleanMapping(u, (body as Record<string, unknown>).mapping ?? {})));
+}
+
+async function handleMigrationImport(c: Ctx): Promise<void> {
+	const u = getUpload(c.params.uploadId ?? "", c.user!.id);
+	const body = (await decodeBody(c, true, (v) => plainJson(v))) as Record<string, unknown>;
+	const recipient = typeof body.recipient === "string" ? body.recipient : null;
+	writeJSON(c.res, 200, await runMigration(c.app, u, cleanMapping(u, body.mapping ?? {}), c.user!.id, recipient));
+}
+
 async function handleImportJournalEntries(c: Ctx): Promise<void> {
 	const input = await decodeBody(c, true, decodeImportRequest);
 	if (!CSV_FILENAME_RE.test(input.filename)) {
@@ -1442,6 +1490,10 @@ const ROUTES: Route[] = [
 	route("POST", "/files", true, handleUploadFile),
 	route("GET", "/files/:filename", true, handleDownloadFile),
 	route("POST", "/imports/journal-entries", true, handleImportJournalEntries),
+	route("GET", "/migrations", true, handleMigrationInfo),
+	route("POST", "/migrations", true, handleMigrationUpload),
+	route("POST", "/migrations/:uploadId/preview", true, handleMigrationPreview),
+	route("POST", "/migrations/:uploadId/import", true, handleMigrationImport),
 
 	route("GET", "/backups", "server", handleGetBackups),
 	route("PUT", "/backups/config", "server", handlePutBackupConfig),

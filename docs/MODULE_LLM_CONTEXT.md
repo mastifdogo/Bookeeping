@@ -64,7 +64,8 @@ README.md              what it does and how to use it
   and `ctx.orgs` 0.11.0).
 - `files`: optional (Ledger ≥ 0.11.0), `{"accepts": ["statement", "bill"]}`:
   the kinds of file other modules may hand this one through `ctx.files`
-  (`transaction`, `receipt`, `statement`, `bill`). Needs `server`.
+  (`transaction`, `receipt`, `statement`, `bill`; `customer` and `vendor`
+  lists since 0.12.0). Needs `server`.
 - `nav`: optional sidebar entry (requires `ui`); `label` ≤ 24 chars; `icon`:
   - a name: `hammer wrench invoice cart chart users mail calendar box dollar bank wallet piggy receipt tag truck home briefcase clock globe key lock star heart bell file folder cloud database link send phone printer gift bot sparkles pie target scale percent calculator`; or
   - your own drawing (Ledger ≥ 0.9.1): `{"path": "<SVG path data on a 24x24 grid>", "fill": false}`.
@@ -380,6 +381,12 @@ Modules hand each other files labelled `transaction`, `receipt`,
 `statement` or `bill`, without posting anything: e.g. a downloads module
 passes a bank statement to a module that sorts statements into entries. The
 receiver lists the kinds it takes in its manifest (`"files": {"accepts": […]}`).
+Since Ledger 0.12.0 there are also `customer` and `vendor` lists (CSV). Ledger
+itself sends them (sender `"ledger"`) when someone migrates from other
+bookkeeping software under Settings → Import & export → Migrate: `meta` is
+`{ header_row, columns: { name, email?, phone? } (the file's column names), headers, rows, source }`.
+A module that keeps customers or vendors should accept them, show what it
+would add for the user to approve, then mark the file `done`.
 
 ```js
 ctx.files.targets("statement");            // → [{ id, name, accepts }] running modules that take statements

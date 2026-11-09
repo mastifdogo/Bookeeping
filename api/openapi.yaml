@@ -894,6 +894,111 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /migrations:
+    get:
+      tags: [Files]
+      operationId: getMigrationInfo
+      summary: What migrating from other software can do here (whether an LLM can read the files)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ai_available, kinds, max_bytes]
+                properties:
+                  ai_available: { type: boolean }
+                  kinds: { type: array, items: { $ref: '#/components/schemas/MigrationKind' } }
+                  max_bytes: { type: integer }
+    post:
+      tags: [Files]
+      operationId: uploadMigration
+      summary: Upload an export from other bookkeeping software and see what it is
+      description: |
+        Accepts CSV or tab-separated text (UTF-8, Windows-1252 or UTF-16).
+        The LLM set up under Settings → LLM API (or header rules) works out
+        what the file holds and how its columns map to Ledger's; nothing is
+        written until /migrations/{uploadId}/import. Uploads are kept for two
+        hours, for the user who made them.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                use_ai: { type: string, enum: ['true', 'false'], default: 'true' }
+      responses:
+        '201':
+          description: What was found, and what importing would do
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MigrationPlan' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /migrations/{uploadId}/preview:
+    post:
+      tags: [Files]
+      operationId: previewMigration
+      summary: What importing would do with a changed mapping
+      parameters:
+        - { name: uploadId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { mapping: { $ref: '#/components/schemas/MigrationMappingChange' } } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MigrationPlan' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /migrations/{uploadId}/import:
+    post:
+      tags: [Files]
+      operationId: runMigration
+      summary: Import it (all or nothing), or hand a customer/vendor list to a module
+      parameters:
+        - { name: uploadId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mapping: { $ref: '#/components/schemas/MigrationMappingChange' }
+                recipient: { type: string, description: 'customers / vendors: the module to send the list to' }
+      responses:
+        '200':
+          description: Imported
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [kind, accounts_created, entries_created, import_id, sent_to, file_id]
+                properties:
+                  kind: { $ref: '#/components/schemas/MigrationKind' }
+                  accounts_created: { type: integer }
+                  entries_created: { type: integer }
+                  import_id: { type: integer, nullable: true }
+                  sent_to: { type: string, nullable: true }
+                  file_id: { type: integer, nullable: true }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /imports/journal-entries:
     post:
       tags: [Files]
@@ -2099,6 +2204,107 @@ components:
       additionalProperties: false
       properties:
         filename: { $ref: '#/components/schemas/CsvFilename' }
+    MigrationKind:
+      type: string
+      enum: [accounts, general_ledger, trial_balance, customers, vendors]
+    MigrationAccountChoice:
+      type: object
+      properties:
+        action: { type: string, enum: [create, map, skip] }
+        code: { type: string }
+        name: { type: string }
+        type: { $ref: '#/components/schemas/AccountType' }
+        currency: { $ref: '#/components/schemas/Currency' }
+    MigrationMapping:
+      type: object
+      required: [kind, columns, header_row, account_from_sections, date_format, decimal_comma, currency, as_of, accounts]
+      properties:
+        kind: { $ref: '#/components/schemas/MigrationKind' }
+        columns: { type: object, additionalProperties: { type: string, nullable: true }, description: "Ledger field → the file's column" }
+        header_row: { type: integer }
+        account_from_sections: { type: boolean, description: Accounts are heading rows with their lines below }
+        date_format: { type: string, enum: [ymd, mdy, dmy] }
+        decimal_comma: { type: boolean }
+        currency: { $ref: '#/components/schemas/Currency' }
+        as_of: { type: string, format: date, description: 'trial_balance: date of the opening entry' }
+        accounts: { type: object, additionalProperties: { $ref: '#/components/schemas/MigrationAccountChoice' } }
+    MigrationMappingChange:
+      type: object
+      properties:
+        kind: { $ref: '#/components/schemas/MigrationKind' }
+        columns: { type: object, additionalProperties: { type: string, nullable: true } }
+        header_row: { type: integer }
+        account_from_sections: { type: boolean }
+        date_format: { type: string, enum: [ymd, mdy, dmy] }
+        decimal_comma: { type: boolean }
+        currency: { $ref: '#/components/schemas/Currency' }
+        as_of: { type: string }
+        accounts: { type: object, additionalProperties: { $ref: '#/components/schemas/MigrationAccountChoice' } }
+    MigrationPlan:
+      type: object
+      required: [id, filename, detection, mapping, headers, sample, row_count, fields, required, accounts, entries, contacts, issues, ai_available]
+      properties:
+        id: { type: string }
+        filename: { type: string }
+        detection:
+          type: object
+          required: [kind, confidence, summary, software, source, note]
+          properties:
+            kind: { $ref: '#/components/schemas/MigrationKind' }
+            confidence: { type: number }
+            summary: { type: string }
+            software: { type: string }
+            source: { type: string, enum: [ai, rules] }
+            note: { type: string }
+        mapping: { $ref: '#/components/schemas/MigrationMapping' }
+        headers: { type: array, items: { type: string } }
+        sample: { type: array, items: { type: array, items: { type: string } } }
+        row_count: { type: integer }
+        fields: { type: array, items: { type: string } }
+        required: { type: array, items: { type: string } }
+        accounts:
+          type: array
+          items:
+            type: object
+            required: [label, rows, exists, from, action, code, name, type, currency]
+            properties:
+              label: { type: string }
+              rows: { type: integer }
+              exists: { type: boolean }
+              from: { type: string, enum: [file, ledger, ai, guess, you] }
+              action: { type: string, enum: [create, map, skip] }
+              code: { type: string }
+              name: { type: string }
+              type: { $ref: '#/components/schemas/AccountType' }
+              currency: { $ref: '#/components/schemas/Currency' }
+        entries:
+          type: object
+          required: [count, lines, from, to, preview]
+          properties:
+            count: { type: integer }
+            lines: { type: integer }
+            from: { type: string, nullable: true }
+            to: { type: string, nullable: true }
+            preview:
+              type: array
+              items:
+                type: object
+                required: [date, description, reference, lines]
+                properties:
+                  date: { type: string }
+                  description: { type: string }
+                  reference: { type: string }
+                  lines: { type: array, items: { $ref: '#/components/schemas/JournalLineCreate' } }
+        contacts:
+          type: object
+          required: [count, recipients]
+          properties:
+            count: { type: integer }
+            recipients: { type: array, items: { type: object, required: [id, name], properties: { id: { type: string }, name: { type: string } } } }
+        issues:
+          type: array
+          items: { type: object, required: [level, message], properties: { level: { type: string, enum: [error, warning] }, message: { type: string } } }
+        ai_available: { type: boolean }
     ImportResult:
       type: object
       required: [import_id, filename, sha256, entries_imported, lines_imported]
