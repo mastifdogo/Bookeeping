@@ -137,7 +137,8 @@ permissions, HTTPS behind a reverse proxy, backup/restore and troubleshooting.
 
 Push a version tag. GitHub Actions (`.github/workflows/release.yml`) runs the
 unit and PostgreSQL integration tests, then builds the release tarball and the
-Debian 12 and Ubuntu 24.04 LXC templates, and attaches them with `SHA256SUMS`
+Debian 12 LXC template (an Ubuntu one can be built by hand, see above), and
+attaches them with `SHA256SUMS`
 to a GitHub Release:
 
 ```sh

@@ -9,7 +9,6 @@
 # Release assets:
 #   ledger-<tag>-linux-amd64.tar.gz           server + Node.js runtime + SQL + deploy scripts
 #   debian-12-ledger_<tag>_amd64.tar.zst       Proxmox CT template (Debian 12)
-#   ubuntu-24.04-ledger_<tag>_amd64.tar.zst    Proxmox CT template (Ubuntu 24.04)
 #   SHA256SUMS
 name: Release
 
@@ -90,11 +89,10 @@ jobs:
 
       - name: Build LXC templates
         run: |
-          for suite in bookworm noble; do
-            sudo deploy/lxc-template/build-lxc-template.sh \
-              --suite "$suite" --version "$VERSION" \
-              --release "dist/ledger-$VERSION-linux-amd64.tar.gz"
-          done
+          # Debian 12 only (an Ubuntu template can still be built by hand: --suite noble).
+          sudo deploy/lxc-template/build-lxc-template.sh \
+            --suite bookworm --version "$VERSION" \
+            --release "dist/ledger-$VERSION-linux-amd64.tar.gz"
           sudo chown -R "$(id -u):$(id -g)" dist
 
       - name: Checksums
@@ -107,7 +105,6 @@ jobs:
         run: |
           base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$VERSION"
           deb="debian-12-ledger_${VERSION}_amd64.tar.zst"
-          ubu="ubuntu-24.04-ledger_${VERSION}_amd64.tar.zst"
           sum() { awk -v f="$1" '$2 == f { print $1 }' dist/SHA256SUMS; }
           cat > notes.md <<EOF
           ## Proxmox LXC template
@@ -128,8 +125,6 @@ jobs:
           start it, and read the admin password with
           \`pct exec <ctid> -- cat /root/ledger-admin-password\`.
           Full guide: [docs/DEPLOYMENT.md]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$VERSION/docs/DEPLOYMENT.md#alternative-a-ready-made-lxc-template).
-
-          An Ubuntu 24.04 template is also attached: \`$ubu\`.
 
           ## Release tarball (one-command deploy or upgrade)
 
