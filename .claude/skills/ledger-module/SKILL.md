@@ -131,6 +131,10 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
   finish within 15 s. **No npm packages**: only `node:*` built-ins and global
   `fetch`; nothing is installed on deploy. Relative imports of the module's
   own files are fine.
+- Ledger runs in a **Debian 12** container (its releases ship only a
+  Debian 12 LXC template; Ubuntu isn't built or supported). Don't call
+  programs that aren't in it (no `spawn` of tools you'd have to
+  `apt install`), and don't depend on Ubuntu-specific paths or packages.
 - SQL: always `$1` placeholders; table names as `${ctx.schema}.table`.
   `BIGINT` columns come back as JS `bigint`: cast counts with `::int` or use
   `Number()`, never mix bigint and number.
