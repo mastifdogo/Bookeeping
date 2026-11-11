@@ -63,21 +63,29 @@ jobs:
             backend/package-lock.json
 
       - name: Install image build tools
-        # GitHub's runners fetch packages from an Azure mirror that is sometimes
-        # unreachable (minutes of timeouts per try); use Ubuntu's own mirrors
-        # from the start, and retry.
+        # mmdebstrap and Debian's archive keyring come straight from Debian's
+        # servers (which the template build uses anyway), not from the
+        # runner's Ubuntu mirrors, which are often unreachable from GitHub.
+        timeout-minutes: 10
         run: |
-          printf 'http://archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://security.ubuntu.com/ubuntu/\tpriority:2\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
-          for try in 1 2 3; do
-            if sudo apt-get $apt_opts update -q && sudo apt-get $apt_opts install -y -q mmdebstrap zstd debian-archive-keyring; then
-              exit 0
-            fi
-            echo "::warning::apt failed (try $try); trying again"
-            sleep $((try * 20))
+          set -euo pipefail
+          work=$(mktemp -d)
+          get() { curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 300 "$1" -o "$2"; }
+          get https://deb.debian.org/debian/dists/bookworm/main/binary-all/Packages.xz "$work/Packages.xz"
+          for pkg in debian-archive-keyring mmdebstrap; do
+            read -r file sum < <(xz -dc "$work/Packages.xz" | awk -v p="$pkg" '
+              $1 == "Package:" { hit = ($2 == p) }
+              hit && $1 == "Filename:" { f = $2 }
+              hit && $1 == "SHA256:" { s = $2 }
+              hit && f && s { print f, s; exit }') || true
+            [ -n "$file" ] || { echo "::error::$pkg not found on deb.debian.org"; exit 1; }
+            get "https://deb.debian.org/debian/$file" "$work/$pkg.deb"
+            echo "$sum  $work/$pkg.deb" | sha256sum -c -
           done
-          exit 1
+          # Its dependencies (perl, apt) are already on the runner.
+          sudo dpkg -i --force-depends "$work/debian-archive-keyring.deb" "$work/mmdebstrap.deb"
+          command -v zstd >/dev/null
+          mmdebstrap --version
 
       - name: Build release tarball
         run: make release VERSION="$VERSION"
