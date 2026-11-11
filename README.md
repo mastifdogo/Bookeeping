@@ -377,7 +377,8 @@ panes.
 
 **Settings → Updates** shows the installed version and sets a
 schedule: days of the week, time, time zone, and whether to reboot the
-container afterwards. At that time a root service installs the latest GitHub
+container afterwards, and whether to also check each time the server starts.
+At that time a root service installs the latest GitHub
 Release if it is newer: it verifies the checksum, backs up the database
 first, and rolls back if the new version doesn't start. Details:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#9-upgrading).

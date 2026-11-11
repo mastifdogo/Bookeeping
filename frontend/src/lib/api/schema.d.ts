@@ -1677,12 +1677,19 @@ export interface components {
              * @enum {string}
              */
             reboot: "never" | "after_update" | "always";
+            /**
+             * @description Also check for updates (Ledger, then modules) once each time the
+             *     container starts, about a minute after boot, like "Check for
+             *     updates now"; works with the schedule turned off.
+             * @default false
+             */
+            on_startup: boolean;
         };
         UpdateStatus: {
             /** @enum {string} */
             state: "idle" | "running" | "ok" | "error";
             /** @enum {string|null} */
-            trigger: "scheduled" | "manual" | null;
+            trigger: "scheduled" | "manual" | "startup" | null;
             message: string;
             /** Format: date-time */
             started_at: string | null;

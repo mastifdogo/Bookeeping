@@ -379,7 +379,12 @@ backups work.
 
 Open **Settings → Updates** in the app. Choose the days, time and time zone,
 whether to reboot the container, and tick **Install updates
-automatically**. **Check for updates now** runs a check straight away.
+automatically on a schedule**. **Check for updates now** runs a check
+straight away. **Update when the server starts** also checks once each time
+the container boots (about a minute after, `OnBootSec=1min` in
+`ledger-update.timer`), with or without the schedule: Ledger, then modules,
+like a manual check. The first run after each boot leaves a marker in
+`/run/ledger-update/`, so it happens once per boot.
 
 At the scheduled time, `ledger-update.service` (root) runs:
 
@@ -401,7 +406,8 @@ At the scheduled time, `ledger-update.service` (root) runs:
    - **only after an update**: only when it installed a release.
    - **never**: no reboot.
 
-   A manual check reboots only after installing an update.
+   A manual or startup check reboots only after installing an update (so
+   a startup check can't reboot in a loop).
 
 The timer wakes every 5 minutes and exits at once when nothing is due. A
 run missed by more than 6 hours (the container was off, say) waits for the

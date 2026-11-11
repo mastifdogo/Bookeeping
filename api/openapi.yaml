@@ -2336,12 +2336,19 @@ components:
           description: |
             When a scheduled run reboots the container: never, only after
             installing a release, or always (even when already up to date).
+        on_startup:
+          type: boolean
+          default: false
+          description: |
+            Also check for updates (Ledger, then modules) once each time the
+            container starts, about a minute after boot, like "Check for
+            updates now"; works with the schedule turned off.
     UpdateStatus:
       type: object
       required: [state, trigger, message, started_at, finished_at, latest_version, installed_version, last_scheduled_for]
       properties:
         state: { type: string, enum: [idle, running, ok, error] }
-        trigger: { type: string, enum: [scheduled, manual], nullable: true }
+        trigger: { type: string, enum: [scheduled, manual, startup], nullable: true }
         message: { type: string }
         started_at: { type: string, format: date-time, nullable: true }
         finished_at: { type: string, format: date-time, nullable: true }

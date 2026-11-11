@@ -53,6 +53,8 @@ export interface UpdateSchedule {
 	timezone: string;
 	/** When to reboot the container after a scheduled run. */
 	reboot: RebootPolicy;
+	/** Check for updates (Ledger, then modules) once each time the container starts. */
+	on_startup: boolean;
 }
 
 export const DEFAULT_SCHEDULE: UpdateSchedule = {
@@ -61,6 +63,7 @@ export const DEFAULT_SCHEDULE: UpdateSchedule = {
 	time: "03:30",
 	timezone: "UTC",
 	reboot: "always",
+	on_startup: false,
 };
 
 export type UpdateState = "idle" | "running" | "ok" | "error";
@@ -68,7 +71,7 @@ export type UpdateState = "idle" | "running" | "ok" | "error";
 export interface UpdateStatus {
 	state: UpdateState;
 	/** What started the last run. */
-	trigger: "scheduled" | "manual" | null;
+	trigger: "scheduled" | "manual" | "startup" | null;
 	message: string;
 	started_at: string | null;
 	finished_at: string | null;
@@ -113,7 +116,7 @@ export function validateSchedule(v: unknown): UpdateSchedule {
 	const err = new ValidationError();
 	const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
 	for (const k of Object.keys(o)) {
-		if (!["enabled", "days", "time", "timezone", "reboot"].includes(k)) err.add(k, "unknown field");
+		if (!["enabled", "days", "time", "timezone", "reboot", "on_startup"].includes(k)) err.add(k, "unknown field");
 	}
 	if (typeof o.enabled !== "boolean") err.add("enabled", "must be true or false");
 	const days = o.days;
@@ -127,8 +130,11 @@ export function validateSchedule(v: unknown): UpdateSchedule {
 	if (typeof o.reboot !== "string" || !REBOOT_POLICIES.includes(o.reboot as RebootPolicy)) {
 		err.add("reboot", "must be never, after_update or always");
 	}
+	// Optional, so schedules saved before 0.12.1 stay valid.
+	if (o.on_startup !== undefined && typeof o.on_startup !== "boolean") err.add("on_startup", "must be true or false");
 	err.throwIfAny();
 	return {
+		on_startup: o.on_startup === true,
 		enabled: o.enabled as boolean,
 		days: [...(days as number[])].sort((a, b) => a - b),
 		time: o.time as string,

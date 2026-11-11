@@ -454,7 +454,8 @@ database.
 2. `git tag v1.0.0 && git push origin v1.0.0`, then create a GitHub Release
    from the tag (not draft/pre-release).
 3. In Ledger: Settings → Modules → enter `owner/repo` → Add. Updates install
-   on Ledger's update schedule or with "Update modules now". If Ledger fails
+   on Ledger's update schedule, with "Update modules now", or when the server
+   starts if "Update when the server starts" is on (0.12.1). If Ledger fails
    to start after an install, it's rolled back automatically.
 
 ## 8. Checklist for your answer

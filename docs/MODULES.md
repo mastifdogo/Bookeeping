@@ -110,6 +110,8 @@ Installed modules are updated:
 
 - on Ledger's update schedule (**Settings → Updates**)
 - when you press **Check for updates now** there
+- each time the server starts, if **Update when the server starts** is on
+  there (Ledger 0.12.1 and later)
 - when you press **Update modules now** under Settings → Modules
 
 If Ledger fails to start after a module is installed or updated, the change

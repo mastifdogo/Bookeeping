@@ -625,7 +625,11 @@ test("update settings API", async (t) => {
 	const schedule = { enabled: true, days: [6, 0], time: "02:15", timezone: "America/Toronto", reboot: "after_update" };
 	r = await call("PUT", "/system/update/schedule", schedule);
 	expectStatus(r, 200);
-	assert.deepEqual(r.json().schedule, { ...schedule, days: [0, 6] });
+	assert.deepEqual(r.json().schedule, { ...schedule, days: [0, 6], on_startup: false }); // schedules saved before 0.12.1 lack it
+	r = await call("PUT", "/system/update/schedule", { ...schedule, on_startup: true });
+	assert.equal(r.json().schedule.on_startup, true);
+	expectStatus(await call("PUT", "/system/update/schedule", { ...schedule, on_startup: "yes" }), 422);
+	r = await call("PUT", "/system/update/schedule", schedule);
 	assert.ok(Date.parse(r.json().next_run_at) > Date.now());
 	assert.deepEqual(JSON.parse(await readFile(path.join(app.update.config, "schedule.json"), "utf8")).days, [0, 6]);
 

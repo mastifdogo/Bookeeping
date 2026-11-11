@@ -217,7 +217,10 @@ version is already released, and fails on a version that isn't `x.y.z`.
    permissions". To re-run it without a change: Actions → Release → Run
    workflow.
 3. Tell the user to install it: **Settings → Modules**, enter `owner/repo`.
-   Updates install on Ledger's update schedule or with "Update modules now".
+   Updates install on Ledger's update schedule, with "Update modules now",
+   or when the server starts if "Update when the server starts" is on
+   (Settings → Updates, Ledger 0.12.1). After releasing, tell the user which
+   of these will pick it up; "Update modules now" is the quickest.
 
 Updating a published module: change code, add a new migration if the data
 model changes, bump the version, run the checks, release again.

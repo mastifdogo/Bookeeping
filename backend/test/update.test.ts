@@ -31,9 +31,12 @@ test("validateSchedule", () => {
 		time: "23:59",
 		timezone: "America/Winnipeg",
 		reboot: "after_update",
+		on_startup: false,
 	});
+	assert.equal(validateSchedule({ ...DEFAULT_SCHEDULE, on_startup: true }).on_startup, true);
 	for (const bad of [
 		{ ...DEFAULT_SCHEDULE, days: [] },
+		{ ...DEFAULT_SCHEDULE, on_startup: "yes" },
 		{ ...DEFAULT_SCHEDULE, days: [7] },
 		{ ...DEFAULT_SCHEDULE, days: [1, 1] },
 		{ ...DEFAULT_SCHEDULE, days: [1.5] },
@@ -236,6 +239,33 @@ test("updater: up to date; reboot policy decides", async (t) => {
 	assert.deepEqual(out, { ran: true, installed: null, rebooted: false });
 	await assert.rejects(access(path.join(f.dirs.config, "run-now")), Error, "request file removed");
 	assert.equal((await readStatus(f.dirs))!.trigger, "manual");
+});
+
+test("updater: checks once after the container starts, when asked to", async (t) => {
+	const f = await fakeWorld(t);
+	await f.setLatest("v0.7.0");
+	const marker = path.join(f.cacheDir, "run", "booted");
+	const at = Date.parse("2026-11-11T12:00:00Z"); // no slot due
+	// Off: the first run after boot only notes the boot.
+	await writeSchedule(f.dirs, sched({ enabled: false, on_startup: false }));
+	let out = await runUpdater({ ...opts(f, "v0.6.0", at), bootMarker: marker });
+	assert.equal(out.ran, false);
+	await access(marker);
+	// On, but not the first run since the start: nothing.
+	await writeSchedule(f.dirs, sched({ enabled: false, on_startup: true, reboot: "always" }));
+	assert.equal((await runUpdater({ ...opts(f, "v0.6.0", at), bootMarker: marker })).ran, false);
+	// A new boot (/run emptied): checks and installs.
+	await rm(marker);
+	out = await runUpdater({ ...opts(f, "v0.6.0", at), bootMarker: marker });
+	assert.deepEqual(out, { ran: true, installed: "v0.7.0", rebooted: true }); // "always" finishes an install with a reboot
+	assert.equal((await readStatus(f.dirs))!.trigger, "startup");
+	// After that reboot, nothing new: no reboot loop.
+	await rm(marker);
+	f.calls.length = 0;
+	out = await runUpdater({ ...opts(f, "v0.7.0", at), bootMarker: marker });
+	assert.deepEqual(out, { ran: true, installed: null, rebooted: false });
+	assert.ok(!f.calls.includes("reboot"));
+	assert.equal((await runUpdater({ ...opts(f, "v0.7.0", at), bootMarker: marker })).ran, false);
 });
 
 test("updater: bad checksum installs nothing", async (t) => {

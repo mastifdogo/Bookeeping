@@ -160,7 +160,12 @@
 	{#if saved}<div class="notice ok">Schedule saved.</div>{/if}
 	<ErrorNotice {error} />
 	<div style="display:flex; flex-direction:column; gap:0.9rem">
-		<label class="inline"><input type="checkbox" bind:checked={form.enabled} /> Install updates automatically</label>
+		<label class="inline"><input type="checkbox" bind:checked={form.on_startup} /> Update when the server starts</label>
+		<p class="muted small" style="margin:-0.6rem 0 0 1.6rem">
+			About a minute after the container boots, check for a new Ledger release and module updates and install them, like
+			“Check for updates now”. Works with or without the schedule below.
+		</p>
+		<label class="inline"><input type="checkbox" bind:checked={form.enabled} /> Install updates automatically on a schedule</label>
 		<fieldset style="border:none; padding:0; margin:0">
 			<legend class="muted small" style="margin-bottom:0.3rem">Days</legend>
 			<div style="display:flex; flex-wrap:wrap; gap:0.75rem">

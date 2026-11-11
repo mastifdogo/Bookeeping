@@ -76,6 +76,12 @@ export interface UpdaterOptions {
 	sys: SystemOps;
 	/** Module syncing (omitted: modules are left alone). */
 	modules?: { dir: string; ops: ModuleOps };
+	/**
+	 * A file that exists from the first run after the container starts until
+	 * it stops (under /run, which is emptied at every boot): its absence
+	 * means this is the first run since the start.
+	 */
+	bootMarker?: string;
 	/** Posts the outcome of a Ledger update to the dashboard (best effort). */
 	notify?: (n: { title: string; body: string; level: "success" | "danger" }) => Promise<void>;
 }
@@ -171,7 +177,7 @@ async function fetchRelease(o: UpdaterOptions, rel: Release): Promise<string> {
 /** The core update: check, download, install, verify. */
 async function runCore(
 	o: UpdaterOptions,
-	manual: boolean,
+	trigger: "manual" | "scheduled" | "startup",
 	now: number,
 	slot: number | null,
 	prev: UpdateStatus,
@@ -179,7 +185,7 @@ async function runCore(
 	const status: UpdateStatus = {
 		...prev,
 		state: "running",
-		trigger: manual ? "manual" : "scheduled",
+		trigger,
 		message: "Checking GitHub for a new release…",
 		started_at: new Date(now).toISOString(),
 		finished_at: null,
@@ -241,12 +247,16 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 	const manual = await take(RUN_NOW_FILE);
 	const modulesRequested = await take(MODULES_RUN_NOW_FILE);
 	const schedule: UpdateSchedule = await readSchedule(o.dirs);
+	// The first run after the container starts: checks once if "on startup" is on.
+	const firstSinceBoot = o.bootMarker ? await markBooted(o.bootMarker) : false;
+	const startup = firstSinceBoot && schedule.on_startup;
 	const prev = (await readStatus(o.dirs)) ?? { ...EMPTY_STATUS };
 	const slot = dueSlot(schedule, now, prev.last_scheduled_for);
-	const core = manual || slot !== null;
+	const core = manual || startup || slot !== null;
 	if (!core && !modulesRequested) return { ran: false, installed: null, rebooted: false };
 
-	const result = core ? await runCore(o, manual, now, slot, prev) : null;
+	const trigger = manual ? "manual" : slot !== null ? "scheduled" : "startup";
+	const result = core ? await runCore(o, trigger, now, slot, prev) : null;
 	const installed = result?.installed ?? null;
 
 	if (o.modules) {
@@ -270,8 +280,8 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 	if (result && !result.ok) await notify({ title: "Update failed", body: result.status.message, level: "danger" });
 	if (!result || !result.ok) return { ran: true, installed: null, rebooted: false };
 	if (installed) await notify({ title: `Ledger updated to ${installed}`, body: result.status.message, level: "success" });
-	// Manual checks reboot only to finish an install; scheduled runs follow the policy.
-	const reboot = schedule.reboot === "always" ? !manual || installed !== null : schedule.reboot === "after_update" && installed !== null;
+	// Manual and startup checks reboot only to finish an install; scheduled runs follow the policy.
+	const reboot = schedule.reboot === "always" ? trigger === "scheduled" || installed !== null : schedule.reboot === "after_update" && installed !== null;
 	await result.save({
 		state: "ok",
 		finished_at: new Date().toISOString(),
@@ -279,6 +289,18 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 	});
 	if (reboot) await o.sys.reboot();
 	return { ran: true, installed, rebooted: reboot };
+}
+
+/** Creates the boot marker; true if it didn't exist (the first run since the container started). */
+async function markBooted(file: string): Promise<boolean> {
+	try {
+		await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+		await fsp.writeFile(file, new Date().toISOString() + "\n", { flag: "wx", mode: 0o600 });
+		return true;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "EEXIST") log.warn("could not record the boot", { err: (err as Error).message });
+		return false;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +420,7 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 		sys,
 		modules,
 		notify: databaseUrl ? (n) => postUpdateNotice(databaseUrl, n) : undefined,
+		bootMarker: process.env.LEDGER_BOOT_MARKER || "/run/ledger-update/booted",
 	});
 }
 
