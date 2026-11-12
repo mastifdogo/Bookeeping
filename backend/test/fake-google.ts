@@ -8,7 +8,7 @@ import type { TestContext } from "node:test";
 export interface FakeGoogle {
 	oauth: string;
 	api: string;
-	files: { id: string; name: string; parents: string[]; size: number }[];
+	files: { id: string; name: string; parents: string[]; size: number; folder?: boolean }[];
 	/** Device-flow polls answered "pending" before approval. */
 	pendingPolls: number;
 	denied: boolean;
@@ -58,7 +58,10 @@ export async function fakeGoogle(t: TestContext): Promise<FakeGoogle> {
 		if (!authed) return json(res, 401, { error: { message: "Invalid Credentials" } });
 		if (req.method === "POST" && url.pathname === "/drive/v3/files") {
 			const meta = JSON.parse(raw.toString());
-			return json(res, 200, { id: `folder-${++n}`, name: meta.name });
+			const id = `folder-${++n}`;
+			// Folders inside another folder are listed like files (Ledger's own top folder isn't).
+			if (Array.isArray(meta.parents)) g.files.push({ id, name: meta.name, parents: meta.parents, size: 0, folder: true });
+			return json(res, 200, { id, name: meta.name });
 		}
 		if (req.method === "GET" && url.pathname === "/drive/v3/about") return json(res, 200, { user: { emailAddress: "me@example.com" } });
 		if (req.method === "POST" && url.pathname === "/upload/drive/v3/files") {
@@ -81,7 +84,9 @@ export async function fakeGoogle(t: TestContext): Promise<FakeGoogle> {
 			return json(res, 200, { files: files.map((f) => ({ id: f.id, name: f.name })) });
 		}
 		if (req.method === "DELETE" && url.pathname.startsWith("/drive/v3/files/")) {
-			g.files = g.files.filter((f) => f.id !== decodeURIComponent(url.pathname.slice(16)));
+			// Deleting a folder deletes what's in it.
+			const gone = decodeURIComponent(url.pathname.slice(16));
+			g.files = g.files.filter((f) => f.id !== gone && !f.parents.includes(gone));
 			res.writeHead(204);
 			return res.end();
 		}

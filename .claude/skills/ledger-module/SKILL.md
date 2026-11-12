@@ -135,7 +135,7 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
   Debian 12 LXC template; Ubuntu isn't built or supported). Don't call
   programs that aren't in it (no `spawn` of tools you'd have to
   `apt install`), and don't depend on Ubuntu-specific paths or packages.
-- Backups save every table of the module's schema as a CSV beside the dump
+- Backups save every table of the module's schema as a CSV in each backup's folder (next to `ledger.dump`)
   (Ledger 0.13.0): name tables and columns so a person reading the CSV
   understands them, and never keep secrets in tables (use `secret` settings).
   Binary (`bytea`) columns appear there only as `(binary, <n> bytes; in the

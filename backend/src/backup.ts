@@ -121,11 +121,39 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 // With CSV copies beside each dump: ledger[-<database>]-<stamp>-general-ledger.csv
 // and ledger[-<database>]-<stamp>-<module>[-<table>].csv.
 const DUMP_RE = /^ledger-(?:([a-z0-9_]+)-)?(\d{8}T\d{6}Z)(?:-([a-z0-9-]+))?\.(dump|csv)$/;
-/** Files kept "newest N" together: same database and same kind of file. */
-const dumpGroup = (name: string) => {
-	const m = DUMP_RE.exec(name);
-	return m ? `${m[1] ?? ""}|${m[3] ?? ""}|${m[4]}` : "";
-};
+// Each backup run is one folder named with its date and time in the backup
+// schedule's time zone and that zone's UTC offset, e.g.
+// ledger-2026-11-11_20-30-00-0600, holding ledger.dump, general-ledger.csv,
+// <module>[-<table>].csv and, for other organizations' books,
+// <database>.dump and <database>-….csv. (Before 0.13.1 the files sat side by
+// side, named by DUMP_RE; those are still tidied away.)
+const FOLDER_RE = /^ledger-(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})([+-])(\d{2})(\d{2})$/;
+
+/** The folder name for a backup made at `at` (ms), in time zone tz. */
+export function backupFolderName(at: number, tz: string): string {
+	const zone = isTimeZone(tz) ? tz : "UTC";
+	const parts = Object.fromEntries(
+		new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })
+			.formatToParts(new Date(at))
+			.map((x) => [x.type, x.value]),
+	);
+	const local = Date.UTC(+parts.year!, +parts.month! - 1, +parts.day!, +parts.hour!, +parts.minute!, +parts.second!);
+	const offset = Math.round((local - Math.floor(at / 1000) * 1000) / 60_000);
+	const sign = offset < 0 ? "-" : "+";
+	const abs = Math.abs(offset);
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `ledger-${parts.year}-${parts.month}-${parts.day}_${parts.hour}-${parts.minute}-${parts.second}${sign}${pad(Math.floor(abs / 60))}${pad(abs % 60)}`;
+}
+
+/** When the backup in a folder was made (ms), from its name; null if it isn't a backup folder. */
+export function folderTime(name: string): number | null {
+	const m = FOLDER_RE.exec(name);
+	if (!m) return null;
+	const local = Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!);
+	const offset = (m[7] === "-" ? -1 : 1) * (+m[8]! * 60 + +m[9]!);
+	return local - offset * 60_000;
+}
+
 /** The share must be under one of these (the systemd units let Ledger write only there). */
 function allowedRoots(): string[] {
 	return process.env.BACKUP_SHARE_ROOTS?.split(":").filter((r) => r.startsWith("/")) ?? ["/app/csv_data", "/mnt"];
@@ -355,6 +383,8 @@ async function smbclient(t: ShareTarget, workDir: string, commands: string[], op
 		return out;
 	} catch (e) {
 		const m = /(NT_STATUS_[A-Z_]+)/.exec((e as Error).message);
+		// A command that may fail (e.g. deleting what isn't there): only a connection or login problem counts.
+		if (m && opts.ignoreErrors && !/LOGON_FAILURE|BAD_NETWORK_NAME|HOST_UNREACHABLE|CONNECTION_REFUSED|IO_TIMEOUT|UNSUCCESSFUL|NOT_FOUND\b/.test(m[1]!)) return (e as Error).message;
 		if (m && !(e as Error).message.startsWith("SMB:")) throw new Error(smbError(m[1]!, (e as Error).message));
 		if ((e as NodeJS.ErrnoException).code === "ENOENT") throw new Error("smbclient is not installed on the server (apt install smbclient)");
 		throw e;
@@ -415,36 +445,73 @@ export async function testShare(t: ShareTarget, workDir: string): Promise<{ ok: 
 	}
 }
 
-/** The newest dumps on the share, for the settings page. */
-export async function listShareDumps(t: ShareTarget, workDir: string, limit = 10): Promise<{ name: string; size_bytes: number; modified_at: string }[]> {
-	if (t.mode === "folder") return listFolderDumps(t.path, limit);
-	const out = await smbclient(t, workDir, [...(t.directory ? [`cd "${t.directory}"`] : []), "ls"]).catch(() => "");
-	const files = [];
-	for (const line of out.split("\n")) {
-		const m = /^\s+(\S+)\s+[A-Z]*\s+(\d+)\s+\w{3} (\w{3}\s+\d+ [\d:]+ \d{4})$/.exec(line);
-		if (m && DUMP_RE.test(m[1]!)) files.push({ name: m[1]!, size_bytes: Number(m[2]), modified_at: new Date(`${m[3]} UTC`).toISOString() });
-	}
-	return files.sort((a, b) => b.name.localeCompare(a.name)).slice(0, limit);
+export interface BackupEntry {
+	/** A backup folder (or, from before 0.13.1, a single .dump file). */
+	name: string;
+	size_bytes: number;
+	modified_at: string;
 }
 
-/** When a backup file was made, from the stamp in its name (…-YYYYMMDDTHHMMSSZ[-…].dump|csv). */
+/** One line of smbclient's `ls`: name, attributes (D = folder), size, date. */
+function parseSmbLs(line: string): { name: string; dir: boolean; size: number; at: string } | null {
+	const m = /^\s+(\S+)\s+([A-Z]*)\s+(\d+)\s+\w{3} (\w{3}\s+\d+ [\d:]+ \d{4})$/.exec(line);
+	if (!m || m[1] === "." || m[1] === "..") return null;
+	return { name: m[1]!, dir: m[2]!.includes("D"), size: Number(m[3]), at: new Date(`${m[4]} UTC`).toISOString() };
+}
+
+/** The newest backups on the share, for the settings page: folders with their total size. */
+export async function listShareDumps(t: ShareTarget, workDir: string, limit = 10): Promise<BackupEntry[]> {
+	if (t.mode === "folder") return listFolderDumps(t.path, limit);
+	const out = await smbclient(t, workDir, [...(t.directory ? [`cd "${t.directory}"`] : []), "recurse ON", "ls"]).catch(() => "");
+	const entries = new Map<string, BackupEntry>();
+	let current = ""; // the folder the following lines list ("" = the backups folder itself)
+	for (const line of out.split("\n")) {
+		if (line.startsWith("\\")) {
+			// e.g. \ledger\nightly\ledger-2026-…: the share's folder, then the backup's.
+			current = line.trim().split("\\").find((p) => FOLDER_RE.test(p)) ?? "-";
+			continue;
+		}
+		const e = parseSmbLs(line);
+		if (!e) continue;
+		if (current === "") {
+			if (e.dir && FOLDER_RE.test(e.name)) entries.set(e.name, { name: e.name, size_bytes: 0, modified_at: e.at });
+			else if (!e.dir && DUMP_RE.test(e.name) && e.name.endsWith(".dump")) entries.set(e.name, { name: e.name, size_bytes: e.size, modified_at: e.at });
+		} else if (!e.dir && entries.has(current)) entries.get(current)!.size_bytes += e.size;
+	}
+	return newestFirst([...entries.values()]).slice(0, limit);
+}
+
+const entryTime = (name: string) => folderTime(name) ?? dumpTime(name) ?? 0;
+const newestFirst = (list: BackupEntry[]) => list.sort((a, b) => entryTime(b.name) - entryTime(a.name));
+
+/** When a pre-0.13.1 backup file was made, from the stamp in its name (…-YYYYMMDDTHHMMSSZ[-…].dump|csv). */
 function dumpTime(name: string): number | null {
 	const m = /-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-[a-z0-9-]+)?\.(?:dump|csv)$/.exec(name);
 	return m ? Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) : null;
 }
 
-async function copyToShare(file: string, t: ShareTarget, now: number, workDir: string): Promise<string> {
-	if (t.mode === "folder") return copyToFolder(file, t, now);
-	const name = path.basename(file);
+/** Puts a backup folder on the share and removes backups older than keep_days. */
+async function copyToShare(localDir: string, t: ShareTarget, now: number, workDir: string): Promise<string> {
+	if (t.mode === "folder") return copyToFolder(localDir, t, now);
+	const folder = path.basename(localDir);
+	const files = (await fsp.readdir(localDir)).sort();
 	const cd = await smbEnterDir(t, workDir);
-	// Upload under a temporary name, then rename, so a half-written dump never looks complete.
-	await smbclient(t, workDir, [...cd, `put "${file}" ".${name}.tmp"`, `rename ".${name}.tmp" "${name}"`]);
-	const old = (await listShareDumps(t, workDir, 10_000)).filter((f) => {
-		const at = dumpTime(f.name);
-		return f.name !== name && at !== null && now - at > t.keep_days * 86_400_000;
-	});
-	if (old.length > 0) await smbclient(t, workDir, [...cd, ...old.map((f) => `del "${f.name}"`)]);
-	return `Saved ${name} to ${shareLabel(t)}${old.length ? `; removed ${old.length} older than ${t.keep_days} days` : ""}.`;
+	// Upload into a temporary folder, then rename it, so a half-written backup never looks complete.
+	const tmp = `.${folder}.tmp`;
+	await smbclient(t, workDir, [...cd, `deltree "${tmp}"`, `deltree "${folder}"`], { ignoreErrors: true });
+	await smbclient(t, workDir, [...cd, `mkdir "${tmp}"`, `cd "${tmp}"`, ...files.map((f) => `put "${path.join(localDir, f)}" "${f}"`), "cd ..", `rename "${tmp}" "${folder}"`]);
+	// Old backups: folders by the time in their name, and files from before 0.13.1.
+	const listing = await smbclient(t, workDir, [...cd, "ls"]);
+	const oldDirs: string[] = [];
+	const oldFiles: string[] = [];
+	for (const line of listing.split("\n")) {
+		const e = parseSmbLs(line);
+		if (!e || e.name === folder) continue;
+		const at = e.dir ? folderTime(e.name) : DUMP_RE.test(e.name) ? dumpTime(e.name) : null;
+		if (at !== null && now - at > t.keep_days * 86_400_000) (e.dir ? oldDirs : oldFiles).push(e.name);
+	}
+	if (oldDirs.length + oldFiles.length > 0) await smbclient(t, workDir, [...cd, ...oldDirs.map((d) => `deltree "${d}"`), ...oldFiles.map((f) => `del "${f}"`)]);
+	return `Saved ${folder} to ${shareLabel(t)}${oldDirs.length ? `; removed ${oldDirs.length} older than ${t.keep_days} days` : ""}.`;
 }
 
 // A directory mounted into the container.
@@ -475,37 +542,50 @@ async function testFolder(p: string): Promise<{ ok: boolean; message: string; fr
 	return { ok: true, message: `${dir} is writable${free !== null ? `; ${(free / 1024 ** 3).toFixed(1)} GiB free` : ""}.`, free_bytes: free };
 }
 
-async function listFolderDumps(dir: string, limit = 10): Promise<{ name: string; size_bytes: number; modified_at: string }[]> {
+async function listFolderDumps(dir: string, limit = 10): Promise<BackupEntry[]> {
 	const names = await fsp.readdir(dir).catch(() => [] as string[]);
-	const out = [];
-	for (const n of names.filter((x) => DUMP_RE.test(x))) {
+	const out: BackupEntry[] = [];
+	for (const n of names) {
 		const st = await fsp.stat(path.join(dir, n)).catch(() => null);
-		if (st?.isFile()) out.push({ name: n, size_bytes: st.size, modified_at: st.mtime.toISOString() });
+		if (!st) continue;
+		if (st.isDirectory() && FOLDER_RE.test(n)) {
+			let size = 0;
+			for (const f of await fsp.readdir(path.join(dir, n)).catch(() => [] as string[])) size += (await fsp.stat(path.join(dir, n, f)).catch(() => null))?.size ?? 0;
+			out.push({ name: n, size_bytes: size, modified_at: st.mtime.toISOString() });
+		} else if (st.isFile() && DUMP_RE.test(n) && n.endsWith(".dump")) {
+			out.push({ name: n, size_bytes: st.size, modified_at: st.mtime.toISOString() });
+		}
 	}
-	return out.sort((a, b) => b.name.localeCompare(a.name)).slice(0, limit);
+	return newestFirst(out).slice(0, limit);
 }
 
-async function copyToFolder(file: string, t: ShareTarget, now: number): Promise<string> {
+async function copyToFolder(localDir: string, t: ShareTarget, now: number): Promise<string> {
 	await fsp.mkdir(t.path, { recursive: true });
-	const name = path.basename(file);
-	const tmp = path.join(t.path, `.${name}.tmp`);
+	const folder = path.basename(localDir);
+	const tmp = path.join(t.path, `.${folder}.tmp`);
 	try {
-		await fsp.copyFile(file, tmp);
-		await fsp.rename(tmp, path.join(t.path, name));
+		await fsp.rm(tmp, { recursive: true, force: true });
+		await fsp.cp(localDir, tmp, { recursive: true });
+		// A backup started in the same second (by hand, twice) replaces the first.
+		await fsp.rm(path.join(t.path, folder), { recursive: true, force: true });
+		await fsp.rename(tmp, path.join(t.path, folder));
 	} catch (e) {
-		await fsp.rm(tmp, { force: true });
+		await fsp.rm(tmp, { recursive: true, force: true });
 		throw e;
 	}
 	let removed = 0;
 	for (const n of await fsp.readdir(t.path)) {
-		if (!DUMP_RE.test(n) || n === name) continue;
+		if (n === folder) continue;
+		const isFolder = FOLDER_RE.test(n);
+		if (!isFolder && !DUMP_RE.test(n)) continue;
 		const st = await fsp.stat(path.join(t.path, n)).catch(() => null);
-		if (st && now - st.mtimeMs > t.keep_days * 86_400_000) {
-			await fsp.rm(path.join(t.path, n), { force: true });
-			removed++;
+		const at = isFolder ? folderTime(n) : st?.mtimeMs ?? null;
+		if (st && at !== null && now - at > t.keep_days * 86_400_000) {
+			await fsp.rm(path.join(t.path, n), { recursive: true, force: true });
+			if (isFolder) removed++;
 		}
 	}
-	return `Saved ${name} to ${t.path}${removed ? `; removed ${removed} older than ${t.keep_days} days` : ""}.`;
+	return `Saved ${folder} to ${t.path}${removed ? `; removed ${removed} older than ${t.keep_days} days` : ""}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -641,21 +721,19 @@ export async function revokeGoogle(g: GoogleTarget, ep: GoogleEndpoints): Promis
 	await postForm(`${ep.oauth}/revoke`, { token: g.refresh_token }).catch(() => undefined);
 }
 
-async function uploadToDrive(file: string, g: GoogleTarget, ep: GoogleEndpoints): Promise<string> {
-	if (!g.refresh_token || !g.folder_id) throw new Error("Google Drive is not connected; connect it under Settings → Backups");
-	const token = await accessToken(g, ep);
+/** Uploads one file into a Drive folder (resumable upload, one PUT). */
+async function uploadFileToDrive(file: string, parent: string, token: string, ep: GoogleEndpoints): Promise<void> {
 	const name = path.basename(file);
 	const size = (await fsp.stat(file)).size;
-	// Resumable upload: one session, the file in a single PUT.
 	const start = await fetch(`${ep.api}/upload/drive/v3/files?uploadType=resumable&fields=id`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${token}`,
 			"Content-Type": "application/json; charset=UTF-8",
-			"X-Upload-Content-Type": "application/octet-stream",
+			"X-Upload-Content-Type": name.endsWith(".csv") ? "text/csv" : "application/octet-stream",
 			"X-Upload-Content-Length": String(size),
 		},
-		body: JSON.stringify({ name, parents: [g.folder_id], description: "Ledger database backup (pg_dump custom format)" }),
+		body: JSON.stringify({ name, parents: [parent], description: name.endsWith(".dump") ? "Ledger database backup (pg_dump custom format)" : "Ledger backup, CSV copy" }),
 		signal: AbortSignal.timeout(30_000),
 	});
 	const session = start.headers.get("location");
@@ -674,14 +752,39 @@ async function uploadToDrive(file: string, g: GoogleTarget, ep: GoogleEndpoints)
 	} as RequestInit);
 	if (!put.ok) {
 		const j = (await put.json().catch(() => ({}))) as Record<string, unknown>;
-		throw new Error(`upload failed (${put.status}): ${googleError(j, put.statusText)}`);
+		throw new Error(`upload of ${name} failed (${put.status}): ${googleError(j, put.statusText)}`);
 	}
-	// Keep the newest keep_count dumps.
+}
+
+/** Uploads a backup folder as a subfolder of "Ledger backups"; keeps the newest keep_count backups. */
+async function uploadToDrive(localDir: string, g: GoogleTarget, ep: GoogleEndpoints): Promise<string> {
+	if (!g.refresh_token || !g.folder_id) throw new Error("Google Drive is not connected; connect it under Settings → Backups");
+	const token = await accessToken(g, ep);
+	const folder = path.basename(localDir);
+	const created = (await driveJson(ep, token, "POST", "/drive/v3/files?fields=id", {
+		name: folder,
+		mimeType: "application/vnd.google-apps.folder",
+		parents: [g.folder_id],
+	}).catch((e: Error) => {
+		throw new Error(/404/.test(e.message) ? `the "${FOLDER_NAME}" folder is gone from Google Drive; connect again to recreate it` : e.message);
+	})) as { id: string };
+	try {
+		for (const f of (await fsp.readdir(localDir)).sort()) await uploadFileToDrive(path.join(localDir, f), created.id, token, ep);
+	} catch (e) {
+		// Leave no half-uploaded backup behind.
+		await driveJson(ep, token, "DELETE", `/drive/v3/files/${encodeURIComponent(created.id)}`).catch(() => {});
+		throw e;
+	}
+	// Keep the newest keep_count backup folders (deleting a folder deletes what's in it);
+	// files from before 0.13.1 go once they're older than the oldest folder kept.
 	const q = encodeURIComponent(`'${g.folder_id}' in parents and trashed = false`);
-	const list = (await driveJson(ep, token, "GET", `/drive/v3/files?q=${q}&orderBy=name desc&pageSize=1000&fields=files(id,name)`)) as { files?: { id: string; name: string }[] };
-	const old = (list.files ?? []).filter((f) => DUMP_RE.test(f.name) && dumpGroup(f.name) === dumpGroup(name)).slice(g.keep_count);
-	for (const f of old) await driveJson(ep, token, "DELETE", `/drive/v3/files/${encodeURIComponent(f.id)}`);
-	return `Uploaded ${name} to Google Drive (${g.account || "connected account"}, folder "${FOLDER_NAME}")${old.length ? `; removed ${old.length} older` : ""}.`;
+	const list = (await driveJson(ep, token, "GET", `/drive/v3/files?q=${q}&pageSize=1000&fields=files(id,name)`)) as { files?: { id: string; name: string }[] };
+	const folders = (list.files ?? []).filter((f) => FOLDER_RE.test(f.name)).sort((a, b) => folderTime(b.name)! - folderTime(a.name)!);
+	const old = folders.slice(g.keep_count);
+	const oldestKept = folders.length >= g.keep_count ? folderTime(folders[Math.min(g.keep_count, folders.length) - 1]!.name)! : null;
+	const legacy = oldestKept === null ? [] : (list.files ?? []).filter((f) => DUMP_RE.test(f.name) && (dumpTime(f.name) ?? Infinity) < oldestKept);
+	for (const f of [...old, ...legacy]) await driveJson(ep, token, "DELETE", `/drive/v3/files/${encodeURIComponent(f.id)}`);
+	return `Uploaded ${folder} to Google Drive (${g.account || "connected account"}, folder "${FOLDER_NAME}")${old.length ? `; removed ${old.length} older` : ""}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -689,12 +792,14 @@ async function uploadToDrive(file: string, g: GoogleTarget, ep: GoogleEndpoints)
 // ---------------------------------------------------------------------------
 
 /**
- * Writes CSV copies of one database next to its dump (base = the dump's path
- * without ".dump"): the General Ledger, and every table of each module's
- * schema (one file per module when it has one table, else one per table).
+ * Writes CSV copies of one database into a backup folder: <prefix>general-ledger.csv
+ * and every table of each module's schema as <prefix><module>[-<table>].csv
+ * (prefix "" for the main books, "<database>-" for another organization's).
  * Read in one consistent snapshot. Returns the files written.
  */
-export async function writeCsvCopies(databaseUrl: string, base: string, modulesDirPath: string): Promise<string[]> {
+export async function writeCsvCopies(databaseUrl: string, dir: string, prefix: string, modulesDirPath: string): Promise<string[]> {
+	const base = path.join(dir, prefix.replace(/-$/, ""));
+	const named = (rest: string) => (prefix ? `${base}-${rest}` : path.join(dir, rest));
 	const names = new Map<string, string>(); // schema → module id
 	for (const m of await scanInstalled(modulesDirPath).catch(() => [])) names.set(`mod_${m.manifest.id.replaceAll("-", "_")}`, m.manifest.id);
 	const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 10_000, types: { getTypeParser } as pg.CustomTypesConfig });
@@ -702,7 +807,7 @@ export async function writeCsvCopies(databaseUrl: string, base: string, modulesD
 	const out: string[] = [];
 	try {
 		await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-		const gl = `${base}-general-ledger.csv`;
+		const gl = named("general-ledger.csv");
 		const fh = await fsp.open(gl, "w", 0o600);
 		try {
 			await writeGeneralLedger(client, (chunk) => fh.write(chunk).then(() => undefined));
@@ -722,7 +827,7 @@ export async function writeCsvCopies(databaseUrl: string, base: string, modulesD
 		for (const [schema, list] of bySchema) {
 			const id = slug(names.get(schema) ?? schema.slice(4));
 			for (const table of list) {
-				const file = `${base}-${id}${list.length > 1 ? `-${slug(table)}` : ""}.csv`;
+				const file = named(`${id}${list.length > 1 ? `-${slug(table)}` : ""}.csv`);
 				const q = (x: string) => `"${x.replaceAll('"', '""')}"`;
 				// Binary columns (a module's stored files) are noted, not copied: the .dump has them, and a
 				// spreadsheet can't use base64. Rows are read in batches through a cursor and written as they
@@ -829,8 +934,7 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 		const locked = (await client.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock($1) AS ok`, [LOCK_KEY])).rows[0]!.ok;
 		if (!locked) throw new ConflictError("a backup is already running");
 
-		const stamp = new Date(now()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
-		const name = `ledger-${stamp}.dump`;
+		const name = backupFolderName(now(), config.schedule.timezone);
 		const status: BackupStatus = {
 			...prev,
 			state: "running",
@@ -847,17 +951,18 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 
 		const targets = [config.share.enabled && "share", config.google.enabled && "google"].filter(Boolean) as ("share" | "google")[];
 		const workDir = path.join(o.dir, "tmp");
-		const file = path.join(workDir, name);
-		const files = [file];
+		const localDir = path.join(workDir, name);
 		try {
 			if (targets.length === 0) throw new Error("no backup destination is turned on; choose a network share or Google Drive under Settings → Backups");
-			await fsp.mkdir(workDir, { recursive: true, mode: 0o700 });
+			await fsp.mkdir(localDir, { recursive: true, mode: 0o700 });
 			// The main database, then each other organization's.
 			const orgs = await client
 				.query<{ db_name: string }>(`SELECT db_name FROM organizations WHERE id <> 1 AND status = 'ready' ORDER BY id`)
 				.then((r) => r.rows.map((x) => x.db_name), () => [] as string[]);
-			const dumps = [{ file, url: o.databaseUrl }, ...orgs.map((d) => ({ file: path.join(workDir, `ledger-${d}-${stamp}.dump`), url: withDatabase(o.databaseUrl, d) }))];
-			files.push(...dumps.slice(1).map((d) => d.file));
+			const dumps = [
+				{ file: path.join(localDir, "ledger.dump"), prefix: "", url: o.databaseUrl },
+				...orgs.map((d) => ({ file: path.join(localDir, `${d}.dump`), prefix: `${d}-`, url: withDatabase(o.databaseUrl, d) })),
+			];
 			status.size_bytes = 0;
 			const csvs: string[] = [];
 			const csvProblems: string[] = [];
@@ -868,9 +973,7 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 				if (config.include_csv) {
 					// The CSV copies are a convenience; the dump is the backup, so it goes out even if they fail.
 					try {
-						const made = await (o.csvCopies ?? writeCsvCopies)(d.url, d.file.replace(/\.dump$/, ""), o.modulesDir ?? modulesDir());
-						files.push(...made);
-						csvs.push(...made);
+						csvs.push(...(await (o.csvCopies ?? writeCsvCopies)(d.url, localDir, d.prefix, o.modulesDir ?? modulesDir())));
 					} catch (e) {
 						csvProblems.push((e as Error).message);
 						log.error("backup CSV copies failed", { file: path.basename(d.file), err: (e as Error).message });
@@ -879,12 +982,8 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 			}
 			for (const t of targets) {
 				try {
-					const messages: string[] = [];
-					for (const f of [...dumps.map((d) => d.file), ...csvs]) {
-						const m = t === "share" ? await copyToShare(f, config.share, now(), workDir) : await uploadToDrive(f, config.google, o.google ?? googleEndpoints());
-						if (f.endsWith(".dump")) messages.push(m);
-					}
-					if (csvs.length) messages.push(`Also ${csvs.length} CSV ${csvs.length === 1 ? "copy" : "copies"} (general ledger${csvs.length > dumps.length ? " and modules" : ""}).`);
+					const messages = [t === "share" ? await copyToShare(localDir, config.share, now(), workDir) : await uploadToDrive(localDir, config.google, o.google ?? googleEndpoints())];
+					if (csvs.length) messages.push(`It holds ${dumps.length === 1 ? "the database dump" : `${dumps.length} database dumps`} and ${csvs.length} CSV ${csvs.length === 1 ? "copy" : "copies"} (general ledger${csvs.length > dumps.length ? " and modules" : ""}).`);
 					status.results.push({ target: t, ok: true, message: messages.join(" ") });
 					status.last_ok[t] = new Date(now()).toISOString();
 				} catch (e) {
@@ -910,7 +1009,7 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 			status.state = "error";
 			status.message = (e as Error).message;
 		} finally {
-			for (const f of files) await fsp.rm(f, { force: true });
+			await fsp.rm(localDir, { recursive: true, force: true });
 		}
 		status.finished_at = new Date(now()).toISOString();
 		await writeStatus(o.dir, status);

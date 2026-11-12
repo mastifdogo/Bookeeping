@@ -222,3 +222,16 @@ test("parseMultipart", () => {
 	assert.equal(formDataBoundary("text/plain"), null);
 	assert.equal(formDataBoundary("multipart/form-data"), null);
 });
+
+test("backup folder names carry the date, time and UTC offset", async () => {
+	const { backupFolderName, folderTime } = await import("../src/backup.ts");
+	const at = Date.parse("2026-11-12T02:30:05Z");
+	assert.equal(backupFolderName(at, "UTC"), "ledger-2026-11-12_02-30-05+0000");
+	assert.equal(backupFolderName(at, "America/Toronto"), "ledger-2026-11-11_21-30-05-0500");
+	assert.equal(backupFolderName(Date.parse("2026-07-12T02:30:05Z"), "America/Toronto"), "ledger-2026-07-11_22-30-05-0400"); // summer time
+	assert.equal(backupFolderName(at, "Asia/Kolkata"), "ledger-2026-11-12_08-00-05+0530");
+	assert.equal(backupFolderName(at, "Not/AZone"), "ledger-2026-11-12_02-30-05+0000");
+	for (const tz of ["UTC", "America/Toronto", "Asia/Kolkata", "America/Winnipeg"]) assert.equal(folderTime(backupFolderName(at, tz)), at);
+	assert.equal(folderTime("ledger-20261112T023005Z.dump"), null);
+	assert.equal(folderTime("ledger-2026-11-12_02-30-05"), null);
+});

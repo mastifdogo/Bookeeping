@@ -464,8 +464,8 @@ function newAccount(defaults = {}) {
 ## Migrations
 
 Your tables are in Ledger's database dump, and since Ledger 0.13.0 each
-backup also saves them as CSV files beside the dump
-(`ledger-<stamp>-<module>[-<table>].csv`) for people to open in a
+backup also saves them as CSV files in its folder, next to the dump
+(`<module>[-<table>].csv` in each backup's folder) for people to open in a
 spreadsheet. Give tables and columns names a person understands, and keep
 secrets out of tables: put them in `secret` settings fields. Binary columns
 (`bytea`, e.g. stored files) show as `(binary, <n> bytes; in the .dump)` in

@@ -1121,14 +1121,16 @@ test("backups: settings, a mounted share and Google Drive", async (t) => {
 	const dump = async (f: string) => writeFile(f, "PGDMP fake dump");
 	let out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump });
 	assert.equal(out.status.state, "ok", out.status.message);
-	const files = (await readdir(share)).sort();
-	assert.equal(files.length, 2, files.join(", "));
-	assert.match(files[0]!, /^ledger-\d{8}T\d{6}Z-general-ledger\.csv$/); // the CSV copy beside the dump
-	assert.match(files[1]!, /^ledger-\d{8}T\d{6}Z\.dump$/);
+	// One folder per backup, named with its date and time in the schedule's time zone (and offset).
+	const folders = await readdir(share);
+	assert.equal(folders.length, 1, folders.join(", "));
+	assert.match(folders[0]!, /^ledger-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-0[56]00$/); // America/Winnipeg
+	assert.deepEqual((await readdir(path.join(share, folders[0]!))).sort(), ["general-ledger.csv", "ledger.dump"]);
 	assert.equal((await readdir(path.join(app.backup.dir, "tmp"))).length, 0); // the local copy is removed
 	info = (await call("GET", "/backups")).json();
 	assert.equal(info.status.state, "ok");
-	assert.equal(info.share_files.length, 1);
+	assert.deepEqual(info.share_files.map((f: any) => f.name), folders);
+	assert.equal(info.share_files[0].size_bytes, (await stat(path.join(share, folders[0]!, "ledger.dump"))).size + (await stat(path.join(share, folders[0]!, "general-ledger.csv"))).size);
 	assert.ok(info.status.last_ok.share);
 	// A scheduled run only happens when due.
 	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "scheduled", dump, now: () => Date.parse("2026-10-27T12:00:00Z") });
@@ -1154,13 +1156,12 @@ test("backups: settings, a mounted share and Google Drive", async (t) => {
 		out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump, now: () => Date.parse(`2026-11-0${i + 1}T10:00:00Z`) });
 		assert.equal(out.status.state, "ok", out.status.message);
 	}
-	assert.deepEqual(g.files.map((f) => f.name).sort(), [
-		"ledger-20261102T100000Z-general-ledger.csv",
-		"ledger-20261102T100000Z.dump",
-		"ledger-20261103T100000Z-general-ledger.csv",
-		"ledger-20261103T100000Z.dump",
-	]);
-	assert.equal(g.files[0]!.parents[0], "folder-1");
+	// Each backup is a folder in "Ledger backups" (folder-1); the oldest of the three is gone, with its files.
+	const driveFolders = g.files.filter((f) => f.folder);
+	assert.deepEqual(driveFolders.map((f) => f.name).sort(), ["ledger-2026-11-02_05-00-00-0500", "ledger-2026-11-03_05-00-00-0500"]); // Manitoba stays on UTC-5
+	assert.ok(driveFolders.every((f) => f.parents[0] === "folder-1"));
+	for (const f of driveFolders) assert.deepEqual(g.files.filter((x) => x.parents.includes(f.id)).map((x) => x.name).sort(), ["general-ledger.csv", "ledger.dump"]);
+	assert.equal(g.files.length, 6);
 
 	// Drive access revoked: the share still works, so a warning, posted to the dashboard.
 	g.revokedGrant = true;
@@ -1893,10 +1894,10 @@ test("backups: straight to an SMB share", async (t) => {
 	assert.equal(out.status.state, "ok", out.status.message);
 	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now: () => Date.parse("2026-11-11T02:30:00Z") });
 	assert.equal(out.status.state, "ok", out.status.message);
-	assert.match(out.status.results[0]!.message, /removed 2 older than 7 days/); // the old dump and its CSV
+	assert.match(out.status.results[0]!.message, /Saved ledger-2026-11-11_02-30-00\+0000 to .*; removed 1 older than 7 days/);
 	const info = (await call("GET", "/backups")).json();
-	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-20261111T023000Z.dump"]); // dumps only
-	assert.equal(info.share_files[0].size_bytes, "PGDMP fake dump".length);
+	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-2026-11-11_02-30-00+0000"]);
+	assert.ok(info.share_files[0].size_bytes > "PGDMP fake dump".length, "the dump and the CSV copy");
 });
 
 // ---------------------------------------------------------------------------
@@ -2211,30 +2212,33 @@ test("backups: CSV copies of the general ledger and each module beside the dump"
 	const now = () => Date.parse("2026-11-12T02:30:00Z");
 	let out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now, modulesDir: mods });
 	assert.equal(out.status.state, "ok", out.status.message);
-	assert.match(out.status.results[0]!.message, /Also 5 CSV copies \(general ledger and modules\)/);
-	const files = (await readdir(share)).sort();
+	assert.match(out.status.results[0]!.message, /It holds the database dump and 5 CSV copies \(general ledger and modules\)/);
+	const folder = "ledger-2026-11-12_02-30-00+0000"; // the schedule's time zone here is UTC
+	assert.deepEqual(await readdir(share), [folder]);
+	const at = (f: string) => path.join(share, folder, f);
+	const files = (await readdir(path.join(share, folder))).sort();
 	// Binary columns are noted, not copied (the .dump has them).
-	assert.equal(await readFile(path.join(share, "ledger-20261112T023000Z-downloads.csv"), "utf8"), "file_id,chunk_index,data\n7,0,\"(binary, 524288 bytes; in the .dump)\"\n");
-	files.splice(files.indexOf("ledger-20261112T023000Z-downloads.csv"), 1);
+	assert.equal(await readFile(at("downloads.csv"), "utf8"), "file_id,chunk_index,data\n7,0,\"(binary, 524288 bytes; in the .dump)\"\n");
+	files.splice(files.indexOf("downloads.csv"), 1);
 	assert.deepEqual(files, [
-		"ledger-20261112T023000Z-general-ledger.csv",
-		"ledger-20261112T023000Z-notes.csv", // one table: one file, named from the schema
-		"ledger-20261112T023000Z-sales-book-customers.csv", // named from the installed module's id
-		"ledger-20261112T023000Z-sales-book-invoices.csv",
-		"ledger-20261112T023000Z.dump",
+		"general-ledger.csv",
+		"ledger.dump",
+		"notes.csv", // one table: one file, named from the schema
+		"sales-book-customers.csv", // named from the installed module's id
+		"sales-book-invoices.csv",
 	]);
-	const gl = await readFile(path.join(share, files[0]!), "utf8");
+	const gl = await readFile(at("general-ledger.csv"), "utf8");
 	assert.match(gl.split("\n")[0]!, /^account_code,account_name,/);
 	assert.match(gl, /1000,Bank,asset,CAD,2026-11-01,1,.*Cash sale,,25\.00,,25\.00/);
-	const inv = (await readFile(path.join(share, files[3]!), "utf8")).trim().split("\n");
+	const inv = (await readFile(at("sales-book-invoices.csv"), "utf8")).trim().split("\n");
 	assert.equal(inv[0], "id,customer,total,issued,meta");
 	assert.equal(inv[1], `31,'=HYPERLINK(1),-15.75,2026-11-02,"{""n"":1}"`);
-	const customers = await readFile(path.join(share, files[2]!), "utf8");
+	const customers = await readFile(at("sales-book-customers.csv"), "utf8");
 	assert.match(customers, /1,"Acme, Inc\."/);
 	assert.equal(customers.trim().split("\n").length, 1 + 1201, "every row, read in batches"); // header + 1201 rows
 	assert.equal((await readdir(path.join(app.backup.dir, "tmp"))).length, 0, "local copies are removed");
 	const info = (await call("GET", "/backups")).json();
-	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-20261112T023000Z.dump"]);
+	assert.deepEqual(info.share_files.map((f: any) => f.name), [folder]);
 
 	// A CSV copy that fails doesn't stop the dump going out; the backup reports it as a warning.
 	await rm(share, { recursive: true });
@@ -2251,7 +2255,7 @@ test("backups: CSV copies of the general ledger and each module beside the dump"
 	});
 	assert.equal(out.status.state, "warning", out.status.message);
 	assert.match(out.status.message, /CSV copies couldn't be made: CSV copies: something went wrong/);
-	assert.deepEqual(await readdir(share), ["ledger-20261112T023000Z.dump"], "the dump still went out");
+	assert.deepEqual(await readdir(path.join(share, folder)), ["ledger.dump"], "the dump still went out");
 
 	// Turned off: dumps only.
 	r = await call("PUT", "/backups/config", { ...settings, include_csv: false });
@@ -2259,6 +2263,6 @@ test("backups: CSV copies of the general ledger and each module beside the dump"
 	await rm(share, { recursive: true });
 	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now, modulesDir: mods });
 	assert.equal(out.status.state, "ok", out.status.message);
-	assert.deepEqual(await readdir(share), ["ledger-20261112T023000Z.dump"]);
+	assert.deepEqual(await readdir(path.join(share, folder)), ["ledger.dump"]);
 	expectStatus(await call("PUT", "/backups/config", { ...settings, include_csv: "yes" }), 422);
 });

@@ -285,7 +285,7 @@
 		</div>
 		{#if shareTest}<div class="notice {shareTest.ok ? 'ok' : 'error'}">{shareTest.message}</div>{/if}
 		{#if info.share_files.length}
-			<h3 class="small muted">Newest backups on the share</h3>
+			<h3 class="small muted">Newest backups on the share (one folder each, named with its date and time)</h3>
 			<table class="files">
 				<tbody>
 					{#each info.share_files as f (f.name)}

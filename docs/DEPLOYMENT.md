@@ -324,20 +324,28 @@ Backups are set up in the app under **Settings → Backups**:
   Publish the OAuth app ("In production"), or Google disconnects it after 7
   days.
 
-Each backup is `ledger-<UTC timestamp>.dump` (PostgreSQL custom format,
-checked with `pg_restore --list` before it is sent), plus
-`ledger-<database>-<UTC timestamp>.dump` for each other organization's books
-(e.g. `ledger-ledger_org2-…`; Google Drive keeps the newest N of each).
-Beside each dump go CSV copies (unless turned off under Settings → Backups):
-`ledger-<stamp>-general-ledger.csv` (the same columns as the General Ledger
-export) and each module's data, `ledger-<stamp>-<module>.csv`, or
-`ledger-<stamp>-<module>-<table>.csv` when a module has several tables, all
-read in one consistent snapshot and written in batches, so large tables
-are fine. Binary columns (files a module stores) appear as
-`(binary, <n> bytes; in the .dump)`: the dump has the bytes. They're for
-reading in a spreadsheet; the dump is what restores Ledger, and if the CSV
-copies can't be made the dump is still saved and the backup reports a
-warning. They're removed together with their dump. If a destination fails,
+Each backup is a folder named with the date and time it was made, in the
+backup schedule's time zone with its UTC offset, e.g.
+`ledger-2026-11-11_20-30-00-0600/` (on Google Drive, a folder inside
+"Ledger backups"). It holds:
+
+```
+ledger.dump                    the database (pg_dump custom format, checked with pg_restore --list)
+general-ledger.csv             the General Ledger, same columns as the export
+<module>.csv                   each module's data (<module>-<table>.csv when it has several tables)
+ledger_org2.dump, ledger_org2-general-ledger.csv, ...   each other organization's books
+```
+
+The CSV copies (unless turned off under Settings → Backups) are read in
+one consistent snapshot and written in batches, so large tables are fine;
+binary columns (files a module stores) appear as
+`(binary, <n> bytes; in the .dump)`, since the dump has the bytes. They're
+for reading in a spreadsheet; the dump is what restores Ledger, and if the
+CSV copies can't be made the dump is still saved and the backup reports a
+warning. Whole folders are removed: on the share once older than the days
+you set, on Google Drive beyond the newest N. (Backups from before 0.13.1,
+single `ledger-<UTC timestamp>.dump` files, are tidied away the same way.)
+If a destination fails,
 the dashboard says so. Settings and the Google credentials are kept in
 `/var/lib/ledger/backup/` (not in the database, so not inside the dumps).
 
@@ -348,14 +356,14 @@ systemctl list-timers ledger-backup.timer
 ```
 
 From Google Drive, download the dump and copy it into the container
-(`pct push <ctid> ledger-….dump /root/ledger.dump` on the Proxmox host)
+(`pct push <ctid> ledger.dump /root/ledger.dump` on the Proxmox host)
 before restoring. From an SMB share, fetch it inside the container:
-`smbclient //nas/backups -U ledger -c 'cd ledger; get ledger-….dump /root/ledger.dump'`.
+`smbclient //nas/backups -U ledger -c 'cd ledger/ledger-2026-11-11_20-30-00-0600; get ledger.dump /root/ledger.dump'`.
 
 **Restore** (keeps the current database as `ledger_old`):
 
 ```sh
-DUMP=/app/csv_data/backups/ledger-20261005T023000Z.dump    # pick one
+DUMP=/app/csv_data/backups/ledger-2026-10-05_02-30-00-0500/ledger.dump    # pick one
 systemctl stop ledger
 runuser -u postgres -- psql -c "ALTER DATABASE ledger RENAME TO ledger_old"
 runuser -u postgres -- createdb -O ledger_owner ledger
