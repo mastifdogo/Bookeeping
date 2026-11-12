@@ -357,7 +357,9 @@ reconciliations only mark lines as cleared.
 
 **Settings → Backups** sends database backups to a network share (any SMB
 share, or a folder mounted into the container), Google Drive, or both, on a schedule you choose, with **Back up now** and the result
-of the last run. Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#8-backups-and-restore).
+of the last run. Each backup also carries CSV copies: the General Ledger and
+each module's data, readable in any spreadsheet. Details:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#8-backups-and-restore).
 
 ### Sidebar, settings and panes
 

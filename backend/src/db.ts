@@ -7,7 +7,7 @@ import { log } from "./log.ts";
 const INT8 = 20;
 const DATE = 1082;
 
-function getTypeParser(oid: number, format?: string): (value: string) => unknown {
+export function getTypeParser(oid: number, format?: string): (value: string) => unknown {
 	if (format !== "binary") {
 		if (oid === INT8) return (v: string) => BigInt(v);
 		if (oid === DATE) return (v: string) => v;

@@ -802,7 +802,7 @@ async function backupsInfo(c: Ctx) {
 		config: publicConfig(config),
 		status,
 		next_run: nextBackupTime(config),
-		share_files: available && config.share.enabled ? await listShareDumps(config.share, pathMod.join(c.app.backup.dir, "tmp")) : [],
+		share_files: available && config.share.enabled ? (await listShareDumps(config.share, pathMod.join(c.app.backup.dir, "tmp"), 1000)).filter((f) => f.name.endsWith(".dump")).slice(0, 10) : [],
 	};
 }
 

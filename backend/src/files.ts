@@ -8,7 +8,7 @@ import path from "node:path";
 import { randomInt } from "node:crypto";
 import type { App } from "./app.ts";
 import { filesDir } from "./orgs.ts";
-import { withTx } from "./db.ts";
+import { withTx, type Queryable } from "./db.ts";
 import { ConflictError, NotFoundError, TooLargeError, ValidationError } from "./errors.ts";
 import { formatCents, splitAmount } from "./money.ts";
 import { csvRecord } from "./csv.ts";
@@ -106,6 +106,63 @@ interface GLRow {
 const FETCH_ROWS = 2000;
 
 /**
+ * Writes the General Ledger CSV (header included) from inside a read-only
+ * transaction; returns the number of rows. Shared by the export and backups.
+ */
+export async function writeGeneralLedger(
+	tx: Queryable,
+	write: (chunk: string) => Promise<void>,
+	from: string | null = null,
+	to: string | null = null,
+	currency: string | null = null,
+): Promise<number> {
+	await tx.query(`DECLARE general_ledger NO SCROLL CURSOR FOR ${GL_SQL}`, [from, to, currency]);
+	await write(csvRecord(GENERAL_LEDGER_HEADER));
+	let count = 0;
+	let currentCode = "";
+	let running = 0n;
+	for (;;) {
+		const { rows } = await tx.query<GLRow>(`FETCH ${FETCH_ROWS} FROM general_ledger`);
+		let chunk = "";
+		for (const r of rows) {
+			if (r.code !== currentCode || count === 0) {
+				currentCode = r.code;
+				running = 0n;
+			}
+			running += r.amount;
+			let debit = "";
+			let credit = "";
+			let lineNo = "";
+			if (r.kind === 1) {
+				const [d, c] = splitAmount(r.amount);
+				if (d > 0n) debit = formatCents(d);
+				else credit = formatCents(c);
+				lineNo = String(r.line_number);
+			}
+			chunk += csvRecord([
+				csvText(r.code),
+				csvText(r.name),
+				r.type,
+				r.currency,
+				r.entry_date,
+				r.journal_entry_id === null ? "" : String(r.journal_entry_id),
+				r.line_id === null ? "" : String(r.line_id),
+				lineNo,
+				csvText(r.reference),
+				csvText(r.description),
+				csvText(r.memo),
+				debit,
+				credit,
+				formatCents(running),
+			]);
+			count++;
+		}
+		if (chunk) await write(chunk);
+		if (rows.length < FETCH_ROWS) return count;
+	}
+}
+
+/**
  * Writes the General Ledger (every posting, grouped by account, with a
  * per-account running balance) to a new UTF-8 CSV file in the CSV directory.
  *
@@ -134,52 +191,9 @@ export async function exportGeneralLedger(app: App, from: string | null, to: str
 	}
 	let committed = false;
 	try {
-		const rowCount = await withTx(app.db, { isolation: "REPEATABLE READ", readOnly: true }, async (tx) => {
-			await tx.query(`DECLARE general_ledger NO SCROLL CURSOR FOR ${GL_SQL}`, [from, to, currency]);
-			await tmp.fh.write(csvRecord(GENERAL_LEDGER_HEADER));
-			let count = 0;
-			let currentCode = "";
-			let running = 0n;
-			for (;;) {
-				const { rows } = await tx.query<GLRow>(`FETCH ${FETCH_ROWS} FROM general_ledger`);
-				let chunk = "";
-				for (const r of rows) {
-					if (r.code !== currentCode || count === 0) {
-						currentCode = r.code;
-						running = 0n;
-					}
-					running += r.amount;
-					let debit = "";
-					let credit = "";
-					let lineNo = "";
-					if (r.kind === 1) {
-						const [d, c] = splitAmount(r.amount);
-						if (d > 0n) debit = formatCents(d);
-						else credit = formatCents(c);
-						lineNo = String(r.line_number);
-					}
-					chunk += csvRecord([
-						csvText(r.code),
-						csvText(r.name),
-						r.type,
-						r.currency,
-						r.entry_date,
-						r.journal_entry_id === null ? "" : String(r.journal_entry_id),
-						r.line_id === null ? "" : String(r.line_id),
-						lineNo,
-						csvText(r.reference),
-						csvText(r.description),
-						csvText(r.memo),
-						debit,
-						credit,
-						formatCents(running),
-					]);
-					count++;
-				}
-				if (chunk) await tmp.fh.write(chunk);
-				if (rows.length < FETCH_ROWS) return count;
-			}
-		});
+		const rowCount = await withTx(app.db, { isolation: "REPEATABLE READ", readOnly: true }, (tx) =>
+			writeGeneralLedger(tx, (chunk) => tmp.fh.write(chunk).then(() => undefined), from, to, currency),
+		);
 		await finishTemp(tmp.fh);
 
 		const now = new Date();

@@ -327,7 +327,13 @@ Backups are set up in the app under **Settings → Backups**:
 Each backup is `ledger-<UTC timestamp>.dump` (PostgreSQL custom format,
 checked with `pg_restore --list` before it is sent), plus
 `ledger-<database>-<UTC timestamp>.dump` for each other organization's books
-(e.g. `ledger-ledger_org2-…`; Google Drive keeps the newest N of each). If a destination fails,
+(e.g. `ledger-ledger_org2-…`; Google Drive keeps the newest N of each).
+Beside each dump go CSV copies (unless turned off under Settings → Backups):
+`ledger-<stamp>-general-ledger.csv` (the same columns as the General Ledger
+export) and each module's data, `ledger-<stamp>-<module>.csv`, or
+`ledger-<stamp>-<module>-<table>.csv` when a module has several tables, all
+read in one consistent snapshot. They're for reading in a spreadsheet; the
+dump is what restores Ledger. They're removed together with their dump. If a destination fails,
 the dashboard says so. Settings and the Google credentials are kept in
 `/var/lib/ledger/backup/` (not in the database, so not inside the dumps).
 

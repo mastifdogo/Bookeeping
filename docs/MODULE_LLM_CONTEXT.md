@@ -470,6 +470,7 @@ database.
 - [ ] searchable records exposed with `ctx.search.provide`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries
+- [ ] tables and columns have clear names: backups also save each module table as a readable CSV (Ledger ≥ 0.13.0); no secrets in tables (use `secret` settings)
 - [ ] money as integer cents, per currency, entries balanced per currency
 - [ ] migrations unqualified, no BEGIN/COMMIT/GRANT
 - [ ] `ui/index.html` self-contained, light + dark, narrow-width friendly

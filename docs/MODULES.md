@@ -463,6 +463,12 @@ function newAccount(defaults = {}) {
 
 ## Migrations
 
+Your tables are in Ledger's database dump, and since Ledger 0.13.0 each
+backup also saves them as CSV files beside the dump
+(`ledger-<stamp>-<module>[-<table>].csv`) for people to open in a
+spreadsheet. Give tables and columns names a person understands, and keep
+secrets out of tables: put them in `secret` settings fields.
+
 Each `migrations/NNN_name.sql` file runs **once**, in file-name order, in a
 transaction. It runs as the module's own role (`mod_<id>`), with
 `search_path` set to the module's schema, so `CREATE TABLE notes (...)`

@@ -1121,9 +1121,10 @@ test("backups: settings, a mounted share and Google Drive", async (t) => {
 	const dump = async (f: string) => writeFile(f, "PGDMP fake dump");
 	let out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump });
 	assert.equal(out.status.state, "ok", out.status.message);
-	const files = await readdir(share);
-	assert.equal(files.length, 1);
-	assert.match(files[0]!, /^ledger-\d{8}T\d{6}Z\.dump$/);
+	const files = (await readdir(share)).sort();
+	assert.equal(files.length, 2, files.join(", "));
+	assert.match(files[0]!, /^ledger-\d{8}T\d{6}Z-general-ledger\.csv$/); // the CSV copy beside the dump
+	assert.match(files[1]!, /^ledger-\d{8}T\d{6}Z\.dump$/);
 	assert.equal((await readdir(path.join(app.backup.dir, "tmp"))).length, 0); // the local copy is removed
 	info = (await call("GET", "/backups")).json();
 	assert.equal(info.status.state, "ok");
@@ -1153,7 +1154,12 @@ test("backups: settings, a mounted share and Google Drive", async (t) => {
 		out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", google: app.backup.google, dump, now: () => Date.parse(`2026-11-0${i + 1}T10:00:00Z`) });
 		assert.equal(out.status.state, "ok", out.status.message);
 	}
-	assert.deepEqual(g.files.map((f) => f.name).sort(), ["ledger-20261102T100000Z.dump", "ledger-20261103T100000Z.dump"]);
+	assert.deepEqual(g.files.map((f) => f.name).sort(), [
+		"ledger-20261102T100000Z-general-ledger.csv",
+		"ledger-20261102T100000Z.dump",
+		"ledger-20261103T100000Z-general-ledger.csv",
+		"ledger-20261103T100000Z.dump",
+	]);
 	assert.equal(g.files[0]!.parents[0], "folder-1");
 
 	// Drive access revoked: the share still works, so a warning, posted to the dashboard.
@@ -1887,9 +1893,9 @@ test("backups: straight to an SMB share", async (t) => {
 	assert.equal(out.status.state, "ok", out.status.message);
 	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now: () => Date.parse("2026-11-11T02:30:00Z") });
 	assert.equal(out.status.state, "ok", out.status.message);
-	assert.match(out.status.results[0]!.message, /removed 1 older than 7 days/);
+	assert.match(out.status.results[0]!.message, /removed 2 older than 7 days/); // the old dump and its CSV
 	const info = (await call("GET", "/backups")).json();
-	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-20261111T023000Z.dump"]);
+	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-20261111T023000Z.dump"]); // dumps only
 	assert.equal(info.share_files[0].size_bytes, "PGDMP fake dump".length);
 });
 
@@ -2157,4 +2163,77 @@ Sales of Product Income,,,,,,,
 	const noAi = (await uploadMigration(ta, "General Ledger.csv", report, false)).json();
 	assert.equal(noAi.detection.source, "rules");
 	assert.equal(noAi.mapping.account_from_sections, true);
+});
+
+test("backups: CSV copies of the general ledger and each module beside the dump", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-csv-bk-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const prevRoots = process.env.BACKUP_SHARE_ROOTS;
+	process.env.BACKUP_SHARE_ROOTS = root;
+	t.after(() => (prevRoots === undefined ? delete process.env.BACKUP_SHARE_ROOTS : (process.env.BACKUP_SHARE_ROOTS = prevRoots)));
+	await mkdir(app.backup.dir, { mode: 0o700 });
+	const share = path.join(root, "backups");
+	const settings = {
+		schedule: { enabled: false, days: [1], time: "02:30", timezone: "UTC" },
+		share: { enabled: true, mode: "folder", path: share, keep_days: 30 },
+		google: { enabled: false, client_id: "", keep_count: 5 },
+	};
+	let r = await call("PUT", "/backups/config", settings);
+	expectStatus(r, 200);
+	assert.equal(r.json().config.include_csv, true);
+
+	// Some books, and a module with two tables (one has a negative number and a formula-looking name).
+	for (const a of [
+		{ code: "1000", name: "Bank", type: "asset", currency: "CAD" },
+		{ code: "4000", name: "Sales", type: "revenue", currency: "CAD" },
+	]) expectStatus(await call("POST", "/accounts", a), 201);
+	expectStatus(await call("POST", "/journal-entries", { entry_date: "2026-11-01", description: "Cash sale", lines: [{ account_code: "1000", debit_cents: 2500 }, { account_code: "4000", credit_cents: 2500 }] }), 201);
+	const admin = new (await import("pg")).default.Client({ connectionString: app.backup.databaseUrl });
+	await admin.connect();
+	await admin.query(`CREATE SCHEMA mod_sales_book; CREATE TABLE mod_sales_book.invoices (id bigint, customer text, total numeric, issued date, meta jsonb);
+		INSERT INTO mod_sales_book.invoices VALUES (31, '=HYPERLINK(1)', -15.75, '2026-11-02', '{"n": 1}');
+		CREATE TABLE mod_sales_book.customers (id int, name text); INSERT INTO mod_sales_book.customers VALUES (1, 'Acme, Inc.');
+		CREATE SCHEMA mod_notes; CREATE TABLE mod_notes.items (body text); INSERT INTO mod_notes.items VALUES ('hi');`);
+	await admin.end();
+	const mods = await mkdtemp(path.join(tmpdir(), "ledger-mods-"));
+	t.after(() => rm(mods, { recursive: true, force: true }));
+	await mkdir(path.join(mods, "sales-book"));
+	await writeFile(path.join(mods, "sales-book", "ledger-module.json"), JSON.stringify({ id: "sales-book", name: "Sales", version: "1.0.0", server: "server.mjs" }));
+	await writeFile(path.join(mods, "sales-book", "server.mjs"), "export default function () {}");
+
+	const dump = async (f: string) => writeFile(f, "PGDMP fake dump");
+	const now = () => Date.parse("2026-11-12T02:30:00Z");
+	let out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now, modulesDir: mods });
+	assert.equal(out.status.state, "ok", out.status.message);
+	assert.match(out.status.results[0]!.message, /Also 4 CSV copies \(general ledger and modules\)/);
+	const files = (await readdir(share)).sort();
+	assert.deepEqual(files, [
+		"ledger-20261112T023000Z-general-ledger.csv",
+		"ledger-20261112T023000Z-notes.csv", // one table: one file, named from the schema
+		"ledger-20261112T023000Z-sales-book-customers.csv", // named from the installed module's id
+		"ledger-20261112T023000Z-sales-book-invoices.csv",
+		"ledger-20261112T023000Z.dump",
+	]);
+	const gl = await readFile(path.join(share, files[0]!), "utf8");
+	assert.match(gl.split("\n")[0]!, /^account_code,account_name,/);
+	assert.match(gl, /1000,Bank,asset,CAD,2026-11-01,1,.*Cash sale,,25\.00,,25\.00/);
+	const inv = (await readFile(path.join(share, files[3]!), "utf8")).trim().split("\n");
+	assert.equal(inv[0], "id,customer,total,issued,meta");
+	assert.equal(inv[1], `31,'=HYPERLINK(1),-15.75,2026-11-02,"{""n"":1}"`);
+	assert.match(await readFile(path.join(share, files[2]!), "utf8"), /1,"Acme, Inc\."/);
+	assert.equal((await readdir(path.join(app.backup.dir, "tmp"))).length, 0, "local copies are removed");
+	const info = (await call("GET", "/backups")).json();
+	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-20261112T023000Z.dump"]);
+
+	// Turned off: dumps only.
+	r = await call("PUT", "/backups/config", { ...settings, include_csv: false });
+	assert.equal(r.json().config.include_csv, false);
+	await rm(share, { recursive: true });
+	out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now, modulesDir: mods });
+	assert.equal(out.status.state, "ok", out.status.message);
+	assert.deepEqual(await readdir(share), ["ledger-20261112T023000Z.dump"]);
+	expectStatus(await call("PUT", "/backups/config", { ...settings, include_csv: "yes" }), 422);
 });

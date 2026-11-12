@@ -135,6 +135,9 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
   Debian 12 LXC template; Ubuntu isn't built or supported). Don't call
   programs that aren't in it (no `spawn` of tools you'd have to
   `apt install`), and don't depend on Ubuntu-specific paths or packages.
+- Backups save every table of the module's schema as a CSV beside the dump
+  (Ledger 0.13.0): name tables and columns so a person reading the CSV
+  understands them, and never keep secrets in tables (use `secret` settings).
 - SQL: always `$1` placeholders; table names as `${ctx.schema}.table`.
   `BIGINT` columns come back as JS `bigint`: cast counts with `::int` or use
   `Number()`, never mix bigint and number.

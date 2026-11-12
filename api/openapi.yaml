@@ -2643,6 +2643,7 @@ components:
       type: object
       properties:
         schedule: { $ref: '#/components/schemas/BackupSchedule' }
+        include_csv: { type: boolean }
         share: { $ref: '#/components/schemas/ShareTargetChange' }
         google:
           type: object
@@ -2659,9 +2660,10 @@ components:
         available: { type: boolean, description: Backups are set up on this server }
         config:
           type: object
-          required: [schedule, share, google]
+          required: [schedule, share, google, include_csv]
           properties:
             schedule: { $ref: '#/components/schemas/BackupSchedule' }
+            include_csv: { type: boolean, description: 'Also save CSV copies beside each dump: the General Ledger and each module''s tables' }
             share: { $ref: '#/components/schemas/ShareTarget' }
             google:
               type: object

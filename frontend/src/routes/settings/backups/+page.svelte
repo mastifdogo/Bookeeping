@@ -17,6 +17,7 @@
 
 	type Form = {
 		schedule: BackupInfo['config']['schedule'];
+		include_csv: boolean;
 		share: Omit<BackupInfo['config']['share'], 'has_password'> & { password: string };
 		google: { enabled: boolean; client_id: string; client_secret: string; keep_count: number };
 	};
@@ -29,6 +30,7 @@
 		info = i;
 		form = {
 			schedule: { ...i.config.schedule, days: [...i.config.schedule.days] },
+			include_csv: i.config.include_csv,
 			share: (({ has_password: _, ...rest }) => ({ ...rest, password: '' }))(i.config.share),
 			google: { enabled: i.config.google.enabled, client_id: i.config.google.client_id, client_secret: '', keep_count: i.config.google.keep_count }
 		};
@@ -80,6 +82,7 @@
 	/** Settings to send: blank secrets keep the saved ones. */
 	const body = () => ({
 		schedule: form.schedule,
+		include_csv: form.include_csv,
 		share: { ...form.share, password: form.share.password || null },
 		google: { ...form.google, client_secret: form.google.client_secret || null }
 	});
@@ -208,6 +211,11 @@
 			</label>
 		</div>
 		<p class="muted small">Ledger also backs up before installing an update.</p>
+		<label class="inline"><input type="checkbox" bind:checked={form.include_csv} /> Also save CSV copies beside each backup</label>
+		<p class="muted small" style="margin:0.2rem 0 0 1.6rem">
+			A General Ledger CSV and each module's data as CSV (one file per module, or per table when a module has several), for the
+			main books and every organization. They open in a spreadsheet; the <code>.dump</code> file is still what restores Ledger.
+		</p>
 	</section>
 
 	<section class="card">

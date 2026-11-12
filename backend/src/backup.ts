@@ -16,7 +16,10 @@ import { createReadStream, promises as fsp } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import pg from "pg";
-import { withDatabase } from "./db.ts";
+import { getTypeParser, withDatabase } from "./db.ts";
+import { csvRecord } from "./csv.ts";
+import { csvText, writeGeneralLedger } from "./files.ts";
+import { modulesDir, scanInstalled } from "./modules.ts";
 import { closeLedgerNotice, postLedgerNotice } from "./dashboard.ts";
 import { ConflictError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
@@ -73,6 +76,8 @@ export interface BackupConfig {
 	schedule: BackupSchedule;
 	share: ShareTarget;
 	google: GoogleTarget;
+	/** Also save CSV copies beside each dump: the General Ledger and each module's tables. */
+	include_csv: boolean;
 }
 
 export type BackupState = "idle" | "running" | "ok" | "warning" | "error";
@@ -113,8 +118,14 @@ const EMPTY_STATUS: BackupStatus = {
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 // ledger-<stamp>.dump for the main database, ledger-<database>-<stamp>.dump
 // for each other organization's.
-const DUMP_RE = /^ledger-(?:([a-z0-9_]+)-)?\d{8}T\d{6}Z\.dump$/;
-const dumpGroup = (name: string) => DUMP_RE.exec(name)?.[1] ?? "";
+// With CSV copies beside each dump: ledger[-<database>]-<stamp>-general-ledger.csv
+// and ledger[-<database>]-<stamp>-<module>[-<table>].csv.
+const DUMP_RE = /^ledger-(?:([a-z0-9_]+)-)?(\d{8}T\d{6}Z)(?:-([a-z0-9-]+))?\.(dump|csv)$/;
+/** Files kept "newest N" together: same database and same kind of file. */
+const dumpGroup = (name: string) => {
+	const m = DUMP_RE.exec(name);
+	return m ? `${m[1] ?? ""}|${m[3] ?? ""}|${m[4]}` : "";
+};
 /** The share must be under one of these (the systemd units let Ledger write only there). */
 function allowedRoots(): string[] {
 	return process.env.BACKUP_SHARE_ROOTS?.split(":").filter((r) => r.startsWith("/")) ?? ["/app/csv_data", "/mnt"];
@@ -143,6 +154,7 @@ export function defaultConfig(env: NodeJS.ProcessEnv = process.env): BackupConfi
 			keep_days: Number.isInteger(keep) && keep >= 1 && keep <= 3650 ? keep : 30,
 		},
 		google: { enabled: false, client_id: "", client_secret: "", refresh_token: "", folder_id: "", account: "", keep_count: 30 },
+		include_csv: true,
 	};
 }
 
@@ -154,7 +166,7 @@ export async function readConfig(dir: string): Promise<BackupConfig> {
 		const v = JSON.parse(text) as Partial<BackupConfig> & { truenas?: Partial<ShareTarget> };
 		// Ledger ≤ 0.11.2 called the share "truenas" and only wrote to a mounted folder.
 		const share = v.share ?? (v.truenas ? { ...v.truenas, mode: "folder" as const } : {});
-		return { schedule: { ...def.schedule, ...v.schedule }, share: { ...def.share, ...share }, google: { ...def.google, ...v.google } };
+		return { schedule: { ...def.schedule, ...v.schedule }, share: { ...def.share, ...share }, google: { ...def.google, ...v.google }, include_csv: v.include_csv !== false };
 	} catch {
 		return def;
 	}
@@ -201,6 +213,7 @@ export function checkSharePath(p: string, err: ValidationError, field = "share.p
 export function publicConfig(c: BackupConfig) {
 	return {
 		schedule: c.schedule,
+		include_csv: c.include_csv,
 		share: { ...c.share, password: undefined, has_password: c.share.password !== "" },
 		google: {
 			enabled: c.google.enabled,
@@ -230,8 +243,10 @@ export function applyConfigChange(c: BackupConfig, v: unknown): BackupConfig {
 		for (const key of Object.keys(x)) if (!keys.includes(key)) err.add(`${k}.${key}`, "unknown field");
 		return x as Record<string, unknown>;
 	};
-	for (const k of Object.keys(o)) if (!["schedule", "share", "google"].includes(k)) err.add(k, "unknown field");
+	for (const k of Object.keys(o)) if (!["schedule", "share", "google", "include_csv"].includes(k)) err.add(k, "unknown field");
+	if (o.include_csv !== undefined && typeof o.include_csv !== "boolean") err.add("include_csv", "must be true or false");
 	const next: BackupConfig = structuredClone(c);
+	if (typeof o.include_csv === "boolean") next.include_csv = o.include_csv;
 
 	const s = obj("schedule", ["enabled", "days", "time", "timezone"]);
 	if (s) {
@@ -412,9 +427,9 @@ export async function listShareDumps(t: ShareTarget, workDir: string, limit = 10
 	return files.sort((a, b) => b.name.localeCompare(a.name)).slice(0, limit);
 }
 
-/** When a dump was made, from its name (ledger[-db]-YYYYMMDDTHHMMSSZ.dump). */
+/** When a backup file was made, from the stamp in its name (…-YYYYMMDDTHHMMSSZ[-…].dump|csv). */
 function dumpTime(name: string): number | null {
-	const m = /(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.dump$/.exec(name);
+	const m = /-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-[a-z0-9-]+)?\.(?:dump|csv)$/.exec(name);
 	return m ? Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) : null;
 }
 
@@ -673,6 +688,68 @@ async function uploadToDrive(file: string, g: GoogleTarget, ep: GoogleEndpoints)
 // Running a backup
 // ---------------------------------------------------------------------------
 
+/**
+ * Writes CSV copies of one database next to its dump (base = the dump's path
+ * without ".dump"): the General Ledger, and every table of each module's
+ * schema (one file per module when it has one table, else one per table).
+ * Read in one consistent snapshot. Returns the files written.
+ */
+export async function writeCsvCopies(databaseUrl: string, base: string, modulesDirPath: string): Promise<string[]> {
+	const names = new Map<string, string>(); // schema → module id
+	for (const m of await scanInstalled(modulesDirPath).catch(() => [])) names.set(`mod_${m.manifest.id.replaceAll("-", "_")}`, m.manifest.id);
+	const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 10_000, types: { getTypeParser } as pg.CustomTypesConfig });
+	await client.connect();
+	const out: string[] = [];
+	try {
+		await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+		const gl = `${base}-general-ledger.csv`;
+		const fh = await fsp.open(gl, "w", 0o600);
+		try {
+			await writeGeneralLedger(client, (chunk) => fh.write(chunk).then(() => undefined));
+		} finally {
+			await fh.close();
+		}
+		out.push(gl);
+		const tables = (
+			await client.query<{ schema: string; table: string }>(
+				`SELECT table_schema AS schema, table_name AS table FROM information_schema.tables
+				  WHERE table_schema LIKE 'mod\\_%' AND table_type = 'BASE TABLE' ORDER BY 1, 2`,
+			)
+		).rows;
+		const bySchema = new Map<string, string[]>();
+		for (const t of tables) bySchema.set(t.schema, [...(bySchema.get(t.schema) ?? []), t.table]);
+		const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "x";
+		for (const [schema, list] of bySchema) {
+			const id = slug(names.get(schema) ?? schema.slice(4));
+			for (const table of list) {
+				const file = `${base}-${id}${list.length > 1 ? `-${slug(table)}` : ""}.csv`;
+				const q = (x: string) => `"${x.replaceAll('"', '""')}"`;
+				const r = await client.query(`SELECT * FROM ${q(schema)}.${q(table)}`);
+				const cell = (v: unknown) =>
+					v === null || v === undefined ? "" : v instanceof Date ? v.toISOString() : Buffer.isBuffer(v) ? v.toString("base64") : typeof v === "object" ? JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x)) : String(v);
+				let text = csvRecord(r.fields.map((f) => f.name));
+				// int2/4/8, float4/8 and numeric stay as numbers; text gets the spreadsheet-formula guard.
+				const numeric = new Set([20, 21, 23, 700, 701, 1700]);
+				for (const row of r.rows) {
+					text += csvRecord(r.fields.map((f) => {
+						const v = cell((row as Record<string, unknown>)[f.name]);
+						return numeric.has(f.dataTypeID) ? v : csvText(v);
+					}));
+				}
+				await fsp.writeFile(file, text, { mode: 0o600 });
+				out.push(file);
+			}
+		}
+		await client.query("COMMIT");
+		return out;
+	} catch (err) {
+		for (const f of out) await fsp.rm(f, { force: true });
+		throw new Error(`CSV copies: ${(err as Error).message}`, { cause: err });
+	} finally {
+		await client.end().catch(() => {});
+	}
+}
+
 /** Runs a command and returns its output (stdout and stderr together); rejects on a non-zero exit or after 10 minutes. */
 function runCapture(cmd: string, args: string[]): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -702,6 +779,8 @@ export interface BackupOptions {
 	trigger: "manual" | "scheduled";
 	now?: () => number;
 	google?: GoogleEndpoints;
+	/** Installed modules, to name their CSV copies (default: /var/lib/ledger/modules). */
+	modulesDir?: string;
 	/** Writes a database's dump (tests replace pg_dump). */
 	dump?: (file: string, databaseUrl: string) => Promise<void>;
 }
@@ -765,17 +844,25 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 			const dumps = [{ file, url: o.databaseUrl }, ...orgs.map((d) => ({ file: path.join(workDir, `ledger-${d}-${stamp}.dump`), url: withDatabase(o.databaseUrl, d) }))];
 			files.push(...dumps.slice(1).map((d) => d.file));
 			status.size_bytes = 0;
+			const csvs: string[] = [];
 			for (const d of dumps) {
 				await (o.dump ?? ((f, url) => run("pg_dump", ["--format=custom", "--compress=6", "--no-owner", "--no-privileges", `--file=${f}`, url])))(d.file, d.url);
 				if (!o.dump) await run("pg_restore", ["--list", d.file]); // the archive must be readable
 				status.size_bytes += (await fsp.stat(d.file)).size;
+				if (config.include_csv) {
+					const made = await writeCsvCopies(d.url, d.file.replace(/\.dump$/, ""), o.modulesDir ?? modulesDir());
+					files.push(...made);
+					csvs.push(...made);
+				}
 			}
 			for (const t of targets) {
 				try {
 					const messages: string[] = [];
-					for (const d of dumps) {
-						messages.push(t === "share" ? await copyToShare(d.file, config.share, now(), workDir) : await uploadToDrive(d.file, config.google, o.google ?? googleEndpoints()));
+					for (const f of [...dumps.map((d) => d.file), ...csvs]) {
+						const m = t === "share" ? await copyToShare(f, config.share, now(), workDir) : await uploadToDrive(f, config.google, o.google ?? googleEndpoints());
+						if (f.endsWith(".dump")) messages.push(m);
 					}
+					if (csvs.length) messages.push(`Also ${csvs.length} CSV ${csvs.length === 1 ? "copy" : "copies"} (general ledger${csvs.length > dumps.length ? " and modules" : ""}).`);
 					status.results.push({ target: t, ok: true, message: messages.join(" ") });
 					status.last_ok[t] = new Date(now()).toISOString();
 				} catch (e) {

@@ -1969,6 +1969,7 @@ export interface components {
         };
         BackupConfigChange: {
             schedule?: components["schemas"]["BackupSchedule"];
+            include_csv?: boolean;
             share?: components["schemas"]["ShareTargetChange"];
             google?: {
                 enabled: boolean;
@@ -1982,6 +1983,8 @@ export interface components {
             available: boolean;
             config: {
                 schedule: components["schemas"]["BackupSchedule"];
+                /** @description Also save CSV copies beside each dump: the General Ledger and each module's tables */
+                include_csv: boolean;
                 share: components["schemas"]["ShareTarget"];
                 google: {
                     enabled: boolean;
