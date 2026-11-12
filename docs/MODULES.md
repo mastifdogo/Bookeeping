@@ -467,7 +467,10 @@ Your tables are in Ledger's database dump, and since Ledger 0.13.0 each
 backup also saves them as CSV files beside the dump
 (`ledger-<stamp>-<module>[-<table>].csv`) for people to open in a
 spreadsheet. Give tables and columns names a person understands, and keep
-secrets out of tables: put them in `secret` settings fields.
+secrets out of tables: put them in `secret` settings fields. Binary columns
+(`bytea`, e.g. stored files) show as `(binary, <n> bytes; in the .dump)` in
+the CSV (Ledger 0.13.1); keep what a person needs to read (file name, size,
+dates) in ordinary columns beside them.
 
 Each `migrations/NNN_name.sql` file runs **once**, in file-name order, in a
 transaction. It runs as the module's own role (`mod_<id>`), with

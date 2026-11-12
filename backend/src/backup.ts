@@ -724,19 +724,32 @@ export async function writeCsvCopies(databaseUrl: string, base: string, modulesD
 			for (const table of list) {
 				const file = `${base}-${id}${list.length > 1 ? `-${slug(table)}` : ""}.csv`;
 				const q = (x: string) => `"${x.replaceAll('"', '""')}"`;
-				const r = await client.query(`SELECT * FROM ${q(schema)}.${q(table)}`);
+				// Binary columns (a module's stored files) are noted, not copied: the .dump has them, and a
+				// spreadsheet can't use base64. Rows are read in batches through a cursor and written as they
+				// come, so a large table neither fills memory nor overruns the longest string V8 can hold.
 				const cell = (v: unknown) =>
-					v === null || v === undefined ? "" : v instanceof Date ? v.toISOString() : Buffer.isBuffer(v) ? v.toString("base64") : typeof v === "object" ? JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x)) : String(v);
-				let text = csvRecord(r.fields.map((f) => f.name));
+					v === null || v === undefined ? "" : v instanceof Date ? v.toISOString() : Buffer.isBuffer(v) ? `(binary, ${v.length} bytes; in the .dump)` : typeof v === "object" ? JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x)) : String(v);
 				// int2/4/8, float4/8 and numeric stay as numbers; text gets the spreadsheet-formula guard.
 				const numeric = new Set([20, 21, 23, 700, 701, 1700]);
-				for (const row of r.rows) {
-					text += csvRecord(r.fields.map((f) => {
-						const v = cell((row as Record<string, unknown>)[f.name]);
-						return numeric.has(f.dataTypeID) ? v : csvText(v);
-					}));
+				await client.query(`DECLARE csv_rows NO SCROLL CURSOR FOR SELECT * FROM ${q(schema)}.${q(table)}`);
+				const th = await fsp.open(file, "w", 0o600);
+				try {
+					for (let first = true; ; first = false) {
+						const r = await client.query("FETCH 500 FROM csv_rows");
+						let text = first ? csvRecord(r.fields.map((f) => f.name)) : "";
+						for (const row of r.rows) {
+							text += csvRecord(r.fields.map((f) => {
+								const v = cell((row as Record<string, unknown>)[f.name]);
+								return numeric.has(f.dataTypeID) ? v : csvText(v);
+							}));
+						}
+						if (text) await th.write(text);
+						if (r.rows.length < 500) break;
+					}
+				} finally {
+					await th.close();
+					await client.query("CLOSE csv_rows");
 				}
-				await fsp.writeFile(file, text, { mode: 0o600 });
 				out.push(file);
 			}
 		}
@@ -781,6 +794,8 @@ export interface BackupOptions {
 	google?: GoogleEndpoints;
 	/** Installed modules, to name their CSV copies (default: /var/lib/ledger/modules). */
 	modulesDir?: string;
+	/** Writes a database's CSV copies (tests make it fail). */
+	csvCopies?: typeof writeCsvCopies;
 	/** Writes a database's dump (tests replace pg_dump). */
 	dump?: (file: string, databaseUrl: string) => Promise<void>;
 }
@@ -845,14 +860,21 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 			files.push(...dumps.slice(1).map((d) => d.file));
 			status.size_bytes = 0;
 			const csvs: string[] = [];
+			const csvProblems: string[] = [];
 			for (const d of dumps) {
 				await (o.dump ?? ((f, url) => run("pg_dump", ["--format=custom", "--compress=6", "--no-owner", "--no-privileges", `--file=${f}`, url])))(d.file, d.url);
 				if (!o.dump) await run("pg_restore", ["--list", d.file]); // the archive must be readable
 				status.size_bytes += (await fsp.stat(d.file)).size;
 				if (config.include_csv) {
-					const made = await writeCsvCopies(d.url, d.file.replace(/\.dump$/, ""), o.modulesDir ?? modulesDir());
-					files.push(...made);
-					csvs.push(...made);
+					// The CSV copies are a convenience; the dump is the backup, so it goes out even if they fail.
+					try {
+						const made = await (o.csvCopies ?? writeCsvCopies)(d.url, d.file.replace(/\.dump$/, ""), o.modulesDir ?? modulesDir());
+						files.push(...made);
+						csvs.push(...made);
+					} catch (e) {
+						csvProblems.push((e as Error).message);
+						log.error("backup CSV copies failed", { file: path.basename(d.file), err: (e as Error).message });
+					}
 				}
 			}
 			for (const t of targets) {
@@ -879,6 +901,11 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 							.filter((r) => !r.ok)
 							.map((r) => `${label(r.target)}: ${r.message}`)
 							.join(" ");
+			if (csvProblems.length > 0) {
+				// The dump went out; say the CSV copies didn't, and why.
+				if (status.state === "ok") status.state = "warning";
+				status.message += ` The CSV copies couldn't be made: ${csvProblems.join(" ")}`;
+			}
 		} catch (e) {
 			status.state = "error";
 			status.message = (e as Error).message;

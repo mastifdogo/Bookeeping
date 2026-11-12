@@ -332,8 +332,12 @@ Beside each dump go CSV copies (unless turned off under Settings → Backups):
 `ledger-<stamp>-general-ledger.csv` (the same columns as the General Ledger
 export) and each module's data, `ledger-<stamp>-<module>.csv`, or
 `ledger-<stamp>-<module>-<table>.csv` when a module has several tables, all
-read in one consistent snapshot. They're for reading in a spreadsheet; the
-dump is what restores Ledger. They're removed together with their dump. If a destination fails,
+read in one consistent snapshot and written in batches, so large tables
+are fine. Binary columns (files a module stores) appear as
+`(binary, <n> bytes; in the .dump)`: the dump has the bytes. They're for
+reading in a spreadsheet; the dump is what restores Ledger, and if the CSV
+copies can't be made the dump is still saved and the backup reports a
+warning. They're removed together with their dump. If a destination fails,
 the dashboard says so. Settings and the Google credentials are kept in
 `/var/lib/ledger/backup/` (not in the database, so not inside the dumps).
 

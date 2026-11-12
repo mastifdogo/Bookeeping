@@ -2196,7 +2196,10 @@ test("backups: CSV copies of the general ledger and each module beside the dump"
 	await admin.query(`CREATE SCHEMA mod_sales_book; CREATE TABLE mod_sales_book.invoices (id bigint, customer text, total numeric, issued date, meta jsonb);
 		INSERT INTO mod_sales_book.invoices VALUES (31, '=HYPERLINK(1)', -15.75, '2026-11-02', '{"n": 1}');
 		CREATE TABLE mod_sales_book.customers (id int, name text); INSERT INTO mod_sales_book.customers VALUES (1, 'Acme, Inc.');
-		CREATE SCHEMA mod_notes; CREATE TABLE mod_notes.items (body text); INSERT INTO mod_notes.items VALUES ('hi');`);
+		CREATE SCHEMA mod_notes; CREATE TABLE mod_notes.items (body text); INSERT INTO mod_notes.items VALUES ('hi');
+		INSERT INTO mod_sales_book.customers SELECT n, 'Customer ' || n FROM generate_series(2, 1201) n;
+		CREATE SCHEMA mod_downloads; CREATE TABLE mod_downloads.file_chunks (file_id bigint, chunk_index int, data bytea);
+		INSERT INTO mod_downloads.file_chunks VALUES (7, 0, decode(repeat('ab', 524288), 'hex'));`);
 	await admin.end();
 	const mods = await mkdtemp(path.join(tmpdir(), "ledger-mods-"));
 	t.after(() => rm(mods, { recursive: true, force: true }));
@@ -2208,8 +2211,11 @@ test("backups: CSV copies of the general ledger and each module beside the dump"
 	const now = () => Date.parse("2026-11-12T02:30:00Z");
 	let out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump, now, modulesDir: mods });
 	assert.equal(out.status.state, "ok", out.status.message);
-	assert.match(out.status.results[0]!.message, /Also 4 CSV copies \(general ledger and modules\)/);
+	assert.match(out.status.results[0]!.message, /Also 5 CSV copies \(general ledger and modules\)/);
 	const files = (await readdir(share)).sort();
+	// Binary columns are noted, not copied (the .dump has them).
+	assert.equal(await readFile(path.join(share, "ledger-20261112T023000Z-downloads.csv"), "utf8"), "file_id,chunk_index,data\n7,0,\"(binary, 524288 bytes; in the .dump)\"\n");
+	files.splice(files.indexOf("ledger-20261112T023000Z-downloads.csv"), 1);
 	assert.deepEqual(files, [
 		"ledger-20261112T023000Z-general-ledger.csv",
 		"ledger-20261112T023000Z-notes.csv", // one table: one file, named from the schema
@@ -2223,10 +2229,29 @@ test("backups: CSV copies of the general ledger and each module beside the dump"
 	const inv = (await readFile(path.join(share, files[3]!), "utf8")).trim().split("\n");
 	assert.equal(inv[0], "id,customer,total,issued,meta");
 	assert.equal(inv[1], `31,'=HYPERLINK(1),-15.75,2026-11-02,"{""n"":1}"`);
-	assert.match(await readFile(path.join(share, files[2]!), "utf8"), /1,"Acme, Inc\."/);
+	const customers = await readFile(path.join(share, files[2]!), "utf8");
+	assert.match(customers, /1,"Acme, Inc\."/);
+	assert.equal(customers.trim().split("\n").length, 1 + 1201, "every row, read in batches"); // header + 1201 rows
 	assert.equal((await readdir(path.join(app.backup.dir, "tmp"))).length, 0, "local copies are removed");
 	const info = (await call("GET", "/backups")).json();
 	assert.deepEqual(info.share_files.map((f: any) => f.name), ["ledger-20261112T023000Z.dump"]);
+
+	// A CSV copy that fails doesn't stop the dump going out; the backup reports it as a warning.
+	await rm(share, { recursive: true });
+	out = await runBackup({
+		dir: app.backup.dir,
+		databaseUrl: app.backup.databaseUrl,
+		trigger: "manual",
+		dump,
+		now,
+		modulesDir: mods,
+		csvCopies: async () => {
+			throw new Error("CSV copies: something went wrong");
+		},
+	});
+	assert.equal(out.status.state, "warning", out.status.message);
+	assert.match(out.status.message, /CSV copies couldn't be made: CSV copies: something went wrong/);
+	assert.deepEqual(await readdir(share), ["ledger-20261112T023000Z.dump"], "the dump still went out");
 
 	// Turned off: dumps only.
 	r = await call("PUT", "/backups/config", { ...settings, include_csv: false });

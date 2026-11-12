@@ -138,6 +138,9 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
 - Backups save every table of the module's schema as a CSV beside the dump
   (Ledger 0.13.0): name tables and columns so a person reading the CSV
   understands them, and never keep secrets in tables (use `secret` settings).
+  Binary (`bytea`) columns appear there only as `(binary, <n> bytes; in the
+  .dump)` (Ledger 0.13.1): keep a file's name, type, size and dates in
+  readable columns next to its bytes.
 - SQL: always `$1` placeholders; table names as `${ctx.schema}.table`.
   `BIGINT` columns come back as JS `bigint`: cast counts with `::int` or use
   `Number()`, never mix bigint and number.
