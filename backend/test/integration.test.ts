@@ -2514,7 +2514,9 @@ test("restore from a backup: one organization's books replaced; users, sign-ins 
 	process.env.BACKUP_SHARE_ROOTS = root;
 	t.after(() => (prevRoots === undefined ? delete process.env.BACKUP_SHARE_ROOTS : (process.env.BACKUP_SHARE_ROOTS = prevRoots)));
 	await mkdir(app.backup.dir, { mode: 0o700 });
-	await mkdir(app.update.config, { recursive: true }).catch(() => {});
+	// Where the app leaves its request for root (a real server has /var/lib/ledger/update-config).
+	app.update = { config: path.join(root, "update-config"), status: path.join(root, "update-status") };
+	await mkdir(app.update.config, { recursive: true });
 	const share = path.join(root, "backups");
 	expectStatus(await call("PUT", "/backups/config", { schedule: { enabled: false, days: [1], time: "02:30", timezone: "UTC" }, share: { enabled: true, mode: "folder", path: share, keep_days: 3650 }, google: { enabled: false, client_id: "", keep_count: 5 } }), 200);
 	await loadModules(t, app, { bills: `export default function (ctx) { ctx.route("POST", "/save", (req) => ctx.storage.put(req.body.path, req.body.b64)); ctx.route("POST", "/remove", (req) => ctx.storage.remove(req.body.path)); }` });
