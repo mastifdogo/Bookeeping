@@ -144,6 +144,17 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
   PDFs, scans, attachments) with `ctx.storage` (Ledger 0.13.2): files on
   the share per organization, carried in every backup under
   `files/<module>/`, opened by users at `ctx.storage.url(path)`.
+- **Restores** (Ledger 0.14.0): each organization backs up and restores its
+  own books. A restore replaces the module's tables and its `ctx.storage`
+  files with the backup's (a restore from an uploaded dump file, 0.14.2,
+  replaces only the tables), but keeps the module's current settings, which
+  are backed up and restored separately, and the server's users. So after a
+  restore, rows may be older than the settings and than files or state
+  outside the database: never assume a stored file, a setting or an
+  external record (a sent email, a remote id) matches the tables; check and
+  handle a missing one. Keep nothing in memory across requests that must
+  match the database (Ledger restarts after a restore), and refer to users
+  by `req.user` ids, which a restore never changes.
 - **Import from CSV**: a module that keeps records people have elsewhere
   (customers, products, employees) declares its fields with
   `ctx.imports.provide({ label, fields, handler })` (Ledger 0.13.2). Ledger

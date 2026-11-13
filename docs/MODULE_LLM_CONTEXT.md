@@ -533,6 +533,7 @@ database.
 - [ ] documents the module keeps (PDFs, scans) in `ctx.storage`, not `bytea` columns; records people bring from elsewhere importable with `ctx.imports.provide`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries
+- [ ] survives a restore (Ledger ≥ 0.14.0): an organization's restore replaces the module's tables and `ctx.storage` files with a backup's (an uploaded dump: tables only) but keeps its current settings and the server's users; handle a row whose stored file, setting or external record no longer matches
 - [ ] tables and columns have clear names: backups also save each module table as a readable CSV (Ledger ≥ 0.13.0); no secrets in tables (use `secret` settings); binary (`bytea`) columns show only their size there (0.13.1), so keep names, sizes and dates in readable columns
 - [ ] money as integer cents, per currency, entries balanced per currency
 - [ ] migrations unqualified, no BEGIN/COMMIT/GRANT

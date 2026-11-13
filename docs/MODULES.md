@@ -517,6 +517,16 @@ function newAccount(defaults = {}) {
 
 ## Migrations
 
+Since Ledger 0.14.0 every organization backs up and restores its own books.
+A restore replaces your tables and your `ctx.storage` files with the
+backup's (from an uploaded dump file, 0.14.2: only the tables), while the
+module's settings stay as they are (they have their own rolling backup,
+`settings-…/settings.json`, restored separately) and so do the server's
+users. After a restore your rows may therefore be older than your settings
+and than anything outside the database, and a stored file a row points to
+may be missing: check rather than assume, and keep no in-memory state that
+must match the database (Ledger restarts after a restore).
+
 Your tables are in Ledger's database dump, and since Ledger 0.13.0 each
 backup also saves them as CSV files in its folder, next to the dump
 (`<module>[-<table>].csv` in each backup's folder) for people to open in a
