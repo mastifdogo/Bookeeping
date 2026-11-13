@@ -107,6 +107,7 @@
 	let unreachable = $state(false);
 	const restoring = $derived(info.restore.state === 'running');
 	const when = (name: string) => {
+		if (name === 'upload') return 'the uploaded dump file';
 		const m = /^(?:ledger|settings)-(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-\d{2}([+-]\d{2})(\d{2})$/.exec(name);
 		return m ? `${m[1]} ${m[2]}:${m[3]} (UTC${m[4]}:${m[5]})` : name;
 	};
@@ -122,8 +123,39 @@
 			restoreError = e;
 		}
 	}
+	// A dump file from this computer, sent in pieces so large files work.
+	const PIECE = 4 * 1024 * 1024;
+	let uploadFiles = $state<FileList | null>(null);
+	let uploadProgress = $state<number | null>(null);
+	async function uploadDump() {
+		const f = uploadFiles?.[0];
+		if (!f) return;
+		restoreError = null;
+		busy = true;
+		uploadProgress = 0;
+		try {
+			for (let at = 0; at < f.size || at === 0; at += PIECE) {
+				const res = await fetch(`/api/v1/backups/restore/upload?offset=${at}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f.slice(at, at + PIECE) });
+				if (!res.ok) throw new Error((await res.json().catch(() => null))?.error?.message ?? `The upload failed (${res.status}).`);
+				uploadProgress = Math.min(1, (at + PIECE) / Math.max(1, f.size));
+			}
+			info = unwrap(await api().POST('/backups/restore/upload/finish', { body: { filename: f.name } }));
+			uploadFiles = null;
+			chosen = 'upload|upload';
+		} catch (e) {
+			restoreError = e;
+		} finally {
+			busy = false;
+			uploadProgress = null;
+		}
+	}
+	async function discardUpload() {
+		info = unwrap(await api().DELETE('/backups/restore/upload'));
+		if (chosen === 'upload|upload') chosen = '';
+	}
+
 	async function restore() {
-		const [source, name] = chosen.split('|') as ['share' | 'google', string];
+		const [source, name] = chosen.split('|') as ['share' | 'google' | 'upload', string];
 		if (!name || typed !== confirmWord) return;
 		restoreError = null;
 		busy = true;
@@ -499,14 +531,16 @@
 			<button type="button" onclick={loadRestorable} disabled={!info.available || running}>Choose a backup to restore…</button>
 		{:else}
 			{#each restoreProblems as p (p)}<p class="warn-text small">{p}</p>{/each}
-			{#if restorable.length === 0}
-				<p>No backups were found on the destinations that are turned on.</p>
-			{:else}
+			{#if restorable.length === 0 && !info.upload}
+				<p>No backups were found on the destinations that are turned on. You can upload a dump file below.</p>
+			{/if}
+			{#if restorable.length > 0 || info.upload}
 				<div class="row">
 					<label>
 						Backup
 						<select bind:value={chosen}>
 							<option value="">— choose —</option>
+							{#if info.upload}<option value="upload|upload">Uploaded file: {info.upload.filename} · {size(info.upload.size_bytes)}</option>{/if}
 							{#each restorable as b (b.source + b.name)}
 								<option value={`${b.source}|${b.name}`}>
 									{when(b.name)} · {b.source === 'share' ? 'network share' : 'Google Drive'}{b.size_bytes ? ` · ${size(b.size_bytes)}` : ''}
@@ -525,9 +559,24 @@
 				{#if chosen}
 					<p class="small">
 						Everyone stays signed in. The backup must come from this version of Ledger or an older one.
+						{#if chosen === 'upload|upload'}A dump file holds the books and module data only: the files modules keep stay as they are now.{/if}
 					</p>
 				{/if}
 			{/if}
+			<div class="row">
+				<label>
+					Or upload a dump file
+					<input type="file" accept=".dump,application/octet-stream" bind:files={uploadFiles} disabled={busy} />
+				</label>
+				{#if uploadFiles?.length}
+					<button type="button" onclick={uploadDump} disabled={busy}>{uploadProgress === null ? 'Upload' : `Uploading… ${Math.round(uploadProgress * 100)}%`}</button>
+				{/if}
+				{#if info.upload && !uploadFiles?.length}<button type="button" class="link small" onclick={discardUpload} disabled={busy}>Discard the uploaded file</button>{/if}
+			</div>
+			<p class="muted small">
+				The <code>ledger.dump</code> from one of this organization's backup folders (for example downloaded from Google Drive or copied
+				off the share). Ledger checks it, then you choose it above and confirm.
+			</p>
 			<h3>Restore settings</h3>
 			{#if settingsDone}<div class="notice ok">{settingsDone}</div>{/if}
 			{#if settingsBackups.length === 0}

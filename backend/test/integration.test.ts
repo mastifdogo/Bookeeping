@@ -2664,10 +2664,14 @@ test("restore from a backup: one organization's books replaced; users, sign-ins 
 	assert.equal(await performRestore(root_), false, "the request is used once");
 
 	// The main books are as they were at the backup. (The app's connections were closed by the swap; it reconnects.)
-	const check = new pgm.Client({ connectionString: app.backup.databaseUrl });
-	await check.connect();
-	check.on("error", () => {});
-	t.after(() => check.end().catch(() => {}));
+	const connect = async () => {
+		const c = new pgm.Client({ connectionString: app.backup.databaseUrl });
+		await c.connect();
+		c.on("error", () => {});
+		t.after(() => c.end().catch(() => {}));
+		return c;
+	};
+	let check = await connect();
 	const codes = async (c: any = check) => (await c.query(`SELECT code FROM accounts ORDER BY code`)).rows.map((x: any) => x.code);
 	assert.deepEqual(await codes(), ["1000"]);
 	assert.deepEqual((await check.query(`SELECT body FROM mod_notes.items`)).rows.map((x: any) => x.body), ["kept"]);
@@ -2726,6 +2730,40 @@ test("restore from a backup: one organization's books replaced; users, sign-ins 
 	await writeFile(path.join(app.update.config, "restore-run-now"), JSON.stringify({ db: "postgres", backup, source: "share", requested_by: "x", started_at: new Date().toISOString() }));
 	await performRestore(root_);
 	assert.match((await readRestoreStatus(orgBackupDir(app.backup.dir, "postgres"))).message, /not an organization on this server/);
+
+	// A dump file can be uploaded instead (in pieces), checked, and restored the same way.
+	const cookie = `${SESSION_COOKIE}=${ta.token}`;
+	const piece = (offset: number, data: Buffer) => ta.request("POST", `/api/v1/backups/restore/upload?offset=${offset}`, { rawBody: data as any, headers: { "Content-Type": "application/octet-stream" }, cookie });
+	expectStatus(await piece(0, Buffer.from("this is not a dump")), 200);
+	r = await call("POST", "/backups/restore/upload/finish", { filename: "notes.txt" });
+	expectStatus(r, 422);
+	assert.match(r.json().error.message, /not a PostgreSQL dump/);
+	assert.equal((await call("GET", "/backups")).json().upload, null);
+	expectStatus(await call("POST", "/backups/restore", { source: "upload", confirm: "RESTORE" }), 409);
+	const dumpBytes = await readFile(path.join(share, backup, "ledger.dump"));
+	const half = Math.floor(dumpBytes.length / 2);
+	expectStatus(await piece(0, dumpBytes.subarray(0, half)), 200);
+	expectStatus(await piece(0 + 5, dumpBytes.subarray(half)), 409); // out of order
+	r = await piece(half, dumpBytes.subarray(half));
+	assert.equal(r.json().size_bytes, dumpBytes.length);
+	r = await call("POST", "/backups/restore/upload/finish", { filename: "../My books (old).dump" });
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().upload.filename, r.json().upload.size_bytes], ["My books (old).dump", dumpBytes.length]);
+	expectStatus(await call("POST", "/m/bills/save", { path: "scans/kept.pdf", b64: Buffer.from("%PDF-kept").toString("base64") }), 200);
+	expectStatus(await call("POST", "/backups/restore", { source: "upload", confirm: "RESTORE" }), 202);
+	await app.backup.restoring.get("");
+	st = await readRestoreStatus(app.backup.dir);
+	assert.equal(st.phase, "waiting", st.message);
+	assert.equal(st.source, "upload");
+	assert.equal(await performRestore(root_), true);
+	st = await readRestoreStatus(app.backup.dir);
+	assert.equal(st.state, "ok", st.message);
+	check = await connect(); // the swap closed the old connection
+	assert.match(st.message, /Restored from the uploaded dump file\..*Files modules keep, settings, users and sign-ins were left as they are\./);
+	assert.deepEqual(await codes(), ["1000"]);
+	assert.deepEqual((await readdir(path.join(app.csvDir, ".modules", "bills", "scans"))).sort(), ["a.pdf", "kept.pdf"], "a dump file carries no module files: they stay");
+	assert.equal((await call("GET", "/backups")).json().upload ?? null, null, "the upload is used once");
+	expectStatus(await call("POST", "/accounts", { code: "3000", name: "Equity", type: "equity", currency: "CAD" }), 201);
 
 	// A backup from a newer Ledger is refused, and nothing changes.
 	await check.query(`INSERT INTO public.schema_migrations (name) VALUES ('999_from_the_future.sql')`);

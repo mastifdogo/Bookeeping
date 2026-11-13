@@ -1136,10 +1136,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [source, backup, confirm]
+              required: [source, confirm]
               properties:
-                source: { type: string, enum: [share, google] }
-                backup: { type: string }
+                source: { type: string, enum: [share, google, upload], description: 'upload: the dump file uploaded with /backups/restore/upload' }
+                backup: { type: string, description: The backup's folder (not needed for upload) }
                 confirm: { type: string }
       responses:
         '202':
@@ -1148,6 +1148,58 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/BackupInfo' }
         '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/restore/upload:
+    post:
+      tags: [System]
+      operationId: uploadRestoreDumpPiece
+      summary: Upload a piece of a dump file to restore from
+      description: Send the file in order, in pieces of at most 8 MiB (offset 0 starts over), then call /backups/restore/upload/finish.
+      parameters:
+        - { name: offset, in: query, required: true, schema: { type: integer, minimum: 0 }, description: Where this piece starts in the file }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: Stored
+          content:
+            application/json:
+              schema: { type: object, required: [size_bytes], properties: { size_bytes: { type: integer, description: Bytes received so far } } }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [System]
+      operationId: deleteRestoreUpload
+      summary: Discard the uploaded dump file
+      responses:
+        '200':
+          description: Discarded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupInfo' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/restore/upload/finish:
+    post:
+      tags: [System]
+      operationId: finishRestoreUpload
+      summary: Check the uploaded dump file and make it ready to restore
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { filename: { type: string } } }
+      responses:
+        '200':
+          description: Ready (see `upload`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupInfo' }
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
@@ -2917,8 +2969,17 @@ components:
     BackupInfo:
       type: object
       description: The current organization's backups (each organization has its own settings, schedule and destinations)
-      required: [available, config, status, next_run, share_files, restore, can_change_folder]
+      required: [available, config, status, next_run, share_files, restore, upload, can_change_folder]
       properties:
+        upload:
+          type: object
+          nullable: true
+          description: A dump file uploaded for a restore, ready to use
+          required: [filename, size_bytes, uploaded_at]
+          properties:
+            filename: { type: string }
+            size_bytes: { type: integer }
+            uploaded_at: { type: string, format: date-time }
         can_change_folder: { type: boolean, description: Whether this user may choose another folder on the server (server admins only) }
         available: { type: boolean, description: Backups are set up on this server }
         restore:
@@ -2930,7 +2991,7 @@ components:
             phase: { type: string, enum: ['', backup, fetch, waiting, restore, swap] }
             message: { type: string }
             backup: { type: string }
-            source: { type: string, enum: ['', share, google] }
+            source: { type: string, enum: ['', share, google, upload] }
             started_at: { type: string, format: date-time, nullable: true }
             finished_at: { type: string, format: date-time, nullable: true }
             requested_by: { type: string }

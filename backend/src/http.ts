@@ -83,7 +83,7 @@ import {
 	testShare,
 	writeConfig,
 } from "./backup.ts";
-import { RESTORE_CONFIRM, prepareRestore, readRestoreStatus, readSettingsFile } from "./restore.ts";
+import { RESTORE_CONFIRM, UPLOAD_NAME, appendUpload, finishUpload, prepareRestore, readRestoreStatus, readSettingsFile, readUpload, uploadDir } from "./restore.ts";
 import { publicSettings, saveSettings } from "./module-settings.ts";
 import { notifySettings } from "./module-host.ts";
 import {
@@ -131,6 +131,8 @@ import { MAX_MODULES, normalizeRepo, readDesired, readModuleResults, requestModu
 import { fetchManifest, githubApi, latestModuleRelease, repoIdentity } from "./github.ts";
 
 const MAX_BODY_BYTES = 1 << 20; // 1 MiB for JSON
+/** One piece of an uploaded dump file (the page sends 4 MiB pieces). */
+const UPLOAD_PIECE_BYTES = 8 << 20;
 const MULTIPART_OVERHEAD = 64 << 10;
 
 
@@ -975,12 +977,14 @@ async function handleRestore(c: Ctx): Promise<void> {
 	await requireBackups(c);
 	const body = (await readJSON(c, true)) as { source?: unknown; backup?: unknown; confirm?: unknown };
 	const err = new ValidationError();
-	if (body.source !== "share" && body.source !== "google") err.add("source", "must be share or google");
-	if (typeof body.backup !== "string" || !isBackupFolder(body.backup)) err.add("backup", "choose a backup");
+	const uploaded = body.source === "upload";
+	if (body.source !== "share" && body.source !== "google" && !uploaded) err.add("source", "must be share, google or upload");
+	if (!uploaded && (typeof body.backup !== "string" || !isBackupFolder(body.backup))) err.add("backup", "choose a backup");
 	if (body.confirm !== RESTORE_CONFIRM) err.add("confirm", `type ${RESTORE_CONFIRM} to confirm`);
 	err.throwIfAny();
 	const b = await orgBackups(c);
 	if (!b.databaseUrl) throw new ConflictError("DATABASE_URL is not known to the app");
+	if (uploaded && !(await readUpload(b.dir))) throw new ConflictError("upload the dump file first");
 	if (c.app.backup.running.has(b.db)) throw new ConflictError("a backup is running; try again when it has finished");
 	if (c.app.backup.restoring.size > 0 || (await restoreInfo(c)).state === "running") throw new ConflictError("a restore is already running");
 	const job = prepareRestore({
@@ -990,8 +994,8 @@ async function handleRestore(c: Ctx): Promise<void> {
 		databaseUrl: b.databaseUrl,
 		csvDir: await filesDir(c.app),
 		google: c.app.backup.google,
-		source: body.source as "share" | "google",
-		backup: body.backup as string,
+		source: body.source as "share" | "google" | "upload",
+		backup: uploaded ? UPLOAD_NAME : (body.backup as string),
 		requestedBy: c.user!.username,
 	}).finally(() => {
 		c.app.backup.restoring.delete(b.db);
@@ -999,6 +1003,44 @@ async function handleRestore(c: Ctx): Promise<void> {
 	c.app.backup.restoring.set(b.db, job);
 	await new Promise((r) => setTimeout(r, 150));
 	writeJSON(c.res, 202, await backupsInfo(c));
+}
+
+/**
+ * A dump file uploaded for a restore arrives in pieces (each a small request,
+ * so a large file doesn't run into the request time limit or the server's
+ * memory): POST …/upload?offset=N with the bytes, then …/upload/finish.
+ */
+async function handleRestoreUploadPiece(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const b = await orgBackups(c);
+	const offset = Number(c.query.get("offset") ?? "");
+	if (!Number.isSafeInteger(offset) || offset < 0) throw new HttpError(422, "offset must be a whole number", "validation_failed");
+	if (c.app.backup.restoring.has(b.db)) throw new ConflictError("a restore is running");
+	const data = await readBody(c.req, UPLOAD_PIECE_BYTES);
+	if (data.length === 0) throw new HttpError(422, "the piece is empty", "validation_failed");
+	try {
+		writeJSON(c.res, 200, { size_bytes: await appendUpload(b.dir, offset, data) });
+	} catch (e) {
+		throw new ConflictError((e as Error).message);
+	}
+}
+
+async function handleRestoreUploadFinish(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const b = await orgBackups(c);
+	const body = (await readJSON(c, true)) as { filename?: unknown };
+	try {
+		await finishUpload(b.dir, typeof body.filename === "string" ? body.filename : "ledger.dump");
+	} catch (e) {
+		throw new HttpError(422, (e as Error).message, "validation_failed");
+	}
+	writeJSON(c.res, 200, await backupsInfo(c));
+}
+
+async function handleRestoreUploadDelete(c: Ctx): Promise<void> {
+	const b = await orgBackups(c);
+	await fsp.rm(uploadDir(b.dir), { recursive: true, force: true });
+	writeJSON(c.res, 200, await backupsInfo(c));
 }
 
 async function backupsInfo(c: Ctx) {
@@ -1017,6 +1059,8 @@ async function backupsInfo(c: Ctx) {
 		next_run: nextBackupTime(config),
 		share_files: available && config.share.enabled ? (await listShareDumps(config.share, b.work, 20)).filter((f) => !isSettingsFolder(f.name)).slice(0, 10) : [],
 		restore: await restoreInfo(c),
+		/** A dump file uploaded for a restore, ready to use. */
+		upload: await readUpload(b.dir),
 		/** Whether this user may point the backups at another mounted folder (server admins only). */
 		can_change_folder: c.user!.server_admin === true,
 	};
@@ -1832,6 +1876,9 @@ const ROUTES: Route[] = [
 	route("GET", "/backups/restorable", "admin", handleRestorable),
 	route("POST", "/backups/restore", "admin", handleRestore),
 	route("POST", "/backups/restore-settings", "admin", handleRestoreSettings),
+	route("POST", "/backups/restore/upload", "admin", handleRestoreUploadPiece),
+	route("POST", "/backups/restore/upload/finish", "admin", handleRestoreUploadFinish),
+	route("DELETE", "/backups/restore/upload", "admin", handleRestoreUploadDelete),
 	route("POST", "/backups/share/test", "admin", handleTestShare),
 	route("POST", "/backups/google/connect", "admin", handleGoogleConnect),
 	route("POST", "/backups/google/poll", "admin", handleGooglePoll),

@@ -399,6 +399,11 @@ share). A backup made by a newer Ledger than the one installed is refused.
 The outcome is shown on the Backups page and the organization's dashboard;
 `journalctl -u ledger-update` has the details.
 
+Instead of a backup at a destination you can **upload a dump file** there
+(the `ledger.dump` from one of the organization's backup folders, up to
+8 GiB): Ledger checks it and restores it the same way. A dump file holds the
+books and module data only, so the files modules keep stay as they are.
+
 **Restore settings** on the same page puts back the organization's module
 settings and backup schedule from one of its `settings-…` backups, without
 touching the books. Where backups go (share, Drive account) is not in the

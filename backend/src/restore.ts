@@ -44,7 +44,7 @@ export interface RestoreStatus {
 	message: string;
 	/** The backup folder being restored. */
 	backup: string;
-	source: "" | "share" | "google";
+	source: "" | "share" | "google" | "upload";
 	started_at: string | null;
 	finished_at: string | null;
 	requested_by: string;
@@ -72,6 +72,70 @@ export async function writeRestoreStatus(dir: string, s: RestoreStatus): Promise
 	}
 }
 
+/** The name a restore from an uploaded dump file goes by (in place of a backup folder's). */
+export const UPLOAD_NAME = "upload";
+/** Where an organization's uploaded dump waits: ledger.dump and upload.json (its name, size and time). */
+export const uploadDir = (orgDir: string) => path.join(orgDir, "upload");
+export const MAX_UPLOAD_BYTES = 8 * 1024 ** 3;
+const restorable = (name: string) => isBackupFolder(name) || name === UPLOAD_NAME;
+const labelOf = (name: string) => (name === UPLOAD_NAME ? "the uploaded dump file" : name);
+
+export interface UploadInfo {
+	filename: string;
+	size_bytes: number;
+	uploaded_at: string;
+}
+
+/** The uploaded dump that is ready to restore, if any. */
+export async function readUpload(orgDir: string): Promise<UploadInfo | null> {
+	const text = await readSmallFile(path.join(uploadDir(orgDir), "upload.json"));
+	if (text === null) return null;
+	try {
+		const v = JSON.parse(text) as UploadInfo;
+		const st = await fsp.lstat(path.join(uploadDir(orgDir), "ledger.dump"));
+		return st.isFile() && typeof v.filename === "string" ? { filename: v.filename, size_bytes: st.size, uploaded_at: String(v.uploaded_at) } : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Adds a piece of an uploaded dump (pieces arrive in order; offset 0 starts
+ * over). Returns the size so far.
+ */
+export async function appendUpload(orgDir: string, offset: number, data: Buffer): Promise<number> {
+	const dir = uploadDir(orgDir);
+	const part = path.join(dir, "ledger.dump.part");
+	if (offset === 0) {
+		await fsp.rm(dir, { recursive: true, force: true });
+		await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+	}
+	const size = (await fsp.lstat(part).catch(() => null))?.size ?? 0;
+	if (offset !== size) throw new Error(`expected the piece at ${size}, got ${offset}`);
+	if (size + data.length > MAX_UPLOAD_BYTES) throw new Error(`dump files can be at most ${MAX_UPLOAD_BYTES / 1024 ** 3} GiB`);
+	await fsp.appendFile(part, data, { mode: 0o600 });
+	return size + data.length;
+}
+
+/** Checks the uploaded file is a database dump and makes it ready to restore. */
+export async function finishUpload(orgDir: string, filename: string, now = Date.now()): Promise<UploadInfo> {
+	const dir = uploadDir(orgDir);
+	const part = path.join(dir, "ledger.dump.part");
+	try {
+		if (!(await fsp.lstat(part).catch(() => null))?.isFile()) throw new Error("nothing was uploaded");
+		await checkDump(part).catch(() => {
+			throw new Error("that file is not a PostgreSQL dump made by Ledger's backups (a .dump file), or it is damaged");
+		});
+	} catch (e) {
+		await fsp.rm(dir, { recursive: true, force: true });
+		throw e;
+	}
+	await fsp.rename(part, path.join(dir, "ledger.dump"));
+	const info = { filename: path.basename(filename).replace(/[^\w .()+-]/g, "_").slice(0, 120) || "ledger.dump", uploaded_at: new Date(now).toISOString() };
+	await writeFileAtomic(path.join(dir, "upload.json"), JSON.stringify(info) + "\n", 0o600);
+	return (await readUpload(orgDir))!;
+}
+
 export const restoreStagingDir = (backupDir: string, name: string) => path.join(backupDir, "restore", name);
 
 export interface RestoreRequest {
@@ -96,7 +160,8 @@ export interface PrepareOptions {
 	databaseUrl: string;
 	csvDir: string;
 	google: GoogleEndpoints;
-	source: "share" | "google";
+	/** "upload": a dump file the admin uploaded (uploadDir), instead of a backup folder at a destination. */
+	source: "share" | "google" | "upload";
 	backup: string;
 	requestedBy: string;
 	now?: () => number;
@@ -131,18 +196,24 @@ export async function prepareRestore(o: PrepareOptions): Promise<RestoreStatus> 
 		if (saved.status.file === o.backup) throw new Error("that is the backup that was just made");
 
 		status.phase = "fetch";
-		status.message = `Current data saved as ${saved.status.file}. Fetching ${o.backup}…`;
+		status.message = `Current data saved as ${saved.status.file}. Fetching ${labelOf(o.backup)}…`;
 		await writeRestoreStatus(backupDir, status);
 		await fsp.rm(path.join(backupDir, "restore"), { recursive: true, force: true });
-		if (o.source === "google") await fetchDriveBackup(config.google, o.google, o.backup, staging);
+		if (o.source === "upload") {
+			await fsp.mkdir(staging, { recursive: true, mode: 0o700 });
+			await fsp.rename(path.join(uploadDir(backupDir), "ledger.dump"), path.join(staging, "ledger.dump")).catch(() => {
+				throw new Error("upload the dump file first");
+			});
+			await fsp.rm(uploadDir(backupDir), { recursive: true, force: true });
+		} else if (o.source === "google") await fetchDriveBackup(config.google, o.google, o.backup, staging);
 		else await fetchShareBackup(config.share, path.join(backupDir, "tmp"), o.backup, staging);
-		if (!(await fsp.lstat(path.join(staging, "ledger.dump")).catch(() => null))?.isFile()) throw new Error(`${o.backup} has no ledger.dump`);
+		if (!(await fsp.lstat(path.join(staging, "ledger.dump")).catch(() => null))?.isFile()) throw new Error(`${labelOf(o.backup)} has no ledger.dump`);
 		await checkDump(path.join(staging, "ledger.dump")).catch(() => {
-			throw new Error(`ledger.dump in ${o.backup} is damaged or not a database dump`);
+			throw new Error(`ledger.dump in ${labelOf(o.backup)} is damaged or not a database dump`);
 		});
 
 		status.phase = "waiting";
-		status.message = `Current data saved as ${saved.status.file}. Ledger will stop for a moment while it switches to ${o.backup}…`;
+		status.message = `Current data saved as ${saved.status.file}. Ledger will stop for a moment while it switches to ${labelOf(o.backup)}…`;
 		await writeRestoreStatus(backupDir, status);
 		const req: RestoreRequest = { db: o.db, backup: o.backup, source: o.source, requested_by: o.requestedBy, started_at: status.started_at! };
 		await writeFileAtomic(reqFile, JSON.stringify(req) + "\n", 0o640);
@@ -322,7 +393,7 @@ export async function performRestore(o: RestoreOptions): Promise<boolean> {
 		phase: "restore",
 		message: "Restoring the books…",
 		backup: String(req.backup),
-		source: req.source === "google" ? "google" : "share",
+		source: req.source === "google" ? "google" : req.source === "upload" ? "upload" : "share",
 		started_at: typeof req.started_at === "string" ? req.started_at : new Date(now()).toISOString(),
 		requested_by: String(req.requested_by ?? "").slice(0, 100),
 	};
@@ -347,7 +418,7 @@ export async function performRestore(o: RestoreOptions): Promise<boolean> {
 	try {
 		await fsp.mkdir(backupDir, { recursive: true, mode: 0o700 }).catch(() => {});
 		await writeRestoreStatus(backupDir, status);
-		if (!isBackupFolder(status.backup)) throw new Error(`${status.backup} is not a backup folder`);
+		if (!restorable(status.backup)) throw new Error(`${status.backup} is not a backup folder`);
 		if (!IDENT.test(db) || db.length > 48) throw new Error(`can't restore into a database named ${db}`);
 		// Only the books of an organization this server has.
 		if (!isMain && (await ops.psql(mainDb, `SELECT 1 FROM organizations WHERE id <> 1 AND status = 'ready' AND db_name = ${ql(db)}`)).trim() !== "1") throw new Error("these books are not an organization on this server");
@@ -404,9 +475,10 @@ export async function performRestore(o: RestoreOptions): Promise<boolean> {
 		retired = true;
 		await ops.psql("postgres", `ALTER DATABASE ${qi(tmp)} RENAME TO ${qi(db)}`);
 		swappedIn = true;
-		// Files modules keep: only what the backup holds.
-		filesSwapped = true;
-		await ops.asDataOwner(
+		// Files modules keep: only what the backup holds. (A dump file on its own carries none: they stay.)
+		const uploaded = status.backup === UPLOAD_NAME;
+		filesSwapped = !uploaded;
+		if (!uploaded) await ops.asDataOwner(
 			`rm -rf -- "$DIR.before-restore"
 			 if [ -e "$DIR" ]; then mv -- "$DIR" "$DIR.before-restore"; fi
 			 if [ -d "$SRC" ] && [ ! -L "$SRC" ]; then mkdir -p -- "$(dirname "$DIR")" && cp -R -P -- "$SRC" "$DIR" && chmod -R u+rwX,g+rX,o-rwx -- "$DIR"; fi`,
@@ -418,10 +490,12 @@ export async function performRestore(o: RestoreOptions): Promise<boolean> {
 		// 3. Done: the previous books go (they are in the backup made just before).
 		stopped = false;
 		await drop(old).catch((e: Error) => log.warn("restore: could not drop the previous database", { db: old, err: e.message }));
-		await ops.asDataOwner(`rm -rf -- "$DIR.before-restore"`, { DIR: filesDir }).catch(() => {});
+		if (filesSwapped) await ops.asDataOwner(`rm -rf -- "$DIR.before-restore"`, { DIR: filesDir }).catch(() => {});
 		await fsp.rm(staging, { recursive: true, force: true });
 		status.state = "ok";
-		status.message = `Restored from ${status.backup}. These books, their module data and the files modules keep are as they were when that backup was made. Settings, users and sign-ins were left as they are.`;
+		status.message = uploaded
+			? "Restored from the uploaded dump file. These books and their module data are as they are in that file. Files modules keep, settings, users and sign-ins were left as they are."
+			: `Restored from ${status.backup}. These books, their module data and the files modules keep are as they were when that backup was made. Settings, users and sign-ins were left as they are.`;
 	} catch (err) {
 		status.state = "error";
 		status.message = `Nothing was changed: ${(err as Error).message}`;

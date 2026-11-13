@@ -785,6 +785,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/backups/restore/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload a piece of a dump file to restore from
+         * @description Send the file in order, in pieces of at most 8 MiB (offset 0 starts over), then call /backups/restore/upload/finish.
+         */
+        post: operations["uploadRestoreDumpPiece"];
+        /** Discard the uploaded dump file */
+        delete: operations["deleteRestoreUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/restore/upload/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check the uploaded dump file and make it ready to restore */
+        post: operations["finishRestoreUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/backups/restore-settings": {
         parameters: {
             query?: never;
@@ -2185,6 +2223,13 @@ export interface components {
         };
         /** @description The current organization's backups (each organization has its own settings, schedule and destinations) */
         BackupInfo: {
+            /** @description A dump file uploaded for a restore, ready to use */
+            upload: {
+                filename: string;
+                size_bytes: number;
+                /** Format: date-time */
+                uploaded_at: string;
+            } | null;
             /** @description Whether this user may choose another folder on the server (server admins only) */
             can_change_folder: boolean;
             /** @description Backups are set up on this server */
@@ -2198,7 +2243,7 @@ export interface components {
                 message: string;
                 backup: string;
                 /** @enum {string} */
-                source: "" | "share" | "google";
+                source: "" | "share" | "google" | "upload";
                 /** Format: date-time */
                 started_at: string | null;
                 /** Format: date-time */
@@ -3707,9 +3752,13 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @enum {string} */
-                    source: "share" | "google";
-                    backup: string;
+                    /**
+                     * @description upload: the dump file uploaded with /backups/restore/upload
+                     * @enum {string}
+                     */
+                    source: "share" | "google" | "upload";
+                    /** @description The backup's folder (not needed for upload) */
+                    backup?: string;
                     confirm: string;
                 };
             };
@@ -3725,6 +3774,87 @@ export interface operations {
                 };
             };
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    uploadRestoreDumpPiece: {
+        parameters: {
+            query: {
+                /** @description Where this piece starts in the file */
+                offset: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Bytes received so far */
+                        size_bytes: number;
+                    };
+                };
+            };
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteRestoreUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Discarded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finishRestoreUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    filename?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Ready (see `upload`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
             422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
