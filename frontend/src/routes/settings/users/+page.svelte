@@ -28,6 +28,12 @@
 		orgs = data.orgs;
 	});
 	let me = $derived(page.data.user?.username);
+	// Admins of the main books manage everyone and every organization; an
+	// organization's admin manages that organization's users only.
+	let serverAdmin = $derived(page.data.user?.server_admin === true);
+	let myOrg = $derived(page.data.user?.organization);
+	let existing = $state('');
+	let existingRole = $state<Role>('viewer');
 	let others = $derived(orgs.filter((o) => o.id !== 1));
 	let error: unknown = $state(null);
 	let notice = $state('');
@@ -72,13 +78,13 @@
 		e.preventDefault();
 		return act(async () => {
 			const organization =
-				mode === 'main'
+				!serverAdmin || mode === 'main'
 					? undefined
 					: mode === 'existing'
 						? { mode, organization_id: orgId ?? 0 }
 						: { mode, name: orgName, kind: orgKind, chart: starter ? currency : null };
 			const u = unwrap(await api().POST('/users', { body: { username: name, password, role, organization } }));
-			const where = mode === 'main' ? 'the main books' : (u.organizations[0]?.name ?? 'their organization');
+			const where = !serverAdmin ? (myOrg?.name ?? 'this organization') : mode === 'main' ? 'the main books' : (u.organizations[0]?.name ?? 'their organization');
 			notice = `Added ${u.username} (${role} in ${where}). They can log in now.${u.organizations[0] ? pendingNote(u.organizations[0]) : ''}`;
 			name = password = orgName = '';
 			await reload();
@@ -95,13 +101,13 @@
 	const setMember = (u: UserListItem, id: number, r: Role) =>
 		act(async () => {
 			unwrap(await api().PUT('/users/{username}/organizations/{orgId}', { params: { path: { username: u.username, orgId: id } }, body: { role: r } }));
-			notice = `${u.username} is ${r} in ${orgs.find((o) => o.id === id)?.name}.`;
+			notice = `${u.username} is ${r} in ${orgs.find((o) => o.id === id)?.name ?? myOrg?.name}.`;
 			await reload();
 		});
 
 	const removeMember = (u: UserListItem, id: number) =>
 		act(async () => {
-			const n = orgs.find((o) => o.id === id)?.name;
+			const n = orgs.find((o) => o.id === id)?.name ?? myOrg?.name;
 			if (!confirm(`Take ${u.username}'s access to ${n} away?`)) return;
 			unwrap(await api().DELETE('/users/{username}/organizations/{orgId}', { params: { path: { username: u.username, orgId: id } } }));
 			notice = `${u.username} no longer has access to ${n}.`;
@@ -134,6 +140,17 @@
 			});
 	}
 
+	const addExisting = (e: SubmitEvent) => {
+		e.preventDefault();
+		return act(async () => {
+			if (!myOrg) return;
+			unwrap(await api().PUT('/users/{username}/organizations/{orgId}', { params: { path: { username: existing.trim(), orgId: myOrg.id } }, body: { role: existingRole } }));
+			notice = `${existing.trim()} is ${existingRole} in ${myOrg.name}.`;
+			existing = '';
+			await reload();
+		});
+	};
+
 	function resetPassword(u: UserListItem) {
 		const pw = prompt(`New password for ${u.username} (at least 4 characters). Their sessions will end.`);
 		if (pw) update(u, { password: pw }, `Password reset for ${u.username}.`);
@@ -146,6 +163,7 @@
 <ErrorNotice {error} />
 {#if notice}<div class="notice ok">{notice}</div>{/if}
 
+{#if serverAdmin}
 <div class="table-wrap">
 	<table>
 		<thead><tr><th>User</th><th>Main books</th><th>Other books</th><th>Last login</th><th>Status</th><th></th></tr></thead>
@@ -278,6 +296,73 @@
 		<button disabled={busy}>Create</button>
 	</form>
 </div>
+
+{:else}
+	<p class="muted">
+		Users of <strong>{myOrg?.name}</strong>. You manage who works in these books and their role here. Other organizations and
+		the main books are managed by admins of the main books.
+	</p>
+	<div class="table-wrap">
+		<table>
+			<thead><tr><th>User</th><th>Role in {myOrg?.name}</th><th>Last login</th><th>Status</th><th></th></tr></thead>
+			<tbody>
+				{#each users as u (u.username)}
+					{@const m = u.organizations[0]}
+					<tr class:inactive={!u.is_active}>
+						<td><strong>{u.username}</strong>{#if u.username === me}<span class="muted small">&nbsp;(you)</span>{/if}</td>
+						<td>
+							{#if m}
+								<select value={m.role} disabled={busy || u.username === me} aria-label="Role of {u.username}" onchange={(e) => setMember(u, m.id, e.currentTarget.value as Role)}>
+									{#each ROLES as r (r.value)}<option value={r.value}>{r.label}</option>{/each}
+								</select>
+							{/if}
+						</td>
+						<td class="small">{fmt(u.last_login_at)}</td>
+						<td>{#if u.is_active}<span class="badge ok">active</span>{:else}<span class="badge warn">disabled</span>{/if}</td>
+						<td class="num actions">
+							{#if u.manageable}
+								<button disabled={busy} onclick={() => resetPassword(u)}>Reset password</button>
+								{#if u.username !== me}
+									<button disabled={busy} onclick={() => update(u, { is_active: !u.is_active }, `${u.username} ${u.is_active ? 'disabled; their sessions ended' : 'enabled'}.`)}>
+										{u.is_active ? 'Disable' : 'Enable'}
+									</button>
+								{/if}
+							{:else}
+								<span class="muted small" title="They also have access to other books, so an admin of the main books resets their password or disables them.">also in other books</span>
+							{/if}
+							{#if u.username !== me && m}<button disabled={busy} onclick={() => removeMember(u, m.id)}>Remove</button>{/if}
+						</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+
+	<form class="card" style="max-width:720px; margin-top:1rem" onsubmit={add}>
+		<h2 style="margin-top:0">Add a user to {myOrg?.name}</h2>
+		<div class="row">
+			<label>Username <input bind:value={name} required maxlength="64" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" /></label>
+			<label>Password <input type="password" bind:value={password} required minlength="4" autocomplete="new-password" /></label>
+			<label>
+				Role
+				<select bind:value={role}>{#each ROLES as r (r.value)}<option value={r.value}>{r.label}</option>{/each}</select>
+			</label>
+			<button class="primary" disabled={busy}>Add user</button>
+		</div>
+		<p class="muted small">A new account with access to these books only.</p>
+	</form>
+	<form class="card" style="max-width:720px" onsubmit={addExisting}>
+		<h2 style="margin-top:0">Add someone who already has an account</h2>
+		<div class="row">
+			<label>Their username <input bind:value={existing} required maxlength="64" autocomplete="off" /></label>
+			<label>
+				Role
+				<select bind:value={existingRole}>{#each ROLES as r (r.value)}<option value={r.value}>{r.label}</option>{/each}</select>
+			</label>
+			<button disabled={busy}>Give access</button>
+		</div>
+	</form>
+{/if}
 
 <div class="card small" style="max-width:720px">
 	{#each ROLES as r (r.value)}<p style="margin:0.3rem 0"><strong>{r.label}</strong>: {r.help}</p>{/each}

@@ -886,11 +886,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** All users (admin) */
+        /** Users (admins of the main books see everyone; an organization's admin sees that organization's members) */
         get: operations["listUsers"];
         put?: never;
         /**
-         * Add a user (admin)
+         * Add a user (an organization's admin can add them to that organization only)
          * @description `organization` chooses their books: the main books (the default; role
          *     is their role there), an existing organization, or a new
          *     organization of their own (business or personal books, optionally
@@ -919,7 +919,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Change a user's role, disable or enable them, or reset their password (admin)
+         * Change a user's role in the main books (main-books admins), disable or enable them, or reset their password
          * @description At least one active admin must remain, and admins can't disable
          *     themselves. Disabling or a new password ends the user's sessions.
          */
@@ -937,10 +937,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Give a user a role in an organization other than the main books (admin) */
+        /** Give a user a role in an organization other than the main books (main-books admins; an organization's admin for their own) */
         put: operations["setMembership"];
         post?: never;
-        /** Take a user's access to an organization away (admin) */
+        /** Take a user's access to an organization away (main-books admins; an organization's admin for their own) */
         delete: operations["removeMembership"];
         options?: never;
         head?: never;
@@ -1382,6 +1382,8 @@ export interface components {
             organizations: components["schemas"]["OrgAccess"][];
         };
         UserListItem: {
+            /** @description Whether the caller may reset this user's password and disable or enable them (an organization's admin may only when the user has access to nothing else) */
+            manageable: boolean;
             username: string;
             /** @description Their role in the main books */
             role: components["schemas"]["MainRole"];

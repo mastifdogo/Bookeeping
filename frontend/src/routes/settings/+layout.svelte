@@ -9,7 +9,7 @@
 	const ALL = [
 		{ href: '/settings/account', label: 'Account', title: '', admin: false },
 		{ href: '/settings/sidebar', label: 'Sidebar', title: '', admin: false },
-		{ href: '/settings/users', label: 'Users', title: '', admin: true },
+		{ href: '/settings/users', label: 'Users', title: '', admin: true, org: true },
 		{ href: '/settings/llm', label: 'LLM API', title: '', admin: true },
 		{ href: '/settings/gmail', label: 'Gmail', title: '', admin: true },
 		{ href: '/settings/backups', label: 'Backups', title: '', admin: true, org: true },
@@ -20,7 +20,7 @@
 	let isAdmin = $derived(data.user?.server_admin === true);
 	// Modules' settings belong to each organization: its admins set them.
 	let orgAdmin = $derived(data.user?.role === 'admin');
-	// So do backups: each organization's admins manage (and restore) their own.
+	// So do backups and users: each organization's admins manage their own.
 	let OWN = $derived(ALL.filter((t) => isAdmin || !t.admin || (orgAdmin && 'org' in t)));
 	// Pages hidden from the sidebar stay reachable here; modules always get a
 	// tab of their own (which shows a hidden module's page too).

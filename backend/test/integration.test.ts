@@ -1710,9 +1710,9 @@ test("organizations keep books apart", async (t) => {
 	assert.equal((await sam("GET", "/journal-entries")).json().data.length, 1);
 	assert.equal((await call("GET", "/journal-entries")).json().data.length, 0);
 
-	// Running the server stays with the main books' admins.
-	expectStatus(await sam("GET", "/users"), 403);
+	// Running the server and managing organizations stay with the main books' admins.
 	expectStatus(await sam("POST", "/organizations", { name: "Mine", kind: "business" }), 403);
+	expectStatus(await sam("PATCH", `/organizations/${samOrg.id}`, { name: "Renamed" }), 403);
 	expectStatus(await sam("GET", "/system/update"), 403);
 
 	// Someone added to an existing organization sees its books.
@@ -1721,6 +1721,32 @@ test("organizations keep books apart", async (t) => {
 	const kim = await loginAs("kim", "kim-password");
 	assert.equal((await kim("GET", "/accounts")).json().data.length, samAccounts.length);
 	expectStatus(await kim("POST", "/accounts", { code: "9", name: "x", type: "asset", currency: "CAD" }), 403);
+
+	// An organization's admin manages that organization's users, and nothing beyond it.
+	r = await sam("GET", "/users");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().data.map((u: any) => [u.username, u.role, u.organizations.map((o: any) => o.role), u.manageable]), [["kim", "none", ["viewer"], true], ["sam", "none", ["admin"], true]], "only its members; nothing about the main books");
+	expectStatus(await kim("GET", "/users"), 403);
+	r = await sam("POST", "/users", { username: "lee", password: "lee-password", role: "bookkeeper" });
+	expectStatus(r, 201);
+	assert.deepEqual(r.json().organizations.map((o: any) => [o.id, o.role]), [[samOrg.id, "bookkeeper"]]);
+	assert.equal((await call("GET", "/users")).json().data.find((u: any) => u.username === "lee").role, "none", "no access to the main books");
+	expectStatus(await sam("POST", "/users", { username: "max", password: "max-password", role: "admin", organization: { mode: "main" } }), 403);
+	expectStatus(await sam("POST", "/users", { username: "max", password: "max-password", role: "admin", organization: { mode: "new", name: "Max Co", kind: "business" } }), 403);
+	expectStatus(await sam("PUT", `/users/kim/organizations/${samOrg.id}`, { role: "bookkeeper" }), 200);
+	expectStatus(await sam("PUT", `/users/kim/organizations/1`, { role: "admin" }), 403);
+	expectStatus(await sam("PUT", `/users/sam/organizations/${samOrg.id}`, { role: "viewer" }), 403);
+	expectStatus(await sam("PATCH", "/users/kim", { role: "admin" }), 403);
+	expectStatus(await sam("PATCH", "/users/lee", { password: "lee-new-password" }), 200);
+	expectStatus(await sam("PATCH", "/users/lee", { is_active: false }), 200);
+	// People outside the organization don't exist for its admin; shared users keep their password.
+	expectStatus(await sam("PATCH", "/users/tester", { password: "taken-over-123" }), 404);
+	expectStatus(await call("PUT", `/users/tester/organizations/${samOrg.id}`, { role: "viewer" }), 200);
+	expectStatus(await sam("PATCH", "/users/tester", { password: "taken-over-123" }), 403);
+	expectStatus(await sam("PATCH", "/users/tester", { is_active: false }), 403);
+	assert.equal((await sam("GET", "/users")).json().data.find((u: any) => u.username === "tester").manageable, false);
+	expectStatus(await sam("DELETE", `/users/lee/organizations/${samOrg.id}`), 200);
+	expectStatus(await sam("DELETE", `/users/sam/organizations/${samOrg.id}`), 403);
 
 	// An admin of the main books can join it too, and switch between books.
 	expectStatus(await call("PUT", `/users/tester/organizations/${samOrg.id}`, { role: "bookkeeper" }), 200);

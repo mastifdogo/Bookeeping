@@ -1273,7 +1273,7 @@ paths:
     get:
       tags: [Users]
       operationId: listUsers
-      summary: All users (admin)
+      summary: Users (admins of the main books see everyone; an organization's admin sees that organization's members)
       responses:
         '200':
           description: OK
@@ -1285,7 +1285,7 @@ paths:
     post:
       tags: [Users]
       operationId: createUser
-      summary: Add a user (admin)
+      summary: Add a user (an organization's admin can add them to that organization only)
       description: |
         `organization` chooses their books: the main books (the default; role
         is their role there), an existing organization, or a new
@@ -1329,7 +1329,7 @@ paths:
     patch:
       tags: [Users]
       operationId: updateUser
-      summary: Change a user's role, disable or enable them, or reset their password (admin)
+      summary: Change a user's role in the main books (main-books admins), disable or enable them, or reset their password
       description: |
         At least one active admin must remain, and admins can't disable
         themselves. Disabling or a new password ends the user's sessions.
@@ -1363,7 +1363,7 @@ paths:
     put:
       tags: [Users]
       operationId: setMembership
-      summary: Give a user a role in an organization other than the main books (admin)
+      summary: Give a user a role in an organization other than the main books (main-books admins; an organization's admin for their own)
       requestBody:
         required: true
         content:
@@ -1386,7 +1386,7 @@ paths:
     delete:
       tags: [Users]
       operationId: removeMembership
-      summary: Take a user's access to an organization away (admin)
+      summary: Take a user's access to an organization away (main-books admins; an organization's admin for their own)
       responses:
         '200':
           description: OK
@@ -2036,8 +2036,9 @@ components:
             organizations: { type: array, items: { $ref: '#/components/schemas/OrgAccess' } }
     UserListItem:
       type: object
-      required: [username, role, is_active, created_at, last_login_at, server_admin, organizations]
+      required: [username, role, is_active, created_at, last_login_at, server_admin, organizations, manageable]
       properties:
+        manageable: { type: boolean, description: Whether the caller may reset this user's password and disable or enable them (an organization's admin may only when the user has access to nothing else) }
         username: { type: string }
         role: { allOf: [{ $ref: '#/components/schemas/MainRole' }], description: Their role in the main books }
         is_active: { type: boolean }

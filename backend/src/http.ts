@@ -151,8 +151,8 @@ type Handler = (c: Ctx) => Promise<void>;
 interface Route {
 	method: string;
 	segments: string[];
-	/** The least role allowed in the current organization, "server" for server admins only; null for routes that need no login. */
-	role: Role | "server" | null;
+	/** The least role allowed in the current organization; "server" for admins of the main books only; "users" for them or the current organization's admins; null for routes that need no login. */
+	role: Role | "server" | "users" | null;
 	handler: Handler;
 }
 
@@ -467,21 +467,58 @@ function publicOrg(o: Organization) {
 	return { id: o.id, name: o.name, kind: o.kind, status: o.status, message: o.message, created_at: o.created_at };
 }
 
+/**
+ * Who may manage users: admins of the main books manage everyone and every
+ * organization. An admin of another organization manages only that
+ * organization's users: they see its members, add people to it, set their
+ * role in it and take their access to it away. They can reset a password or
+ * disable an account only when that user has access to nothing else.
+ */
+function userScope(c: Ctx): { all: true } | { all: false; orgId: number } {
+	if (c.user!.server_admin) return { all: true };
+	return { all: false, orgId: currentOrg().id };
+}
+
+const forbidden = (msg: string) => new HttpError(403, msg, "forbidden");
+
 async function userItems(c: Ctx, users: UserRecord[]) {
 	const memberships = await allMemberships(c.app);
-	return users.map((u) => ({
-		username: u.username,
-		role: u.role,
-		is_active: u.is_active,
-		created_at: u.created_at,
-		last_login_at: u.last_login_at,
-		server_admin: u.role === "admin",
-		organizations: (memberships.get(u.id) ?? []).map(publicAccess),
-	}));
+	const scope = userScope(c);
+	return users.map((u) => {
+		const orgs = memberships.get(u.id) ?? [];
+		// An organization's admin sees only what concerns their organization.
+		const only = !scope.all && u.role === "none" && orgs.length === 1 && orgs[0]!.id === scope.orgId;
+		return {
+			username: u.username,
+			role: scope.all ? u.role : ("none" as MainRole),
+			is_active: u.is_active,
+			created_at: u.created_at,
+			last_login_at: u.last_login_at,
+			server_admin: scope.all ? u.role === "admin" : false,
+			organizations: (scope.all ? orgs : orgs.filter((o) => o.id === scope.orgId)).map(publicAccess),
+			/** Whether the caller may reset this user's password and disable or enable them. */
+			manageable: scope.all || only,
+		};
+	});
+}
+
+/** For an organization's admin: the user, if they belong to that organization. */
+async function scopedUser(c: Ctx, scope: { orgId: number }, username: string): Promise<{ user: UserRecord; only: boolean }> {
+	const user = await findUser(c.app, username);
+	const orgs = (await allMemberships(c.app)).get(user.id) ?? [];
+	// Someone outside the organization looks the same as someone who doesn't exist.
+	if (!orgs.some((o) => o.id === scope.orgId)) throw new NotFoundError();
+	return { user, only: user.role === "none" && orgs.length === 1 };
 }
 
 async function handleListUsers(c: Ctx): Promise<void> {
-	writeJSON(c.res, 200, { data: await userItems(c, await listUsers(c.app)) });
+	const scope = userScope(c);
+	let users = await listUsers(c.app);
+	if (!scope.all) {
+		const memberships = await allMemberships(c.app);
+		users = users.filter((u) => (memberships.get(u.id) ?? []).some((o) => o.id === scope.orgId));
+	}
+	writeJSON(c.res, 200, { data: await userItems(c, users) });
 }
 
 interface OrgChoice {
@@ -531,7 +568,17 @@ function decodeUserBody(v: unknown, create: boolean): { username?: string; passw
  */
 async function handleCreateUser(c: Ctx): Promise<void> {
 	const b = await decodeBody(c, true, (v) => decodeUserBody(v, true));
-	const choice = b.organization ?? { mode: "main" };
+	const scope = userScope(c);
+	// An organization's admin adds people to that organization, nowhere else.
+	if (!scope.all) {
+		if (b.organization && !(b.organization.mode === "existing" && b.organization.organization_id === scope.orgId)) throw forbidden("you can add users to your own organization only");
+		if (b.role === "none") {
+			const v = new ValidationError();
+			v.add("role", "must be admin, bookkeeper or viewer");
+			v.throwIfAny();
+		}
+	}
+	const choice: OrgChoice = scope.all ? (b.organization ?? { mode: "main" }) : { mode: "existing", organization_id: scope.orgId };
 	if (choice.mode === "new") {
 		const v = new ValidationError();
 		validateOrgCreate(v, "organization.", { name: choice.name!, kind: choice.kind!, chart: null });
@@ -582,6 +629,14 @@ async function handleUpdateUser(c: Ctx): Promise<void> {
 		validatePassword(v, "password", b.password);
 		v.throwIfAny();
 	}
+	const scope = userScope(c);
+	if (!scope.all) {
+		if (b.role !== undefined) throw forbidden("only an admin of the main books can change access to the main books");
+		const target = await scopedUser(c, scope, name2);
+		if (!target.only && target.user.username !== c.user!.username) {
+			throw forbidden("this user also has access to other books, so only an admin of the main books can reset their password or disable them");
+		}
+	}
 	const user = await updateUserAccess(c.app, name2, { role: b.role, is_active: b.is_active });
 	// A new password ends that user's sessions (the admin resets it for them).
 	if (b.password !== undefined) await setPassword(c.app, name2, b.password);
@@ -607,13 +662,24 @@ async function handlePutMembership(c: Ctx): Promise<void> {
 		return o as { role: Role };
 	});
 	const user = await findUser(c.app, usernameParam(c));
+	const scope = userScope(c);
+	if (!scope.all) {
+		if (orgIdParam(c) !== scope.orgId) throw forbidden("you can manage access to your own organization only");
+		if (user.id === c.user!.id) throw forbidden("you can't change your own role; ask another admin");
+	}
 	await setMembership(c.app, user.id, orgIdParam(c), b.role);
 	writeJSON(c.res, 200, (await userItems(c, [user]))[0]);
 }
 
 async function handleDeleteMembership(c: Ctx): Promise<void> {
 	const user = await findUser(c.app, usernameParam(c));
+	const scope = userScope(c);
+	if (!scope.all) {
+		if (orgIdParam(c) !== scope.orgId) throw forbidden("you can manage access to your own organization only");
+		if (user.id === c.user!.id) throw forbidden("you can't remove yourself; ask another admin");
+	}
 	await removeMembership(c.app, user.id, orgIdParam(c));
+	// (For an organization's admin the user is now outside their organization: nothing more to show.)
 	writeJSON(c.res, 200, (await userItems(c, [user]))[0]);
 }
 
@@ -1695,7 +1761,7 @@ async function serveModuleUI(c: Ctx, pathname: string): Promise<void> {
  * auth: false for public routes; true for "any logged-in user may read, a
  * bookkeeper may change"; or the least role allowed.
  */
-function route(method: string, pattern: string, auth: boolean | Role | "server", handler: Handler): Route {
+function route(method: string, pattern: string, auth: boolean | Role | "server" | "users", handler: Handler): Route {
 	const role = auth === false ? null : auth === true ? (method === "GET" ? "viewer" : "bookkeeper") : auth;
 	return { method, segments: pattern.split("/").slice(1), role, handler };
 }
@@ -1713,11 +1779,11 @@ const ROUTES: Route[] = [
 	route("PATCH", "/organizations/:orgId", "server", handleUpdateOrg),
 	route("POST", "/auth/password", "viewer", handleChangePassword),
 	route("GET", "/settings/sidebar", true, handleGetSidebar),
-	route("GET", "/users", "server", handleListUsers),
-	route("POST", "/users", "server", handleCreateUser),
-	route("PATCH", "/users/:username", "server", handleUpdateUser),
-	route("PUT", "/users/:username/organizations/:orgId", "server", handlePutMembership),
-	route("DELETE", "/users/:username/organizations/:orgId", "server", handleDeleteMembership),
+	route("GET", "/users", "users", handleListUsers),
+	route("POST", "/users", "users", handleCreateUser),
+	route("PATCH", "/users/:username", "users", handleUpdateUser),
+	route("PUT", "/users/:username/organizations/:orgId", "users", handlePutMembership),
+	route("DELETE", "/users/:username/organizations/:orgId", "users", handleDeleteMembership),
 	route("PUT", "/settings/sidebar", "viewer", handlePutSidebar),
 	route("GET", "/currencies", true, handleListCurrencies),
 
@@ -1831,6 +1897,9 @@ async function serveAPI(c: Ctx, rel: string): Promise<void> {
 			c.user = await sessionUser(c.app, c.token);
 			if (r.role === "server") {
 				if (!c.user.server_admin) throw new HttpError(403, "this needs an admin of the main books", "forbidden");
+			} else if (r.role === "users") {
+				// Managing users: admins of the main books (everyone), or an organization's admin (its own users).
+				if (!c.user.server_admin && c.user.role !== "admin") throw new HttpError(403, "this needs an admin of this organization or of the main books", "forbidden");
 			} else if (!roleAtLeast(c.user.role, r.role)) throw new HttpError(403, `this needs the ${r.role} role (you are ${c.user.role})`, "forbidden");
 			await inUserOrg(c, () => r.handler(c));
 			return;
