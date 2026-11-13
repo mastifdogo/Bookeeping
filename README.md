@@ -111,8 +111,8 @@ Upload it under **CT Templates**, create an unprivileged container with
 nesting enabled, add the CSV bind mount
 (`pct set <ctid> -mp0 /mnt/pve/truenas/ledger,mp=/app/csv_data`) and start it.
 On first boot each container creates its own database, database password and
-`admin` login. Read the password with
-`pct exec <ctid> -- cat /root/ledger-admin-password`. Details are in
+`admin` login. Log in with the password `1234`; Ledger then asks you to
+choose your own password or 4-digit passcode. Details are in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#alternative-a-ready-made-lxc-template).
 
 ### On any Debian/Ubuntu host or container

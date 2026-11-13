@@ -1448,6 +1448,8 @@ export interface components {
             last_login_at: string | null;
             /** @description An admin of the main books: manages users, organizations, modules, updates, backups and integrations */
             server_admin: boolean;
+            /** @description They must choose a new password (POST /auth/password, current_password not needed) before any other request is accepted; others answer 403 password_change_required */
+            must_change_password: boolean;
         };
         CurrentUser: components["schemas"]["User"] & {
             organization: {

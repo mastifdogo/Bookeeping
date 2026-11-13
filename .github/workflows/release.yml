@@ -153,8 +153,8 @@ jobs:
 
           Then create an unprivileged container from it (enable **nesting**), bind-mount your
           CSV directory (\`pct set <ctid> -mp0 /mnt/pve/truenas/ledger,mp=/app/csv_data\`),
-          start it, and read the admin password with
-          \`pct exec <ctid> -- cat /root/ledger-admin-password\`.
+          start it, and log in as \`admin\` with the password \`1234\`; Ledger then asks
+          you to choose your own password or 4-digit passcode.
           Full guide: [docs/DEPLOYMENT.md]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$VERSION/docs/DEPLOYMENT.md#alternative-a-ready-made-lxc-template).
 
           ## Release tarball (one-command deploy or upgrade)

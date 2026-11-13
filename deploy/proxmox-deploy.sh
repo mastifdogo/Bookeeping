@@ -90,7 +90,8 @@ Ledger:
   --port N               HTTP port (default: $PORT)
   --admin-user NAME      first login user (default: $ADMIN_USER)
   --admin-password-file F
-                         read the admin password from file F (default: generate one)
+                         read the admin password from file F (default: 1234, to be
+                         replaced at the first login)
   --release FILE         release tarball (default: the release this script is in)
 
 General:
@@ -313,7 +314,8 @@ fi
 ct_exists && die "container $CTID already exists (use --upgrade, or pick another --ctid)"
 
 if [ -z "$ADMIN_PASSWORD" ]; then
-	ADMIN_PASSWORD=$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
+	# The first password; Ledger makes the admin choose their own at the first login.
+	ADMIN_PASSWORD=1234
 	generated_password=1
 fi
 
@@ -423,7 +425,9 @@ log "creating admin user '$ADMIN_USER'"
 pw_file="$tmp_dir/pw"
 (umask 077 && printf '%s\n' "$ADMIN_PASSWORD" >"$pw_file")
 run pct push "$CTID" "$pw_file" /root/.ledger-admin-pw --perms 0600
-ct_sh "ledger-user add '$ADMIN_USER' --password-stdin </root/.ledger-admin-pw; rc=\$?; rm -f /root/.ledger-admin-pw; exit \$rc"
+must_change=""
+[ -n "${generated_password:-}" ] && must_change="--must-change"
+ct_sh "ledger-user add '$ADMIN_USER' --password-stdin $must_change </root/.ledger-admin-pw; rc=\$?; rm -f /root/.ledger-admin-pw; exit \$rc"
 
 log "starting Ledger and nightly backups"
 ct systemctl enable --now ledger ledger-backup.timer ledger-update.timer ledger-update.path
@@ -444,7 +448,7 @@ $(printf '\033[1;32m')Ledger is running.$(printf '\033[0m')
   Username:   $ADMIN_USER
 EOF
 if [ -n "${generated_password:-}" ]; then
-	echo "  Password:   $ADMIN_PASSWORD   (generated; shown only once — change it under Settings)"
+	echo "  Password:   $ADMIN_PASSWORD   (the first time; you then choose your own password or 4-digit passcode)"
 else
 	echo "  Password:   (the one from --admin-password-file)"
 fi

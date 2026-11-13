@@ -2140,7 +2140,7 @@ components:
 
     User:
       type: object
-      required: [username, role, is_active, created_at, last_login_at, server_admin]
+      required: [username, role, is_active, created_at, last_login_at, server_admin, must_change_password]
       properties:
         username: { type: string, example: alice }
         role: { allOf: [{ $ref: '#/components/schemas/Role' }], description: Their role in the organization this session works in }
@@ -2148,6 +2148,7 @@ components:
         created_at: { type: string, format: date-time }
         last_login_at: { type: string, format: date-time, nullable: true }
         server_admin: { type: boolean, description: 'An admin of the main books: manages users, organizations, modules, updates, backups and integrations' }
+        must_change_password: { type: boolean, description: 'They must choose a new password (POST /auth/password, current_password not needed) before any other request is accepted; others answer 403 password_change_required' }
     CurrentUser:
       allOf:
         - { $ref: '#/components/schemas/User' }
