@@ -107,8 +107,9 @@ which:
 - creates its own PostgreSQL cluster (tuned for a small container)
 - creates the `ledger_owner` / `ledger_app` roles with a random password,
   written to `/etc/ledger/ledger.env`
-- creates an `admin` login with a random password in
-  `/root/ledger-admin-password` (root only)
+- creates an `admin` login whose first password is `1234`; at the first
+  login Ledger asks for a new password (4 or more characters, so a 4-digit
+  passcode works) and nothing else can be done until one is chosen
 - checks that `/app/csv_data` is writable, then starts Ledger
 
 Using it:
@@ -126,18 +127,16 @@ Using it:
    chown 100990:100990 /mnt/pve/truenas/ledger   # or TrueNAS NFS "Mapall"; see step 3 below
    ```
 
-4. **Start** the container and read the admin password:
-
-   ```sh
-   pct start <ctid>
-   pct exec <ctid> -- cat /root/ledger-admin-password
-   ```
+4. **Start** the container (`pct start <ctid>`) and log in as `admin` with
+   the password `1234`. Ledger then asks you to choose your own password or
+   4-digit passcode. Do this straight away: until you have, anyone who can
+   reach the server can log in with `1234`.
 
    (Or log in on the container's Console; the login message shows where
    everything is.) First-boot progress: `pct exec <ctid> -- journalctl -u ledger-firstboot`.
 
-5. Browse to `http://<container-ip>:8080/`, log in as `admin` and change the
-   password under **Settings**.
+5. Browse to `http://<container-ip>:8080/`, log in as `admin` / `1234` and
+   choose your password when asked.
 
 To upgrade a container created from a template, use
 `proxmox-deploy.sh --upgrade --ctid <ctid> --release <new tarball>` or

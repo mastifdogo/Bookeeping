@@ -9,21 +9,23 @@ import { createUser, listUsers, normalizeUsername, setPassword, setUserActive, u
 import { ROLES, type Role } from "./types.ts";
 
 export const USER_USAGE = `usage:
-  ledger user add <name> [--role admin|bookkeeper|viewer] [--password-stdin]
+  ledger user add <name> [--role admin|bookkeeper|viewer] [--password-stdin] [--must-change]
   ledger user role <name> admin|bookkeeper|viewer
-  ledger user passwd <name> [--password-stdin]
+  ledger user passwd <name> [--password-stdin] [--must-change]
+                           (--must-change: they choose a new password at their next login)
   ledger user disable <name>
   ledger user enable <name>
   ledger user list`;
 
 class UsageError extends Error {}
 
-function parseArgs(args: string[]): { cmd: string; name: string; fromStdin: boolean; role: string } {
+function parseArgs(args: string[]): { cmd: string; name: string; fromStdin: boolean; role: string; mustChange: boolean } {
 	if (args.length === 0) throw new UsageError(USER_USAGE);
 	const [cmd, ...rest] = args as [string, ...string[]];
 	let name = "";
 	let role = "";
 	let fromStdin = false;
+	let mustChange = false;
 	let flagsDone = false;
 	for (let i = 0; i < rest.length; i++) {
 		const a = rest[i]!;
@@ -31,6 +33,10 @@ function parseArgs(args: string[]): { cmd: string; name: string; fromStdin: bool
 		if (!flagsDone && roleFlag) {
 			role = roleFlag[1] ?? rest[++i] ?? "";
 			if (role === "") throw new UsageError(USER_USAGE);
+			continue;
+		}
+		if (!flagsDone && /^--?must-change$/.test(a)) {
+			mustChange = true;
 			continue;
 		}
 		const flag = /^--?password-stdin(?:=(.*))?$/.exec(a);
@@ -54,7 +60,7 @@ function parseArgs(args: string[]): { cmd: string; name: string; fromStdin: bool
 	if ((cmd === "list") !== (name === "")) throw new UsageError(USER_USAGE);
 	if (cmd === "role" && role === "") throw new UsageError(USER_USAGE);
 	if (role !== "" && cmd !== "add" && cmd !== "role") throw new UsageError(USER_USAGE);
-	return { cmd, name, fromStdin, role };
+	return { cmd, name, fromStdin, role, mustChange };
 }
 
 /** Reads one line from stdin (for --password-stdin or a pipe). */
@@ -129,7 +135,7 @@ function printTable(rows: string[][]): void {
 
 /** Implements `ledger user ...`; returns the process exit code. */
 export async function runUserCommand(args: string[]): Promise<void> {
-	const { cmd, name, fromStdin, role } = parseArgs(args);
+	const { cmd, name, fromStdin, role, mustChange } = parseArgs(args);
 	if (!["add", "role", "passwd", "disable", "enable", "list"].includes(cmd)) throw new UsageError(USER_USAGE);
 	if (role !== "" && !(ROLES as readonly string[]).includes(role)) throw new Error("role must be admin, bookkeeper or viewer");
 
@@ -140,8 +146,8 @@ export async function runUserCommand(args: string[]): Promise<void> {
 		switch (cmd) {
 			case "add": {
 				const pw = await readPassword(fromStdin);
-				const u = await createUser(app, name, pw, (role || "admin") as Role).catch((e) => Promise.reject(cliError(e)));
-				console.log(`created user ${u.username} (${u.role})`);
+				const u = await createUser(app, name, pw, (role || "admin") as Role, { mustChangePassword: mustChange }).catch((e) => Promise.reject(cliError(e)));
+				console.log(`created user ${u.username} (${u.role})${mustChange ? "; they choose a new password at first login" : ""}`);
 				break;
 			}
 			case "role": {
@@ -151,7 +157,7 @@ export async function runUserCommand(args: string[]): Promise<void> {
 			}
 			case "passwd": {
 				const pw = await readPassword(fromStdin);
-				await setPassword(app, name, pw).catch((e) => Promise.reject(cliError(e)));
+				await setPassword(app, name, pw, mustChange).catch((e) => Promise.reject(cliError(e)));
 				console.log(`password updated for ${normalizeUsername(name)}; their sessions were ended`);
 				break;
 			}

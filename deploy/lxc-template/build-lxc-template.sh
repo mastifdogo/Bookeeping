@@ -238,8 +238,7 @@ Next steps:
   3. On the Proxmox host, bind-mount the CSV directory (before the first start):
        pct set <ctid> -mp0 /mnt/pve/truenas/ledger,mp=/app/csv_data
        chown 100990:100990 /mnt/pve/truenas/ledger
-  4. Start it. On first boot it creates the database and an 'admin' user;
-     the password is in /root/ledger-admin-password:
-       pct exec <ctid> -- cat /root/ledger-admin-password
+  4. Start it. On first boot it creates the database and an 'admin' user
+     with the password 1234; at the first login you choose your own.
   5. Browse to http://<container-ip>:8080/
 EOF

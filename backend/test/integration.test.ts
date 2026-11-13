@@ -2962,3 +2962,38 @@ test("reconciliations can be listed by account and by the year their statement e
 	assert.deepEqual(await list("?year=2026&account_code=1050"), ["1050 2026-01-31"]);
 	expectStatus(await call("GET", "/reconciliations?year=soon"), 422);
 });
+
+test("a first login that must choose a new password: nothing else works until it has", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, request, call } = ta;
+	await createUser(app, "admin", "1234", "admin", { mustChangePassword: true });
+	let r = await request("POST", "/api/v1/auth/login", { body: { username: "admin", password: "1234" } });
+	expectStatus(r, 200);
+	const cookie = `${SESSION_COOKIE}=${sessionFrom(r).value}`;
+	const as = (method: string, p: string, body?: unknown) => request(method, "/api/v1" + p, { body, cookie });
+	r = await as("GET", "/auth/me");
+	expectStatus(r, 200);
+	assert.equal(r.json().must_change_password, true);
+	// Everything else is refused, modules included.
+	for (const [m, p] of [["GET", "/accounts"], ["POST", "/accounts"], ["GET", "/users"], ["GET", "/backups"], ["GET", "/modules"], ["GET", "/m/anything/x"]] as const) {
+		r = await as(m, p, m === "POST" ? { code: "1000", name: "Bank", type: "asset", currency: "CAD" } : undefined);
+		expectStatus(r, 403);
+		assert.equal(r.json().error.code, "password_change_required");
+	}
+	// The new one: at least 4 characters, and not the starting one. The old one isn't asked for again.
+	expectStatus(await as("POST", "/auth/password", { current_password: "", new_password: "123" }), 422);
+	r = await as("POST", "/auth/password", { current_password: "", new_password: "1234" });
+	expectStatus(r, 422);
+	assert.match(JSON.stringify(r.json()), /must be different from the one you logged in with/);
+	expectStatus(await as("POST", "/auth/password", { current_password: "", new_password: "4821" }), 204);
+	r = await as("GET", "/auth/me");
+	assert.equal(r.json().must_change_password, false);
+	expectStatus(await as("GET", "/accounts"), 200);
+	// From now on a change needs the current password, as for everyone.
+	expectStatus(await as("POST", "/auth/password", { current_password: "", new_password: "9999" }), 422);
+	expectStatus(await as("POST", "/auth/password", { current_password: "4821", new_password: "9999" }), 204);
+	expectStatus(await request("POST", "/api/v1/auth/login", { body: { username: "admin", password: "1234" } }), 401);
+	// Other users are not affected.
+	assert.equal((await call("GET", "/auth/me")).json().must_change_password, false);
+});

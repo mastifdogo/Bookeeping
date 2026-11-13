@@ -6,13 +6,15 @@
 #   - a fresh PostgreSQL cluster
 #   - the ledger_owner/ledger_app roles, with a random app password written to
 #     /etc/ledger/ledger.env
-#   - an `admin` login with a random password in /root/ledger-admin-password
+#   - an `admin` login with the password 1234, which must be replaced at the
+#     first login
 # Safe to re-run: it stops at once if /var/lib/ledger/provisioned exists.
 set -eu
 
 STATE=/var/lib/ledger/provisioned
 ADMIN_USER="${LEDGER_ADMIN_USER:-admin}"
 PW_FILE=/root/ledger-admin-password
+FIRST_PASSWORD=1234
 CSV_DIR=/app/csv_data
 
 log() { echo "ledger-firstboot: $*"; }
@@ -52,9 +54,10 @@ if ledger-user list | awk 'NR > 1 { print $1 }' | grep -qx "$ADMIN_USER"; then
 	log "user $ADMIN_USER already exists"
 else
 	log "creating login user $ADMIN_USER"
-	pw=$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')
-	(umask 077 && printf '%s\n' "$pw" >"$PW_FILE")
-	ledger-user add "$ADMIN_USER" --password-stdin <"$PW_FILE"
+	# The first password is 1234; Ledger makes them choose their own at the
+	# first login, before anything else can be done.
+	(umask 077 && printf '%s\n' "$FIRST_PASSWORD" >"$PW_FILE")
+	ledger-user add "$ADMIN_USER" --password-stdin --must-change <"$PW_FILE"
 fi
 
 if ! runuser -u ledger -- sh -c "mkdir -p -m 0750 $CSV_DIR/backups && touch $CSV_DIR/.write-test && rm $CSV_DIR/.write-test" 2>/dev/null; then
@@ -67,7 +70,8 @@ cat >/etc/motd <<MOTD
   Ledger double-entry accounting
   ------------------------------
   Web UI:     http://<this container's IP>:8080/   (hostname -I)
-  Login:      $ADMIN_USER / password in $PW_FILE (change it under Settings)
+  Login:      $ADMIN_USER / $FIRST_PASSWORD the first time; you then choose your own
+              password or 4-digit passcode
   Users:      ledger-user add|passwd|disable|enable|list
   Logs:       journalctl -u ledger -f
   CSV files:  $CSV_DIR   (bind-mount your TrueNAS share here)
@@ -76,4 +80,4 @@ MOTD
 
 mkdir -p "$(dirname "$STATE")"
 date -u +%Y-%m-%dT%H:%M:%SZ >"$STATE"
-log "done: log in as '$ADMIN_USER' with the password in $PW_FILE"
+log "done: log in as '$ADMIN_USER' with the password $FIRST_PASSWORD; a new one is chosen at the first login"

@@ -224,11 +224,13 @@ export interface User {
 	main_role: MainRole;
 	/** Admins of the main books run the server: users, modules, updates, backups, integrations. */
 	server_admin: boolean;
+	/** They must choose a new password before anything else (a new server's first login). */
+	must_change_password: boolean;
 	/** The organization this session works in. */
 	org: { id: number; name: string; kind: "business" | "personal"; db_name: string };
 }
 
 /** The API shape of a user (no id). */
 export function publicUser(u: User) {
-	return { username: u.username, role: u.role, is_active: u.is_active, created_at: u.created_at, last_login_at: u.last_login_at, server_admin: u.server_admin };
+	return { username: u.username, role: u.role, is_active: u.is_active, created_at: u.created_at, last_login_at: u.last_login_at, server_admin: u.server_admin, must_change_password: u.must_change_password };
 }

@@ -20,6 +20,13 @@ export const load: LayoutLoad = async ({ fetch, url, depends }) => {
 		}
 		redirect(307, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
 	}
+	// A new server's first login: nothing else until they have chosen a password.
+	const onSetPassword = url.pathname === '/set-password';
+	if (user?.must_change_password) {
+		if (!onSetPassword) redirect(307, `/set-password?next=${encodeURIComponent(onLogin ? (url.searchParams.get('next') ?? '/') : url.pathname + url.search)}`);
+		return { user, modules: [], sidebar: [] };
+	}
+	if (user && onSetPassword) redirect(307, safeNext(url.searchParams.get('next')));
 	if (user && onLogin) redirect(307, safeNext(url.searchParams.get('next')));
 	// Sidebar entries for installed modules and the user's sidebar
 	// preferences (defaults if either request fails).

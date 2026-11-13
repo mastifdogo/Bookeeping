@@ -195,13 +195,13 @@
 	<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path {d} /></svg>
 {/snippet}
 
-{#if data.user}<NewAccountDialog />{/if}
+{#if data.user && !data.user.must_change_password}<NewAccountDialog />{/if}
 
 {#if embedded}
 	<main class="embedded">
 		{@render children()}
 	</main>
-{:else if data.user}
+{:else if data.user && !data.user.must_change_password}
 	<div class="shell" class:collapsed class:menu-open={menuOpen} class:split={showPanes}>
 		<aside>
 			<nav aria-label="Main">

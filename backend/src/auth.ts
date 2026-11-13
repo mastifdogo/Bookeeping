@@ -83,6 +83,7 @@ interface SessionRow extends UserRow {
 	org_db: string;
 	org_status: string;
 	org_role: Role | null;
+	must_change_password: boolean;
 }
 
 function toUser(r: SessionRow): User {
@@ -95,13 +96,14 @@ function toUser(r: SessionRow): User {
 		last_login_at: r.last_login_at,
 		main_role: r.role,
 		server_admin: r.role === "admin",
+		must_change_password: r.must_change_password === true,
 		org: { id: Number(r.org_id), name: r.org_name, kind: r.org_kind, db_name: r.org_db },
 	};
 }
 
 /** The session's user with their role in the session's organization (null role: no access to it). */
 const SESSION_SELECT = `
-	SELECT u.id, u.username, u.role, u.is_active, u.created_at, u.last_login_at, s.last_seen_at,
+	SELECT u.id, u.username, u.role, u.is_active, u.created_at, u.last_login_at, u.must_change_password, s.last_seen_at,
 	       o.id AS org_id, o.name AS org_name, o.kind AS org_kind, o.db_name AS org_db, o.status AS org_status,
 	       m.role AS org_role
 	  FROM sessions s
@@ -119,7 +121,7 @@ function hasAccess(r: SessionRow): boolean {
 // ---------------------------------------------------------------------------
 
 /** Creates a user. The CLI makes admins by default; the app asks for a role. */
-export async function createUser(app: App, username: string, password: string, role: MainRole = "admin"): Promise<UserRecord> {
+export async function createUser(app: App, username: string, password: string, role: MainRole = "admin", opts: { mustChangePassword?: boolean } = {}): Promise<UserRecord> {
 	username = normalizeUsername(username);
 	const v = new ValidationError();
 	if (!USERNAME_RE.test(username)) v.add("username", "must be 1-64 characters: lowercase letters, digits, '.', '_' or '-'");
@@ -129,8 +131,8 @@ export async function createUser(app: App, username: string, password: string, r
 	const hash = await hashPassword(password);
 	const row = await queryRow<UserRow>(
 		app.main,
-		`INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING ${USER_COLUMNS}`,
-		[username, hash, role],
+		`INSERT INTO users (username, password_hash, role, must_change_password) VALUES ($1, $2, $3, $4) RETURNING ${USER_COLUMNS}`,
+		[username, hash, role, opts.mustChangePassword === true],
 	);
 	return toRecord(row!);
 }
@@ -163,11 +165,11 @@ export async function updateUserAccess(app: App, username: string, change: { rol
 }
 
 /** Replaces a user's password and ends all of their sessions. */
-export async function setPassword(app: App, username: string, password: string): Promise<void> {
+export async function setPassword(app: App, username: string, password: string, mustChange = false): Promise<void> {
 	const v = new ValidationError();
 	validatePassword(v, "password", password);
 	v.throwIfAny();
-	await updateUser(app, username, `password_hash = $2`, await hashPassword(password));
+	await updateUser(app, username, `password_hash = $2, must_change_password = ${mustChange ? "TRUE" : "FALSE"}`, await hashPassword(password));
 }
 
 /** Enables or disables a user; disabling ends their sessions. */
@@ -274,12 +276,14 @@ export async function changePassword(app: App, user: User, keepToken: string, in
 	const row = await queryRow<{ password_hash: string }>(app.main, `SELECT password_hash FROM users WHERE id = $1`, [user.id]);
 	if (!row) throw new Error("change password: user not found");
 	const v = new ValidationError();
-	if (!(await passwordMatches(row.password_hash, input.current_password))) v.add("current_password", "is incorrect");
+	// Someone who must choose a new password has just logged in with the old one: it isn't asked again.
+	if (!user.must_change_password && !(await passwordMatches(row.password_hash, input.current_password))) v.add("current_password", "is incorrect");
 	validatePassword(v, "new_password", input.new_password);
+	if (user.must_change_password && v.details.length === 0 && (await passwordMatches(row.password_hash, input.new_password))) v.add("new_password", "must be different from the one you logged in with");
 	v.throwIfAny();
 	const newHash = await hashPassword(input.new_password);
 	await withTx(app.main, {}, async (tx) => {
-		await tx.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [user.id, newHash]);
+		await tx.query(`UPDATE users SET password_hash = $2, must_change_password = FALSE WHERE id = $1`, [user.id, newHash]);
 		await tx.query(`DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2`, [user.id, hashToken(keepToken)]);
 	});
 }

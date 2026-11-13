@@ -435,6 +435,18 @@ async function handleLogout(c: Ctx): Promise<void> {
 	c.res.writeHead(204).end();
 }
 
+/**
+ * A user who must choose a new password (a new server's first login) can do
+ * nothing else until they have: only these requests go through.
+ */
+const BEFORE_NEW_PASSWORD = new Set(["GET /auth/me", "POST /auth/password", "POST /auth/logout"]);
+
+function requireOwnPassword(c: Ctx, request = ""): void {
+	if (c.user?.must_change_password && !BEFORE_NEW_PASSWORD.has(request)) {
+		throw new HttpError(403, "choose a new password first", "password_change_required");
+	}
+}
+
 async function handleMe(c: Ctx): Promise<void> {
 	await refreshOrganizations(c.app);
 	const u = c.user!;
@@ -1756,6 +1768,7 @@ async function serveModuleStorage(c: Ctx, id: string, parts: string[]): Promise<
 	if (c.req.method !== "GET" && c.req.method !== "HEAD") return writeError(c.res, 405, "bad_request", "method not allowed");
 	c.token = sessionToken(c.req);
 	c.user = await sessionUser(c.app, c.token);
+	requireOwnPassword(c);
 	if (!/^[a-z][a-z0-9-]{1,31}$/.test(id) || !c.app.modules.modules.has(id)) return writeError(c.res, 404, "not_found", "not found");
 	const file = await inUserOrg(c, () => openStored(c.app, id, parts));
 	if (!file) return writeError(c.res, 404, "not_found", "not found");
@@ -1775,6 +1788,7 @@ async function serveModuleStorage(c: Ctx, id: string, parts: string[]): Promise<
 async function serveModuleAPI(c: Ctx, segments: string[]): Promise<void> {
 	c.token = sessionToken(c.req);
 	c.user = await sessionUser(c.app, c.token);
+	requireOwnPassword(c);
 	return inUserOrg(c, () => serveModuleRoute(c, segments));
 }
 
@@ -1993,6 +2007,7 @@ async function serveAPI(c: Ctx, rel: string): Promise<void> {
 		if (r.role) {
 			c.token = sessionToken(c.req);
 			c.user = await sessionUser(c.app, c.token);
+			requireOwnPassword(c, `${r.method} /${r.segments.join("/")}`);
 			if (r.role === "server") {
 				if (!c.user.server_admin) throw new HttpError(403, "this needs an admin of the main books", "forbidden");
 			} else if (r.role === "users") {
