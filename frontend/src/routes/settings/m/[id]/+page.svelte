@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
+	import ModuleImport from '#lib/components/ModuleImport.svelte';
 	import { api, unwrap, type ModuleSettings } from '#lib/api/client.ts';
 	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/state';
@@ -102,6 +103,8 @@
 	{#if mod.message}<p class="small" class:err={mod.state === 'failed' || mod.state === 'error'}>{mod.message}</p>{/if}
 	{#if !settings}<p class="muted small" style="margin-bottom:0">This module has no settings of its own.</p>{/if}
 </div>
+
+{#if data.importInfo}<ModuleImport moduleId={data.id} moduleName={mod.name} info={data.importInfo} />{/if}
 
 {#if settings && settings.fields.length > 0}
 	<form class="card" style="max-width:640px" onsubmit={save}>

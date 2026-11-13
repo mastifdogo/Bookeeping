@@ -357,6 +357,60 @@ while it is still `new`. Files are at most 25 MB; `meta` at most 16 KB of
 JSON. Sending to a module that isn't running or doesn't accept that kind
 fails with 409. Settings → Modules shows what each module takes.
 
+## Files the module keeps (`ctx.storage`)
+
+Ledger 0.13.2 and later. A module stores its own files (PDFs it generates,
+scans, attachments) with `ctx.storage`. They live on the data share next to
+the CSV files, separately per organization and module, and every backup
+folder carries them under `files/<module>/…`, so prefer this over `bytea`
+columns for documents.
+
+```js
+const f = await ctx.storage.put("invoices/2026/INV-31.pdf", pdfBuffer); // Buffer, Uint8Array or base64, up to 100 MB
+// { path, size, content_type, modified_at, url }
+const file = await ctx.storage.get("invoices/2026/INV-31.pdf"); // plus data (a Buffer); null if missing
+const all = await ctx.storage.list("invoices");                 // files under a folder, sorted by path
+await ctx.storage.remove("invoices/2026/INV-31.pdf");           // false if there was none
+const href = ctx.storage.url("invoices/2026/INV-31.pdf");       // for links, <iframe> and <img> in your page
+```
+
+Paths are folders and a file name (letters, digits, spaces and `. _ - ( )`,
+up to 8 levels). Logged-in users of the organization open `url` in their
+browser: PDFs, images and text show inline, other types download.
+
+## Import from CSV (`ctx.imports`)
+
+Ledger 0.13.2 and later. A module that keeps records people may have
+elsewhere (customers, products, employees) declares what it can import, and
+gets an **Import from CSV** card on its page under Settings → Modules:
+
+```js
+ctx.imports.provide({
+	label: "Customers",
+	description: "Contacts and opening balances.",
+	fields: [
+		{ key: "name", label: "Customer name", required: true },
+		{ key: "email", label: "Email" },
+		{ key: "balance", label: "Opening balance", type: "money" }, // text, number, money, date or boolean
+		{ key: "since", label: "Customer since", type: "date" },
+	],
+	async handler(rows, { dryRun, user }) {
+		const errors = rows.filter((r) => exists(r.name)).map((r) => ({ row: r._row, message: `${r.name} already exists` }));
+		if (dryRun) return { summary: `Would add ${rows.length - errors.length} customers.`, errors };
+		await addAll(rows);
+		return { summary: `Added ${rows.length} customers.` };
+	},
+});
+```
+
+Ledger reads the file whatever its column names and order, matches the
+columns to your fields by name or with the AI (if an LLM API is set up),
+and converts values: money to integer cents, dates to `YYYY-MM-DD`,
+booleans to `true`/`false`, empty cells to `null`. Each row has `_row`, its
+line in the file. The user checks the matching, sees a preview and your
+dry-run `summary` and `errors`, and only then presses Import; errors from the
+dry run block it. Rows Ledger can't read are left out and listed.
+
 ## Organizations (`ctx.orgs`)
 
 Ledger 0.11.0 and later. One server can hold several organizations, each

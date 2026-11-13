@@ -1626,6 +1626,107 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /modules/{moduleId}/import:
+    parameters:
+      - { name: moduleId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Modules]
+      operationId: getModuleImport
+      summary: What the module's "Import from CSV" takes (ctx.imports)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleImportInfo' }
+        '404': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Modules]
+      operationId: uploadModuleImport
+      summary: Upload a CSV for the module; columns are matched to its fields (AI or names)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                use_ai: { type: string, enum: ['true', 'false'] }
+      responses:
+        '201':
+          description: The proposed mapping and converted rows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleImportPlan' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /modules/{moduleId}/import/{uploadId}/preview:
+    parameters:
+      - { name: moduleId, in: path, required: true, schema: { type: string } }
+      - { name: uploadId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Modules]
+      operationId: previewModuleImport
+      summary: The rows with a changed mapping, checked by the module (a dry run)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { mapping: { $ref: '#/components/schemas/ModuleImportMapping' } } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleImportPlan' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /modules/{moduleId}/import/{uploadId}/run:
+    parameters:
+      - { name: moduleId, in: path, required: true, schema: { type: string } }
+      - { name: uploadId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Modules]
+      operationId: runModuleImport
+      summary: Hand the rows to the module (only if its check found no problems)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { mapping: { $ref: '#/components/schemas/ModuleImportMapping' } } }
+      responses:
+        '200':
+          description: Imported
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imported, skipped, summary, errors]
+                properties:
+                  imported: { type: integer }
+                  skipped: { type: integer, description: Rows left out because a value couldn't be read }
+                  summary: { type: string }
+                  errors: { type: array, items: { $ref: '#/components/schemas/ModuleImportProblem' } }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /modules/{moduleId}/storage/{path}:
+    get:
+      tags: [Modules]
+      operationId: getModuleStoredFile
+      summary: A file the module keeps (ctx.storage); PDFs, pictures and text open inline, the rest downloads
+      parameters:
+        - { name: moduleId, in: path, required: true, schema: { type: string } }
+        - { name: path, in: path, required: true, schema: { type: string }, description: 'May contain slashes: folders/file.pdf' }
+      responses:
+        '200': { description: The file, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        '404': { $ref: '#/components/responses/Error' }
+
   /modules/{moduleId}/settings:
     get:
       tags: [Modules]
@@ -2588,6 +2689,66 @@ components:
               label: { type: string }
         min: { type: number, nullable: true }
         max: { type: number, nullable: true }
+    ModuleImportField:
+      type: object
+      required: [key, label, type, required, help]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        type: { type: string, enum: [text, number, money, date, boolean] }
+        required: { type: boolean }
+        help: { type: string }
+    ModuleImportInfo:
+      type: object
+      required: [available, label, description, fields, ai_available]
+      properties:
+        available: { type: boolean }
+        label: { type: string }
+        description: { type: string }
+        fields: { type: array, items: { $ref: '#/components/schemas/ModuleImportField' } }
+        ai_available: { type: boolean }
+    ModuleImportMapping:
+      type: object
+      properties:
+        columns: { type: object, additionalProperties: { type: string, nullable: true } }
+        header_row: { type: integer }
+        date_format: { type: string, enum: [ymd, mdy, dmy] }
+        decimal_comma: { type: boolean }
+    ModuleImportProblem:
+      type: object
+      required: [row, message]
+      properties:
+        row: { type: integer }
+        message: { type: string }
+    ModuleImportPlan:
+      type: object
+      required: [id, filename, detection, mapping, headers, sample, row_count, ready_rows, preview, problems, missing, check]
+      properties:
+        id: { type: string }
+        filename: { type: string }
+        detection: { type: object, required: [source, note], properties: { source: { type: string, enum: [ai, rules] }, note: { type: string } } }
+        mapping:
+          type: object
+          required: [columns, header_row, date_format, decimal_comma]
+          properties:
+            columns: { type: object, additionalProperties: { type: string, nullable: true } }
+            header_row: { type: integer }
+            date_format: { type: string, enum: [ymd, mdy, dmy] }
+            decimal_comma: { type: boolean }
+        headers: { type: array, items: { type: string } }
+        sample: { type: array, items: { type: array, items: { type: string } } }
+        row_count: { type: integer }
+        ready_rows: { type: integer }
+        preview: { type: array, items: { type: object, additionalProperties: true } }
+        problems: { type: array, items: { $ref: '#/components/schemas/ModuleImportProblem' } }
+        missing: { type: array, items: { type: string } }
+        check:
+          type: object
+          nullable: true
+          required: [summary, errors]
+          properties:
+            summary: { type: string }
+            errors: { type: array, items: { $ref: '#/components/schemas/ModuleImportProblem' } }
     ModuleSettings:
       type: object
       required: [fields, values, secrets_set, page]

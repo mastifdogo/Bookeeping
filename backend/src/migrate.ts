@@ -125,7 +125,7 @@ export function getUpload(id: string, user: number): Upload {
 // ---------------------------------------------------------------------------
 
 /** Text from UTF-8, or Windows-1252 (what older Windows software exports). */
-function decodeText(raw: Buffer): string {
+export function decodeText(raw: Buffer): string {
 	const body = stripBOM(raw);
 	const utf8 = decodeUTF8(body);
 	if (utf8 !== null) return utf8;
@@ -189,7 +189,7 @@ export function parseDelimited(text: string, delimiter = detectDelimiter(text)):
 }
 
 /** The likeliest header row among the first ones: the first that is (nearly) as wide as the widest. */
-function guessHeaderRow(rows: string[][]): number {
+export function guessHeaderRow(rows: string[][]): number {
 	const head = rows.slice(0, 15);
 	const filled = head.map((r) => r.filter((c) => c !== "").length);
 	const max = Math.max(0, ...filled);

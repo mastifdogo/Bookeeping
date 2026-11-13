@@ -409,13 +409,75 @@ is a Buffer, Uint8Array or base64 text, at most 25 MB; `meta` ≤ 16 KB as
 JSON. Sending to a module that isn't running or doesn't accept the kind
 answers 409. Files belong to the organization the request works in.
 
+### ctx.storage (Ledger ≥ 0.13.2)
+
+A module's own files: PDFs it generates (invoices), scans, attachments it
+keeps. They live on the data share next to the CSV files, per organization
+and module (not in the database), and every backup folder carries them under
+`files/<module>/…`. Use it instead of `bytea` columns for documents.
+
+```js
+const f = await ctx.storage.put("invoices/2026/INV-31.pdf", pdfBuffer); // Buffer, Uint8Array or base64; ≤ 100 MB; replaces
+// f: { path, size, content_type, modified_at, url }
+const got = await ctx.storage.get("invoices/2026/INV-31.pdf"); // → { ...f, data: Buffer } or null
+await ctx.storage.stat(path);                 // → f or null
+await ctx.storage.list("invoices/2026");      // → [f] under a folder ("" = all), sorted by path
+await ctx.storage.remove(path);               // → boolean; empty folders go too
+ctx.storage.url(path);                        // "/api/v1/modules/<id>/storage/invoices/2026/INV-31.pdf"
+```
+
+Paths are up to 8 `/`-separated parts of letters, digits, spaces and
+`. _ - ( )` (no `..`, no leading dot); anything else answers 422. `url` is
+what the module's page links to or shows in an `<iframe>`/`<img>`: logged-in
+users of that organization can open it (PDFs, images and text inline, other
+types download). Keep a row in your own table with the path and what the
+file is for; store files under the organization the request works in (it
+follows automatically, like `ctx.db`).
+
+### ctx.imports (Ledger ≥ 0.13.2)
+
+Gives the module an **Import from CSV** card on its page under Settings →
+Modules. Ledger reads the file (any column names and order, a title row
+above the headers, `;` or tab separators, UTF-16), matches columns to your
+fields by name or with the AI (when an LLM API is set up), converts the
+values, and shows the user a preview with your dry-run check before anything
+is imported.
+
+```js
+ctx.imports.provide({
+	label: "Customers",                         // "Import customers from CSV"
+	description: "Contacts and opening balances.",
+	fields: [                                   // 1–60; key: lowercase letters, digits, _
+		{ key: "name", label: "Customer name", required: true },
+		{ key: "email", label: "Email" },
+		{ key: "balance", label: "Opening balance", type: "money" }, // text (default) | number | money | date | boolean
+		{ key: "since", label: "Customer since", type: "date", help: "First invoice date" },
+	],
+	async handler(rows, { dryRun, user }) {
+		// rows: [{ _row: 7, name: "Acme", email: null, balance: 120000, since: "2025-03-01" }]
+		// money → integer cents (number), date → "YYYY-MM-DD", boolean → true/false, empty → null
+		const errors = []; // [{ row: r._row, message: "Acme already exists" }]; in the dry run these block the import
+		if (dryRun) return { summary: `Would add ${rows.length - errors.length} customers.`, errors }; // change nothing
+		/* insert in one transaction */
+		return { summary: `Added ${rows.length} customers.` };
+	},
+});
+```
+
+Rows whose values can't be read (or miss a required field) are left out and
+listed for the user; the handler only gets good rows. The import runs only
+after the user presses Import (bookkeepers and admins), and is refused if
+your dry run returned errors. Throwing `ctx.HttpError(422, …)` shows your
+message. Make the handler idempotent where you can (skip rows that already
+exist and say so in `summary`).
+
 ### Organizations (Ledger ≥ 0.11.0)
 
 A server can hold several organizations (a business, someone's personal
 books), each with its own database: accounts, entries, files and **your
 module's schema and data** are separate per organization. Each request runs
 in the user's current organization, and `ctx.db`, `ctx.ledger`,
-`ctx.dashboard`, `ctx.files` and `ctx.search` follow it automatically: write
+`ctx.dashboard`, `ctx.files`, `ctx.storage` and `ctx.search` follow it automatically: write
 your module as if there were one set of books. `ctx.settings` is per
 organization as well (Ledger ≥ 0.11.1): each organization's admins set its
 values, `get()` returns the current organization's (defaults in a new one),
@@ -460,7 +522,7 @@ database.
 
 ## 8. Checklist for your answer
 
-- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`), with a drawn `nav.icon` that fits the module
+- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`; `">=0.13.2"` for `ctx.storage` or `ctx.imports`), with a drawn `nav.icon` that fits the module
 - [ ] background jobs that touch the books run through `ctx.orgs.forEach` so every organization gets them
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → LLM API / Gmail
@@ -468,6 +530,7 @@ database.
 - [ ] entries posted from module records carry `links` (Ledger ≥ 0.11.2)
 - [ ] every action an LLM proposes waits for a person to approve it (pending suggestions in the UI; nothing posted, sent or changed on AI output alone)
 - [ ] searchable records exposed with `ctx.search.provide`
+- [ ] documents the module keeps (PDFs, scans) in `ctx.storage`, not `bytea` columns; records people bring from elsewhere importable with `ctx.imports.provide`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries
 - [ ] tables and columns have clear names: backups also save each module table as a readable CSV (Ledger ≥ 0.13.0); no secrets in tables (use `secret` settings); binary (`bytea`) columns show only their size there (0.13.1), so keep names, sizes and dates in readable columns

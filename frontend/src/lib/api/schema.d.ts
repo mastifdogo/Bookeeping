@@ -1147,6 +1147,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/modules/{moduleId}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+            };
+            cookie?: never;
+        };
+        /** What the module's "Import from CSV" takes (ctx.imports) */
+        get: operations["getModuleImport"];
+        put?: never;
+        /** Upload a CSV for the module; columns are matched to its fields (AI or names) */
+        post: operations["uploadModuleImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/modules/{moduleId}/import/{uploadId}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+                uploadId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The rows with a changed mapping, checked by the module (a dry run) */
+        post: operations["previewModuleImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/modules/{moduleId}/import/{uploadId}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+                uploadId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hand the rows to the module (only if its check found no problems) */
+        post: operations["runModuleImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/modules/{moduleId}/storage/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A file the module keeps (ctx.storage); PDFs, pictures and text open inline, the rest downloads */
+        get: operations["getModuleStoredFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/modules/{moduleId}/settings": {
         parameters: {
             query?: never;
@@ -1902,6 +1979,65 @@ export interface components {
             }[];
             min: number | null;
             max: number | null;
+        };
+        ModuleImportField: {
+            key: string;
+            label: string;
+            /** @enum {string} */
+            type: "text" | "number" | "money" | "date" | "boolean";
+            required: boolean;
+            help: string;
+        };
+        ModuleImportInfo: {
+            available: boolean;
+            label: string;
+            description: string;
+            fields: components["schemas"]["ModuleImportField"][];
+            ai_available: boolean;
+        };
+        ModuleImportMapping: {
+            columns?: {
+                [key: string]: string | null;
+            };
+            header_row?: number;
+            /** @enum {string} */
+            date_format?: "ymd" | "mdy" | "dmy";
+            decimal_comma?: boolean;
+        };
+        ModuleImportProblem: {
+            row: number;
+            message: string;
+        };
+        ModuleImportPlan: {
+            id: string;
+            filename: string;
+            detection: {
+                /** @enum {string} */
+                source: "ai" | "rules";
+                note: string;
+            };
+            mapping: {
+                columns: {
+                    [key: string]: string | null;
+                };
+                header_row: number;
+                /** @enum {string} */
+                date_format: "ymd" | "mdy" | "dmy";
+                decimal_comma: boolean;
+            };
+            headers: string[];
+            sample: string[][];
+            row_count: number;
+            ready_rows: number;
+            preview: {
+                [key: string]: unknown;
+            }[];
+            problems: components["schemas"]["ModuleImportProblem"][];
+            missing: string[];
+            check: {
+                summary: string;
+                errors: components["schemas"]["ModuleImportProblem"][];
+            } | null;
         };
         ModuleSettings: {
             fields: components["schemas"]["SettingsField"][];
@@ -4151,6 +4287,156 @@ export interface operations {
             401: components["responses"]["Error"];
             409: components["responses"]["Error"];
             default: components["responses"]["Error"];
+        };
+    };
+    getModuleImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModuleImportInfo"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    uploadModuleImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    /** @enum {string} */
+                    use_ai?: "true" | "false";
+                };
+            };
+        };
+        responses: {
+            /** @description The proposed mapping and converted rows */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModuleImportPlan"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    previewModuleImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+                uploadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    mapping?: components["schemas"]["ModuleImportMapping"];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModuleImportPlan"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    runModuleImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+                uploadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    mapping?: components["schemas"]["ModuleImportMapping"];
+                };
+            };
+        };
+        responses: {
+            /** @description Imported */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        imported: number;
+                        /** @description Rows left out because a value couldn't be read */
+                        skipped: number;
+                        summary: string;
+                        errors: components["schemas"]["ModuleImportProblem"][];
+                    };
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getModuleStoredFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                moduleId: string;
+                /** @description May contain slashes: folders/file.pdf */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            404: components["responses"]["Error"];
         };
     };
     getModuleSettings: {

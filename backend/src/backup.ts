@@ -20,6 +20,7 @@ import { getTypeParser, withDatabase } from "./db.ts";
 import { csvRecord } from "./csv.ts";
 import { csvText, writeGeneralLedger } from "./files.ts";
 import { modulesDir, scanInstalled } from "./modules.ts";
+import { listTree } from "./module-storage.ts";
 import { closeLedgerNotice, postLedgerNotice } from "./dashboard.ts";
 import { ConflictError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
@@ -490,16 +491,34 @@ function dumpTime(name: string): number | null {
 	return m ? Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) : null;
 }
 
+/** A file to put in a backup folder: where it is now, and its path inside the folder ("files/sales/a.pdf"). */
+export interface BackupItem {
+	src: string;
+	rel: string;
+}
+
+/** The folders a set of items needs, parents first ("files", "files/sales", …). */
+function foldersOf(items: BackupItem[]): string[] {
+	const dirs = new Set<string>();
+	for (const it of items) {
+		const parts = it.rel.split("/").slice(0, -1);
+		for (let k = 1; k <= parts.length; k++) dirs.add(parts.slice(0, k).join("/"));
+	}
+	return [...dirs].sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
+}
+
 /** Puts a backup folder on the share and removes backups older than keep_days. */
-async function copyToShare(localDir: string, t: ShareTarget, now: number, workDir: string): Promise<string> {
-	if (t.mode === "folder") return copyToFolder(localDir, t, now);
-	const folder = path.basename(localDir);
-	const files = (await fsp.readdir(localDir)).sort();
+async function copyToShare(folder: string, items: BackupItem[], t: ShareTarget, now: number, workDir: string): Promise<string> {
+	if (t.mode === "folder") return copyToFolder(folder, items, t, now);
 	const cd = await smbEnterDir(t, workDir);
 	// Upload into a temporary folder, then rename it, so a half-written backup never looks complete.
 	const tmp = `.${folder}.tmp`;
 	await smbclient(t, workDir, [...cd, `deltree "${tmp}"`, `deltree "${folder}"`], { ignoreErrors: true });
-	await smbclient(t, workDir, [...cd, `mkdir "${tmp}"`, `cd "${tmp}"`, ...files.map((f) => `put "${path.join(localDir, f)}" "${f}"`), "cd ..", `rename "${tmp}" "${folder}"`]);
+	const win = (rel: string) => rel.replaceAll("/", "\\");
+	const steps = [`mkdir "${tmp}"`, ...foldersOf(items).map((d) => `mkdir "${tmp}\\${win(d)}"`), ...items.map((it) => `put "${it.src}" "${tmp}\\${win(it.rel)}"`)];
+	// In batches, so a backup with many stored files doesn't make one enormous command line.
+	for (let k = 0; k < steps.length; k += 200) await smbclient(t, workDir, [...cd, ...steps.slice(k, k + 200)]);
+	await smbclient(t, workDir, [...cd, `rename "${tmp}" "${folder}"`]);
 	// Old backups: folders by the time in their name, and files from before 0.13.1.
 	const listing = await smbclient(t, workDir, [...cd, "ls"]);
 	const oldDirs: string[] = [];
@@ -559,13 +578,15 @@ async function listFolderDumps(dir: string, limit = 10): Promise<BackupEntry[]> 
 	return newestFirst(out).slice(0, limit);
 }
 
-async function copyToFolder(localDir: string, t: ShareTarget, now: number): Promise<string> {
+async function copyToFolder(folder: string, items: BackupItem[], t: ShareTarget, now: number): Promise<string> {
 	await fsp.mkdir(t.path, { recursive: true });
-	const folder = path.basename(localDir);
 	const tmp = path.join(t.path, `.${folder}.tmp`);
 	try {
 		await fsp.rm(tmp, { recursive: true, force: true });
-		await fsp.cp(localDir, tmp, { recursive: true });
+		for (const it of items) {
+			await fsp.mkdir(path.dirname(path.join(tmp, it.rel)), { recursive: true });
+			await fsp.copyFile(it.src, path.join(tmp, it.rel));
+		}
 		// A backup started in the same second (by hand, twice) replaces the first.
 		await fsp.rm(path.join(t.path, folder), { recursive: true, force: true });
 		await fsp.rename(tmp, path.join(t.path, folder));
@@ -722,8 +743,7 @@ export async function revokeGoogle(g: GoogleTarget, ep: GoogleEndpoints): Promis
 }
 
 /** Uploads one file into a Drive folder (resumable upload, one PUT). */
-async function uploadFileToDrive(file: string, parent: string, token: string, ep: GoogleEndpoints): Promise<void> {
-	const name = path.basename(file);
+async function uploadFileToDrive(file: string, parent: string, token: string, ep: GoogleEndpoints, name = path.basename(file)): Promise<void> {
 	const size = (await fsp.stat(file)).size;
 	const start = await fetch(`${ep.api}/upload/drive/v3/files?uploadType=resumable&fields=id`, {
 		method: "POST",
@@ -757,10 +777,9 @@ async function uploadFileToDrive(file: string, parent: string, token: string, ep
 }
 
 /** Uploads a backup folder as a subfolder of "Ledger backups"; keeps the newest keep_count backups. */
-async function uploadToDrive(localDir: string, g: GoogleTarget, ep: GoogleEndpoints): Promise<string> {
+async function uploadToDrive(folder: string, items: BackupItem[], g: GoogleTarget, ep: GoogleEndpoints): Promise<string> {
 	if (!g.refresh_token || !g.folder_id) throw new Error("Google Drive is not connected; connect it under Settings → Backups");
 	const token = await accessToken(g, ep);
-	const folder = path.basename(localDir);
 	const created = (await driveJson(ep, token, "POST", "/drive/v3/files?fields=id", {
 		name: folder,
 		mimeType: "application/vnd.google-apps.folder",
@@ -769,7 +788,13 @@ async function uploadToDrive(localDir: string, g: GoogleTarget, ep: GoogleEndpoi
 		throw new Error(/404/.test(e.message) ? `the "${FOLDER_NAME}" folder is gone from Google Drive; connect again to recreate it` : e.message);
 	})) as { id: string };
 	try {
-		for (const f of (await fsp.readdir(localDir)).sort()) await uploadFileToDrive(path.join(localDir, f), created.id, token, ep);
+		const ids = new Map<string, string>([["", created.id]]);
+		for (const d of foldersOf(items)) {
+			const parent = ids.get(d.split("/").slice(0, -1).join("/"))!;
+			const sub = (await driveJson(ep, token, "POST", "/drive/v3/files?fields=id", { name: d.split("/").at(-1), mimeType: "application/vnd.google-apps.folder", parents: [parent] })) as { id: string };
+			ids.set(d, sub.id);
+		}
+		for (const it of items) await uploadFileToDrive(it.src, ids.get(it.rel.split("/").slice(0, -1).join("/"))!, token, ep, it.rel.split("/").at(-1)!);
 	} catch (e) {
 		// Leave no half-uploaded backup behind.
 		await driveJson(ep, token, "DELETE", `/drive/v3/files/${encodeURIComponent(created.id)}`).catch(() => {});
@@ -899,6 +924,8 @@ export interface BackupOptions {
 	google?: GoogleEndpoints;
 	/** Installed modules, to name their CSV copies (default: /var/lib/ledger/modules). */
 	modulesDir?: string;
+	/** The data share (CSV_DIR), where modules keep their files (ctx.storage). */
+	csvDir?: string;
 	/** Writes a database's CSV copies (tests make it fail). */
 	csvCopies?: typeof writeCsvCopies;
 	/** Writes a database's dump (tests replace pg_dump). */
@@ -980,10 +1007,23 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 					}
 				}
 			}
+			// What goes in the folder: the dumps and CSVs made here, and the files modules keep
+			// (from the data share: files/<module>/… for the main books, <database>-files/<module>/… for others).
+			const items: BackupItem[] = (await listTree(localDir)).map((f) => ({ src: f.full, rel: f.rel }));
+			const csvDir = o.csvDir ?? (process.env.CSV_DIR || "/app/csv_data");
+			const stored: BackupItem[] = [];
+			for (const d of dumps) {
+				const root = path.join(d.prefix ? path.join(csvDir, ".orgs", d.prefix.slice(0, -1)) : csvDir, ".modules");
+				for (const f of await listTree(root)) stored.push({ src: f.full, rel: `${d.prefix}files/${f.rel}` });
+			}
+			items.push(...stored);
 			for (const t of targets) {
 				try {
-					const messages = [t === "share" ? await copyToShare(localDir, config.share, now(), workDir) : await uploadToDrive(localDir, config.google, o.google ?? googleEndpoints())];
-					if (csvs.length) messages.push(`It holds ${dumps.length === 1 ? "the database dump" : `${dumps.length} database dumps`} and ${csvs.length} CSV ${csvs.length === 1 ? "copy" : "copies"} (general ledger${csvs.length > dumps.length ? " and modules" : ""}).`);
+					const messages = [t === "share" ? await copyToShare(name, items, config.share, now(), workDir) : await uploadToDrive(name, items, config.google, o.google ?? googleEndpoints())];
+					const parts = [dumps.length === 1 ? "the database dump" : `${dumps.length} database dumps`];
+					if (csvs.length) parts.push(`${csvs.length} CSV ${csvs.length === 1 ? "copy" : "copies"} (general ledger${csvs.length > dumps.length ? " and modules" : ""})`);
+					if (stored.length) parts.push(`${stored.length} file${stored.length === 1 ? "" : "s"} kept by modules`);
+					if (parts.length > 1) messages.push(`It holds ${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}.`);
 					status.results.push({ target: t, ok: true, message: messages.join(" ") });
 					status.last_ok[t] = new Date(now()).toISOString();
 				} catch (e) {

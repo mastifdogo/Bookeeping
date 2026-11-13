@@ -2266,3 +2266,166 @@ test("backups: CSV copies of the general ledger and each module beside the dump"
 	assert.deepEqual(await readdir(path.join(share, folder)), ["ledger.dump"]);
 	expectStatus(await call("PUT", "/backups/config", { ...settings, include_csv: "yes" }), 422);
 });
+
+test("modules keep files: stored per organization, served to users, carried in backups", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	await loadModules(t, app, {
+		bills: `export default function (ctx) {
+			ctx.route("POST", "/save", async (req) => ctx.storage.put(req.body.path, req.body.b64));
+			ctx.route("GET", "/list", (req) => ctx.storage.list(req.query.get("prefix") || ""));
+			ctx.route("GET", "/read", async (req) => { const f = await ctx.storage.get(req.query.get("path")); return f && { text: f.data.toString(), type: f.content_type, url: f.url }; });
+			ctx.route("DELETE", "/remove", async (req) => ({ removed: await ctx.storage.remove(req.query.get("path")) }));
+		}`,
+	});
+	const b64 = (s: string) => Buffer.from(s).toString("base64");
+	let r = await call("POST", "/m/bills/save", { path: "2026/Acme bill 31.pdf", b64: b64("%PDF-1.7 fake") });
+	expectStatus(r, 200);
+	assert.equal(r.json().url, "/api/v1/modules/bills/storage/2026/Acme%20bill%2031.pdf");
+	assert.equal(r.json().content_type, "application/pdf");
+	expectStatus(await call("POST", "/m/bills/save", { path: "notes/page.html", b64: b64("<script>alert(1)</script>") }), 200);
+	for (const bad of ["../escape.pdf", "/abs.pdf", "a/../../b.pdf", ".hidden", "x.tmp"]) {
+		expectStatus(await call("POST", "/m/bills/save", { path: bad, b64: b64("x") }), 422);
+	}
+	assert.deepEqual((await call("GET", "/m/bills/list")).json().map((f: any) => [f.path, f.size]), [["2026/Acme bill 31.pdf", 13], ["notes/page.html", 25]]);
+	assert.deepEqual((await call("GET", "/m/bills/list?prefix=2026")).json().map((f: any) => f.path), ["2026/Acme bill 31.pdf"]);
+	assert.equal((await call("GET", "/m/bills/read?path=2026/Acme%20bill%2031.pdf")).json().text, "%PDF-1.7 fake");
+
+	// Users open them through Ledger: PDFs inline, anything that could run script as a download, never as a page.
+	r = await call("GET", "/modules/bills/storage/2026/Acme%20bill%2031.pdf");
+	expectStatus(r, 200);
+	assert.equal(r.headers["content-type"], "application/pdf");
+	assert.match(String(r.headers["content-disposition"]), /^inline/);
+	assert.match(String(r.headers["content-security-policy"]), /sandbox/);
+	assert.equal(r.text, "%PDF-1.7 fake");
+	r = await call("GET", "/modules/bills/storage/notes/page.html");
+	assert.match(String(r.headers["content-disposition"]), /^attachment/);
+	expectStatus(await call("GET", "/modules/bills/storage/..%2F..%2Fetc%2Fpasswd"), 404);
+	expectStatus(await call("GET", "/modules/nope/storage/a.pdf"), 404);
+	expectStatus(await request("GET", "/api/v1/modules/bills/storage/2026/Acme%20bill%2031.pdf"), 401);
+
+	// Another organization's files are its own.
+	r = await call("POST", "/users", { username: "olga", password: "olga-password", role: "admin", organization: { mode: "new", name: "Olga Co", kind: "business" } });
+	expectStatus(r, 201);
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "olga", password: "olga-password" } });
+	const olga = `${SESSION_COOKIE}=${sessionFrom(r).value}`;
+	assert.deepEqual((await request("GET", "/api/v1/m/bills/list", { cookie: olga })).json(), []);
+	expectStatus(await request("POST", "/api/v1/m/bills/save", { body: { path: "olga.pdf", b64: b64("%PDF olga") }, cookie: olga }), 200);
+	expectStatus(await call("GET", "/modules/bills/storage/olga.pdf"), 404);
+
+	// Backups carry them: files/<module>/… for the main books, <database>-files/<module>/… for others.
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-store-bk-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const prevRoots = process.env.BACKUP_SHARE_ROOTS;
+	process.env.BACKUP_SHARE_ROOTS = root;
+	t.after(() => (prevRoots === undefined ? delete process.env.BACKUP_SHARE_ROOTS : (process.env.BACKUP_SHARE_ROOTS = prevRoots)));
+	await mkdir(app.backup.dir, { mode: 0o700 });
+	const share = path.join(root, "backups");
+	expectStatus(await call("PUT", "/backups/config", { schedule: { enabled: false, days: [1], time: "02:30", timezone: "UTC" }, share: { enabled: true, mode: "folder", path: share, keep_days: 30 }, google: { enabled: false, client_id: "", keep_count: 5 }, include_csv: false }), 200);
+	const out = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", dump: async (f: string) => writeFile(f, "PGDMP"), now: () => Date.parse("2026-11-13T02:30:00Z"), csvDir: app.csvDir });
+	assert.equal(out.status.state, "ok", out.status.message);
+	assert.match(out.status.results[0]!.message, /3 files kept by modules/);
+	const folder = path.join(share, "ledger-2026-11-13_02-30-00+0000");
+	assert.equal(await readFile(path.join(folder, "files", "bills", "2026", "Acme bill 31.pdf"), "utf8"), "%PDF-1.7 fake");
+	const orgDb = (await readdir(folder)).find((n) => n.endsWith("-files"))!;
+	assert.match(orgDb, /_org\d+-files$/);
+	assert.equal(await readFile(path.join(folder, orgDb, "bills", "olga.pdf"), "utf8"), "%PDF olga");
+
+	assert.deepEqual((await call("DELETE", "/m/bills/remove?path=2026/Acme%20bill%2031.pdf")).json(), { removed: true });
+	assert.deepEqual((await call("DELETE", "/m/bills/remove?path=2026/Acme%20bill%2031.pdf")).json(), { removed: false });
+	assert.deepEqual((await call("GET", "/m/bills/list")).json().map((f: any) => f.path), ["notes/page.html"]);
+});
+
+test("a module's Import from CSV: columns matched, values converted, checked by the module, then imported", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	await loadModules(t, app, {
+		crm: `const people = [];
+		export default function (ctx) {
+			ctx.imports.provide({
+				label: "Customers",
+				description: "Customer contacts and opening balances.",
+				fields: [
+					{ key: "name", label: "Customer name", required: true },
+					{ key: "email", label: "Email" },
+					{ key: "balance", label: "Opening balance", type: "money" },
+					{ key: "since", label: "Customer since", type: "date" },
+					{ key: "active", label: "Active", type: "boolean" },
+				],
+				handler(rows, { dryRun }) {
+					const errors = rows.filter((r) => people.some((p) => p.name === r.name)).map((r) => ({ row: r._row, message: r.name + " already exists" }));
+					if (dryRun) return { summary: "Would add " + (rows.length - errors.length) + " customers.", errors };
+					people.push(...rows);
+					return { summary: "Added " + rows.length + " customers." };
+				},
+			});
+			ctx.route("GET", "/people", () => people);
+		}`,
+		plain: `export default function (ctx) {}`,
+	});
+	let r = await call("GET", "/modules/crm/import");
+	expectStatus(r, 200);
+	assert.equal(r.json().available, true);
+	assert.deepEqual(r.json().fields.map((f: any) => [f.key, f.type, f.required]), [["name", "text", true], ["email", "text", false], ["balance", "money", false], ["since", "date", false], ["active", "boolean", false]]);
+	assert.equal((await call("GET", "/modules/plain/import")).json().available, false);
+
+	const csv = `Export from OldCRM
+Customer Name,E-mail,Opening Balance,Customer Since,Active?,Notes
+Acme Inc.,ap@acme.example,"$1,250.50",03/15/2024,Yes,big
+Globex,,(20.00),11/02/2025,no,
+,nobody@example.com,5.00,01/01/2026,yes,
+Initech,it@initech.example,abc,02/30/2026,maybe,
+`;
+	const boundary = "----imp" + Math.random().toString(16).slice(2);
+	const body = Buffer.concat([
+		Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="customers.csv"\r\nContent-Type: text/csv\r\n\r\n${csv}\r\n--${boundary}--\r\n`),
+	]);
+	const upload = (cookie: string) => request("POST", "/api/v1/modules/crm/import", { rawBody: body, headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` }, cookie });
+	r = await upload(`${SESSION_COOKIE}=${ta.token}`);
+	expectStatus(r, 201);
+	let plan = r.json();
+	assert.equal(plan.detection.source, "rules");
+	assert.equal(plan.mapping.header_row, 1);
+	assert.deepEqual(plan.mapping.columns, { name: "Customer Name", email: "E-mail", balance: "Opening Balance", since: "Customer Since", active: "Active?" });
+	assert.equal(plan.row_count, 4);
+	assert.equal(plan.ready_rows, 2);
+	assert.deepEqual(plan.preview, [
+		{ _row: 3, name: "Acme Inc.", email: "ap@acme.example", balance: 125050, since: "2024-03-15", active: true },
+		{ _row: 4, name: "Globex", email: null, balance: -2000, since: "2025-11-02", active: false },
+	]);
+	// Every problem, by row: an empty required field, and three bad values in row 6.
+	assert.deepEqual(plan.problems.map((p: any) => p.row), [5, 6, 6, 6]);
+	assert.match(plan.problems[0].message, /Customer name is empty/);
+	assert.match(plan.problems[1].message, /Opening balance: "abc" is not an amount/);
+	assert.match(plan.problems[2].message, /Customer since: "02\/30\/2026" is not a date/);
+	assert.match(plan.problems[3].message, /Active: "maybe" is not yes or no/);
+
+	// The preview asks the module (a dry run).
+	r = await call("POST", `/modules/crm/import/${plan.id}/preview`, { mapping: plan.mapping });
+	expectStatus(r, 200);
+	plan = r.json();
+	assert.deepEqual(plan.check, { summary: "Would add 2 customers.", errors: [] });
+	// Without the required column, nothing can be imported.
+	r = await call("POST", `/modules/crm/import/${plan.id}/preview`, { mapping: { ...plan.mapping, columns: { ...plan.mapping.columns, name: null } } });
+	assert.deepEqual(r.json().missing, ["Customer name"]);
+	assert.equal(r.json().check, null);
+	expectStatus(await call("POST", `/modules/crm/import/${plan.id}/run`, { mapping: { ...plan.mapping, columns: { ...plan.mapping.columns, name: null } } }), 422);
+
+	// Viewers can't import.
+	await createUser(app, "vi", "vi-password", "viewer");
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "vi", password: "vi-password" } });
+	expectStatus(await upload(`${SESSION_COOKIE}=${sessionFrom(r).value}`), 403);
+
+	r = await call("POST", `/modules/crm/import/${plan.id}/run`, { mapping: { ...plan.mapping, columns: { ...plan.mapping.columns, name: "Customer Name" } } });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { imported: 2, skipped: 2, summary: "Added 2 customers.", errors: [] });
+	assert.deepEqual((await call("GET", "/m/crm/people")).json().map((p: any) => p.name), ["Acme Inc.", "Globex"]);
+	// The module's own check stops a second import of the same people.
+	r = await upload(`${SESSION_COOKIE}=${ta.token}`);
+	const again = r.json();
+	r = await call("POST", `/modules/crm/import/${again.id}/run`, { mapping: again.mapping });
+	expectStatus(r, 422);
+	assert.match(r.json().error.message, /row 3: Acme Inc\. already exists/);
+});

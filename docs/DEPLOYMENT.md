@@ -333,7 +333,9 @@ backup schedule's time zone with its UTC offset, e.g.
 ledger.dump                    the database (pg_dump custom format, checked with pg_restore --list)
 general-ledger.csv             the General Ledger, same columns as the export
 <module>.csv                   each module's data (<module>-<table>.csv when it has several tables)
+files/<module>/...            files modules keep (invoice PDFs, scans), Ledger 0.13.2+
 ledger_org2.dump, ledger_org2-general-ledger.csv, ...   each other organization's books
+ledger_org2-files/<module>/... that organization's module files
 ```
 
 The CSV copies (unless turned off under Settings → Backups) are read in

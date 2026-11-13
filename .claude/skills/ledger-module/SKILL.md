@@ -17,7 +17,7 @@ Paths below are relative to the Ledger repository root (this checkout).
 
 Read **`docs/MODULE_LLM_CONTEXT.md`** in full before writing anything. It is
 the authoritative, compact reference: manifest fields, the `ctx` API and its
-return shapes, `ctx.dashboard`, `ctx.settings`, `ctx.files`, `ctx.orgs`,
+return shapes, `ctx.dashboard`, `ctx.settings`, `ctx.files`, `ctx.storage`, `ctx.imports`, `ctx.orgs`,
 migrations, the UI contract, security rules and the release checklist. `docs/MODULES.md` has the longer
 explanation. Real modules to learn from: mastifdogo/invoice-costumer-module
 (Sales), mastifdogo/llm-api-module and mastifdogo/tailscale-module.
@@ -140,7 +140,18 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
   understands them, and never keep secrets in tables (use `secret` settings).
   Binary (`bytea`) columns appear there only as `(binary, <n> bytes; in the
   .dump)` (Ledger 0.13.1): keep a file's name, type, size and dates in
-  readable columns next to its bytes.
+  readable columns next to its bytes. Better: keep documents (generated
+  PDFs, scans, attachments) with `ctx.storage` (Ledger 0.13.2): files on
+  the share per organization, carried in every backup under
+  `files/<module>/`, opened by users at `ctx.storage.url(path)`.
+- **Import from CSV**: a module that keeps records people have elsewhere
+  (customers, products, employees) declares its fields with
+  `ctx.imports.provide({ label, fields, handler })` (Ledger 0.13.2). Ledger
+  adds an Import card on the module's Settings page, matches the file's
+  columns (by name or with the AI), converts values (money → cents, dates
+  → YYYY-MM-DD) and calls `handler(rows, { dryRun: true })` for a preview;
+  only after the user presses Import does it call it with `dryRun: false`.
+  The dry run must change nothing; its `errors` block the import.
 - SQL: always `$1` placeholders; table names as `${ctx.schema}.table`.
   `BIGINT` columns come back as JS `bigint`: cast counts with `::int` or use
   `Number()`, never mix bigint and number.

@@ -22,6 +22,8 @@ import type { SearchProvider } from "./search.ts";
 import { connectionReady, llmComplete, pickConnection, readLlmConfig, type LlmRequest } from "./llm.ts";
 import { gmailFor } from "./gmail.ts";
 import { filesFor, type FileSummary } from "./module-files.ts";
+import { storageFor } from "./module-storage.ts";
+import { callImport, checkImportSpec, type ImportRow, type ImportSpec } from "./module-import.ts";
 import { currentOrg, forEachOrg, getOrganization, listOrganizations, type OrgKind } from "./orgs.ts";
 import { listBySource, postItem, removeByKey, setClosedByKey, type ItemInput, type ItemKind } from "./dashboard.ts";
 import { isCurrency, publicUser, type EntryLinkInput, type AccountCreate, type Currency, type JournalEntryCreate, type User } from "./types.ts";
@@ -74,6 +76,8 @@ export interface LoadedModule {
 	searchProviders: SearchProvider[];
 	/** ctx.settings.onChange listeners. */
 	settingsListeners: ((values: Record<string, SettingValue>) => unknown)[];
+	/** ctx.imports.provide: the module's "Import from CSV" (Settings tab). */
+	importer: ImportSpec | null;
 }
 
 /** Amounts from modules may be numbers, bigints or digit strings; they become exact bigint cents. */
@@ -228,6 +232,12 @@ function makeContext(app: App, m: LoadedModule) {
 				return forEachOrg(app, fn);
 			},
 		},
+		/**
+		 * The module's own files (PDFs, scans, attachments), per organization,
+		 * on the data share and in every backup folder: put, get, stat, list,
+		 * remove, url.
+		 */
+		storage: storageFor(app, id),
 		files: {
 			...filesFor(app, id, actorOf),
 			/** Called with the file's summary right after another module sends this one a file. */
@@ -237,6 +247,18 @@ function makeContext(app: App, m: LoadedModule) {
 			},
 		},
 		/** Results in Ledger's search bar. */
+		/**
+		 * "Import from CSV" on the module's Settings tab. provide({ label,
+		 * description?, fields: [{ key, label, type: text|number|money|date|boolean,
+		 * required?, help? }], handler(rows, { dryRun, user }) → { summary?, errors? } }).
+		 * Ledger maps the CSV's columns to the fields (AI or column names) and
+		 * converts values; the handler checks (dryRun) and then imports the rows.
+		 */
+		imports: {
+			provide(spec: unknown) {
+				m.importer = checkImportSpec(spec);
+			},
+		},
 		search: {
 			/**
 			 * Registers fn(query, { limit, user }) returning (or resolving to)
@@ -349,6 +371,7 @@ export class ModuleHost {
 			settingsListeners: [],
 			searchProviders: [],
 			fileListeners: [],
+			importer: null,
 		};
 		this.modules.set(m.manifest.id, m);
 		if (!compatible(m.manifest, app.version)) {
@@ -405,6 +428,13 @@ export class ModuleHost {
 			if (r.method === method) return { route: r, params };
 		}
 		return pathMatched ? "method" : null;
+	}
+
+	/** Hands imported rows to a module's ctx.imports handler (a dry run first, from the preview). */
+	runImport(id: string, rows: ImportRow[], dryRun: boolean, user: User) {
+		const m = this.modules.get(id);
+		if (!m?.importer || m.error) throw new HttpError(404, "this module has no CSV import", "not_found");
+		return callImport(m.importer, rows, dryRun, moduleUser(user));
 	}
 
 	/** Runs a handler and turns its result into a status and body. */

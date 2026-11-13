@@ -57,6 +57,7 @@ import { search } from "./search.ts";
 import { integrationsAvailable, requireIntegrations, writeIntegration } from "./integrations.ts";
 import { applyLlmChange, llmComplete, llmUsage, pickConnection, publicLlmConfig, readLlmConfig } from "./llm.ts";
 import { analyzeUpload, cleanMapping, getUpload, MIGRATION_KINDS, planFor, runMigration } from "./migrate.ts";
+import { analyzeImport, cleanImportMapping, getImportUpload, publicPlan } from "./module-import.ts";
 import { applyGmailChange, codeFromPaste, finishAuth, publicGmailConfig, readGmailConfig, REDIRECT_URI, revoke as revokeGmail, startAuth } from "./gmail.ts";
 import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
 import {
@@ -112,6 +113,8 @@ import { MultipartError, formDataBoundary, parseHeaderParams, parseMultipart } f
 import { CONTENT_TYPES, staticHandler } from "./static.ts";
 import { promises as fsp } from "node:fs";
 import pathMod from "node:path";
+import { createReadStream } from "node:fs";
+import { INLINE_TYPES, openStored } from "./module-storage.ts";
 import { MAX_MODULES, normalizeRepo, readDesired, readModuleResults, requestModuleSync, writeDesired, compatible, type DesiredModule } from "./modules.ts";
 import { fetchManifest, githubApi, latestModuleRelease, repoIdentity } from "./github.ts";
 
@@ -822,7 +825,7 @@ async function handleRunBackup(c: Ctx): Promise<void> {
 	await requireBackups(c);
 	if (!c.app.backup.databaseUrl) throw new ConflictError("DATABASE_URL is not known to the app");
 	if (c.app.backup.running) throw new ConflictError("a backup is already running");
-	const job = runBackup({ dir: c.app.backup.dir, databaseUrl: c.app.backup.databaseUrl, trigger: "manual", google: c.app.backup.google })
+	const job = runBackup({ dir: c.app.backup.dir, databaseUrl: c.app.backup.databaseUrl, trigger: "manual", google: c.app.backup.google, csvDir: c.app.csvDir })
 		.catch((err: Error) => log.error("backup failed", { err: err.message }))
 		.finally(() => {
 			c.app.backup.running = null;
@@ -1048,6 +1051,81 @@ async function handleUploadFile(c: Ctx): Promise<void> {
 	const part = parts.find((p) => p.name === "file");
 	if (!part) throw new HttpError(400, 'missing "file" field', "bad_request");
 	writeJSON(c.res, 201, await saveUploadedCsv(c.app, part.filename, part.data));
+}
+
+// A module's "Import from CSV" (ctx.imports): upload, preview (the module's dry run), import.
+
+function moduleImporter(c: Ctx) {
+	const m = c.app.modules.modules.get(c.params.id ?? "");
+	if (!m || m.error || !m.importer) throw new NotFoundError();
+	return { m, spec: m.importer };
+}
+
+async function handleModuleImportInfo(c: Ctx): Promise<void> {
+	const m = c.app.modules.modules.get(c.params.id ?? "");
+	if (!m) throw new NotFoundError();
+	const spec = m.error ? null : m.importer;
+	writeJSON(c.res, 200, {
+		available: spec !== null,
+		label: spec?.label ?? "",
+		description: spec?.description ?? "",
+		fields: spec?.fields ?? [],
+		ai_available: pickConnection(await readLlmConfig(c.app.integrations.dir), "text") !== null,
+	});
+}
+
+async function handleModuleImportUpload(c: Ctx): Promise<void> {
+	const { m, spec } = moduleImporter(c);
+	const boundary = formDataBoundary(c.req.headers["content-type"]);
+	if (!boundary) throw new HttpError(400, 'expected a multipart/form-data body with a "file" field', "bad_request");
+	let body: Buffer;
+	try {
+		body = await readBody(c.req, MAX_FILE_BYTES + MULTIPART_OVERHEAD);
+	} catch (err) {
+		if (err instanceof BodyTooLargeError) {
+			c.res.setHeader("Connection", "close");
+			throw new TooLargeError();
+		}
+		throw err;
+	}
+	let parts;
+	try {
+		parts = parseMultipart(body, boundary);
+	} catch (err) {
+		if (err instanceof MultipartError) throw new HttpError(400, "invalid multipart body: " + err.message, "bad_request");
+		throw err;
+	}
+	const part = parts.find((p) => p.name === "file");
+	if (!part) throw new HttpError(400, 'missing "file" field', "bad_request");
+	const useAi = parts.find((p) => p.name === "use_ai")?.data.toString() !== "false";
+	const u = await analyzeImport(c.app, m.manifest.id, m.manifest.name, spec, c.user!.id, part.filename || "import.csv", part.data, useAi);
+	const { rows: _rows, ...plan } = publicPlan(u, spec, u.mapping);
+	writeJSON(c.res, 201, { ...plan, check: null });
+}
+
+async function handleModuleImportPreview(c: Ctx): Promise<void> {
+	const { m, spec } = moduleImporter(c);
+	const u = getImportUpload(m.manifest.id, c.params.uploadId ?? "", c.user!.id);
+	const body = (await decodeBody(c, false, (v) => (v && typeof v === "object" ? plainJson(v) : {}))) as Record<string, unknown> | null;
+	const mapping = cleanImportMapping(u, spec, body?.mapping ?? {});
+	const { rows, ...plan } = publicPlan(u, spec, mapping);
+	// The module checks the rows without changing anything.
+	const check = plan.missing.length === 0 && rows.length > 0 ? await c.app.modules.runImport(m.manifest.id, rows, true, c.user!) : null;
+	writeJSON(c.res, 200, { ...plan, check });
+}
+
+async function handleModuleImportRun(c: Ctx): Promise<void> {
+	const { m, spec } = moduleImporter(c);
+	const u = getImportUpload(m.manifest.id, c.params.uploadId ?? "", c.user!.id);
+	const body = (await decodeBody(c, true, (v) => plainJson(v))) as Record<string, unknown>;
+	const mapping = cleanImportMapping(u, spec, body.mapping ?? {});
+	const { rows, missing, problems } = publicPlan(u, spec, mapping);
+	if (missing.length) throw new HttpError(422, `choose a column for ${missing.join(", ")}`, "validation_failed");
+	if (rows.length === 0) throw new HttpError(422, "no rows can be imported", "validation_failed");
+	const check = await c.app.modules.runImport(m.manifest.id, rows, true, c.user!);
+	if (check.errors.length) throw new HttpError(422, `the module found problems: ${check.errors.slice(0, 3).map((e) => `row ${e.row}: ${e.message}`).join("; ")}`, "validation_failed");
+	const result = await c.app.modules.runImport(m.manifest.id, rows, false, c.user!);
+	writeJSON(c.res, 200, { imported: rows.length, skipped: new Set(problems.map((p) => p.row)).size, summary: result.summary, errors: result.errors });
 }
 
 // Migrating from other bookkeeping software: upload, preview, import.
@@ -1350,6 +1428,30 @@ async function inUserOrg<T>(c: Ctx, fn: () => Promise<T>): Promise<T> {
 	return inOrg(org, fn);
 }
 
+/**
+ * /api/v1/modules/<id>/storage/<path>: a file the module stored (ctx.storage),
+ * for any logged-in user of the organization. PDFs, pictures and plain text
+ * open in the browser; anything else downloads. Never runs as a page.
+ */
+async function serveModuleStorage(c: Ctx, id: string, parts: string[]): Promise<void> {
+	if (c.req.method !== "GET" && c.req.method !== "HEAD") return writeError(c.res, 405, "bad_request", "method not allowed");
+	c.token = sessionToken(c.req);
+	c.user = await sessionUser(c.app, c.token);
+	if (!/^[a-z][a-z0-9-]{1,31}$/.test(id) || !c.app.modules.modules.has(id)) return writeError(c.res, 404, "not_found", "not found");
+	const file = await inUserOrg(c, () => openStored(c.app, id, parts));
+	if (!file) return writeError(c.res, 404, "not_found", "not found");
+	const inline = INLINE_TYPES.has(file.type);
+	c.res.writeHead(200, {
+		"Content-Type": file.type + (file.type.startsWith("text/") ? "; charset=utf-8" : ""),
+		"Content-Length": file.size,
+		"Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+		"Content-Security-Policy": "sandbox; frame-ancestors 'self'",
+		"Cache-Control": "private, no-cache",
+	});
+	if (c.req.method === "HEAD") return void c.res.end();
+	createReadStream(file.full).pipe(c.res);
+}
+
 /** /api/v1/m/<id>/...: a module's own API. Always requires a session. */
 async function serveModuleAPI(c: Ctx, segments: string[]): Promise<void> {
 	c.token = sessionToken(c.req);
@@ -1523,6 +1625,10 @@ const ROUTES: Route[] = [
 	route("POST", "/modules/sync", "server", handleSyncModules),
 	route("DELETE", "/modules/:id", "server", handleRemoveModule),
 	route("PATCH", "/modules/:id", "server", handleRenameModuleRepo),
+	route("GET", "/modules/:id/import", true, handleModuleImportInfo),
+	route("POST", "/modules/:id/import", true, handleModuleImportUpload),
+	route("POST", "/modules/:id/import/:uploadId/preview", true, handleModuleImportPreview),
+	route("POST", "/modules/:id/import/:uploadId/run", true, handleModuleImportRun),
 	route("GET", "/modules/:id/settings", "admin", handleGetModuleSettings),
 	route("PUT", "/modules/:id/settings", "admin", handlePutModuleSettings),
 ];
@@ -1546,6 +1652,7 @@ function match(r: Route, segments: string[]): Record<string, string> | null {
 async function serveAPI(c: Ctx, rel: string): Promise<void> {
 	const segments = rel.split("/").slice(1);
 	if (segments[0] === "m" && segments.length >= 2 && segments[1] !== "") return serveModuleAPI(c, segments);
+	if (segments[0] === "modules" && segments[2] === "storage" && segments.length >= 4) return serveModuleStorage(c, segments[1]!, segments.slice(3));
 	let pathMatched = false;
 	for (const r of ROUTES) {
 		const params = match(r, segments);

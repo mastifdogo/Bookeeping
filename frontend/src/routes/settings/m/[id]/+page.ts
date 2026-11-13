@@ -9,5 +9,7 @@ export const load: PageLoad = async ({ fetch, params, parent }) => {
 	const settings = mod.has_settings
 		? unwrapLoad(await api(fetch).GET('/modules/{moduleId}/settings', { params: { path: { moduleId: params.id } } }))
 		: null;
-	return { id: params.id, mod, settings };
+	// What the module's "Import from CSV" takes, if it has one.
+	const imp = await api(fetch).GET('/modules/{moduleId}/import', { params: { path: { moduleId: params.id } } });
+	return { id: params.id, mod, settings, importInfo: imp.data?.available ? imp.data : null };
 };
