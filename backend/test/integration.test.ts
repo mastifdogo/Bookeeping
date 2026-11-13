@@ -2941,3 +2941,24 @@ test("account tags, entities (customer, vendor or both) and the vendor on an exp
 	assert.equal(r.json().vendor.is_active, true);
 	assert.equal((await call("GET", "/entities?include_inactive=true")).json().data.length, 4);
 });
+
+test("reconciliations can be listed by account and by the year their statement ends", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	for (const [code, name] of [["1000", "Chequing"], ["1050", "Savings"]]) expectStatus(await call("POST", "/accounts", { code, name, type: "asset", currency: "CAD" }), 201);
+	const start = async (account_code: string, statement_date: string) => {
+		const r = await call("POST", "/reconciliations", { account_code, statement_date, statement_balance_cents: 0 });
+		expectStatus(r, 201);
+		expectStatus(await call("POST", `/reconciliations/${r.json().reconciliation.id}/finish`), 200);
+	};
+	await start("1000", "2025-12-31");
+	await start("1000", "2026-01-31");
+	await start("1050", "2026-01-31");
+	const list = async (q: string) => (await call("GET", `/reconciliations${q}`)).json().data.map((r: any) => `${r.account_code} ${r.statement_date}`);
+	assert.deepEqual(await list(""), ["1050 2026-01-31", "1000 2026-01-31", "1000 2025-12-31"]);
+	assert.deepEqual(await list("?year=2026"), ["1050 2026-01-31", "1000 2026-01-31"]);
+	assert.deepEqual(await list("?year=2025&account_code=1000"), ["1000 2025-12-31"]);
+	assert.deepEqual(await list("?year=2026&account_code=1050"), ["1050 2026-01-31"]);
+	expectStatus(await call("GET", "/reconciliations?year=soon"), 422);
+});

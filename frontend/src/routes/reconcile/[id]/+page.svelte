@@ -87,6 +87,8 @@
 
 <div class="toolbar">
 	<h1 style="margin:0">
+		{new Date(`${rec.statement_date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
+		<span class="muted" aria-hidden="true">·</span>
 		<span class="mono">{rec.account_code}</span>
 		{rec.account_name}
 		<span class="badge">{rec.currency}</span>

@@ -70,11 +70,14 @@ function toRec(r: Row): Reconciliation {
 /** Debit-positive amounts times this give the natural sign. */
 const sign = (type: AccountType) => (type === "asset" || type === "expense" ? 1n : -1n);
 
-export async function listReconciliations(app: App, accountCode: string | null): Promise<Reconciliation[]> {
+export async function listReconciliations(app: App, accountCode: string | null, year: number | null = null): Promise<Reconciliation[]> {
 	const rows = await queryRows<Row>(
 		app.db,
-		SELECT + ` WHERE ($1::text IS NULL OR a.code = $1) ORDER BY r.status = 'open' DESC, r.statement_date DESC, r.id DESC LIMIT 500`,
-		[accountCode],
+		SELECT +
+			` WHERE ($1::text IS NULL OR a.code = $1)
+			    AND ($2::int IS NULL OR extract(year FROM r.statement_date) = $2)
+			  ORDER BY r.status = 'open' DESC, r.statement_date DESC, r.id DESC LIMIT 2000`,
+		[accountCode, year],
 	);
 	return rows.map(toRec);
 }

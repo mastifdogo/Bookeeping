@@ -575,6 +575,10 @@ paths:
         - name: account_code
           in: query
           schema: { $ref: '#/components/schemas/AccountCode' }
+        - name: year
+          in: query
+          description: Only reconciliations whose statement ends in this year
+          schema: { type: integer }
       responses:
         '200':
           description: Reconciliations

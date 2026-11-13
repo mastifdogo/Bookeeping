@@ -3186,6 +3186,8 @@ export interface operations {
         parameters: {
             query?: {
                 account_code?: components["schemas"]["AccountCode"];
+                /** @description Only reconciliations whose statement ends in this year */
+                year?: number;
             };
             header?: never;
             path?: never;

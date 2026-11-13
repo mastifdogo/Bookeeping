@@ -870,7 +870,14 @@ async function handleIncomeStatement(c: Ctx): Promise<void> {
 
 async function handleListReconciliations(c: Ctx): Promise<void> {
 	const code = c.query.get("account_code");
-	writeJSON(c.res, 200, { data: await listReconciliations(c.app, code || null) });
+	const y = c.query.get("year") ?? "";
+	const year = y === "" ? null : atoi(y);
+	if (y !== "" && (year === null || year < 1900 || year > 9999)) {
+		const v = new ValidationError();
+		v.add("year", "must be a year such as 2026");
+		v.throwIfAny();
+	}
+	writeJSON(c.res, 200, { data: await listReconciliations(c.app, code || null, year) });
 }
 
 async function handleCreateReconciliation(c: Ctx): Promise<void> {

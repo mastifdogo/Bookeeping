@@ -63,6 +63,18 @@
 		}
 	}
 
+	// History: every reconciliation session, named by the day its statement ends.
+	const describe = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, { month: 'long', day: 'numeric', timeZone: 'UTC' });
+	let filterAccount = $state('');
+	let filterYear = $state('');
+	let historyAccounts = $derived([...new Map(data.reconciliations.map((r) => [r.account_code, r.account_name])).entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })));
+	let years = $derived([...new Set(data.reconciliations.map((r) => r.statement_date.slice(0, 4)))].sort().reverse());
+	let history = $derived(
+		data.reconciliations
+			.filter((r) => (!filterAccount || r.account_code === filterAccount) && (!filterYear || r.statement_date.startsWith(filterYear)))
+			.sort((a, b) => b.statement_date.localeCompare(a.statement_date) || b.id - a.id)
+	);
+
 	const openRow = (e: MouseEvent, href: string) => {
 		if (!(e.target as HTMLElement).closest('a, button, input')) goto(href);
 	};
@@ -129,19 +141,41 @@
 	{/if}
 </div>
 
-<h2>History</h2>
+<div class="toolbar">
+	<h2 style="margin:0">History</h2>
+	<span class="spacer"></span>
+	{#if data.reconciliations.length > 0}
+		<label>
+			Account
+			<select bind:value={filterAccount}>
+				<option value="">All accounts</option>
+				{#each historyAccounts as [code, name] (code)}<option value={code}>{code} {name}</option>{/each}
+			</select>
+		</label>
+		<label>
+			Year
+			<select bind:value={filterYear}>
+				<option value="">All years</option>
+				{#each years as y (y)}<option value={y}>{y}</option>{/each}
+			</select>
+		</label>
+	{/if}
+</div>
 <div class="table-wrap">
 	{#if data.reconciliations.length === 0}
 		<div class="empty">No reconciliations yet.</div>
+	{:else if history.length === 0}
+		<div class="empty">No reconciliations for that account and year.</div>
 	{:else}
 		<table>
 			<thead>
-				<tr><th>Statement</th><th>Account</th><th class="num">Balance</th><th class="num">Cleared</th><th>Status</th></tr>
+				<tr><th>Reconciliation</th><th>Year</th><th>Account</th><th class="num">Statement balance</th><th class="num">Cleared</th><th>Status</th></tr>
 			</thead>
 			<tbody>
-				{#each data.reconciliations as r (r.id)}
+				{#each history as r (r.id)}
 					<tr class="clickable" onclick={(e) => openRow(e, `/reconcile/${r.id}`)}>
-						<td class="mono"><a href="/reconcile/{r.id}">{r.statement_date}</a></td>
+						<td><a href="/reconcile/{r.id}"><strong>{describe(r.statement_date)}</strong></a></td>
+						<td class="mono">{r.statement_date.slice(0, 4)}</td>
 						<td><span class="mono">{r.account_code}</span> {r.account_name}</td>
 						<td class="num"><Amount cents={r.statement_balance_cents} currency={r.currency} /></td>
 						<td class="num">{r.cleared_count}</td>
@@ -159,5 +193,8 @@
 <style>
 	tr.clickable {
 		cursor: pointer;
+	}
+	select {
+		width: auto;
 	}
 </style>
