@@ -87,6 +87,10 @@ install -m 0755 "$src/deploy/setup-db.sh" /usr/local/share/ledger/setup-db.sh
 install -m 0755 "$src/deploy/migrate-db.sh" /usr/local/share/ledger/migrate-db.sh
 install -m 0755 "$src/deploy/create-org-db.sh" /usr/local/share/ledger/create-org-db.sh
 install -m 0644 "$src/deploy/postgresql-lowmem.conf" /usr/local/share/ledger/
+# PostgreSQL 16: the package source, and the upgrade of an older cluster
+# (run by `ledger update run` once after an update, or by hand).
+install -m 0755 "$src/deploy/pgdg.sh" /usr/local/share/ledger/pgdg.sh
+install -m 0755 "$src/deploy/pg-upgrade.sh" /usr/local/share/ledger/pg-upgrade.sh
 
 # Automatic updates: the app (user ledger) writes the schedule; the root
 # updater writes its status where the app can read it.
@@ -142,7 +146,7 @@ fi
 cat <<NEXT
 
 Installed. Next steps (first install):
-  1. PostgreSQL:   apt install postgresql
+  1. PostgreSQL:   sh /usr/local/share/ledger/pgdg.sh && apt update && apt install postgresql-16
                    cp /usr/local/share/ledger/postgresql-lowmem.conf /etc/postgresql/*/main/conf.d/ledger.conf
                    systemctl restart postgresql
   2. Database:     sh /usr/local/share/ledger/setup-db.sh

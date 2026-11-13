@@ -334,3 +334,60 @@ test("updates follow a renamed repository, never a different one", async (t) => 
 	assert.equal(await chooseUpdateRepo("me/ledger", "someone/else", gh.base), "me/ledger"); // a different repository: ignored
 	assert.equal(await chooseUpdateRepo("me/ledger", "nobody/missing", gh.base), "me/ledger"); // can't check: ignored
 });
+
+test("the PostgreSQL upgrade: after a backup, once per Ledger version, recorded and reported", async (t) => {
+	const { maybeUpgradePostgres, PG_UPGRADE_FILE } = await import("../src/updater.ts");
+	const dir = await mkdtemp(path.join(tmpdir(), "ledger-pg-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const script = path.join(dir, "pg-upgrade.sh");
+	await writeFile(script, "#!/bin/sh\n");
+	const calls: string[] = [];
+	const notices: string[] = [];
+	const make = (check: number, run: { code: number; out: string }, backupFails = false) => ({
+		script,
+		statusDir: dir,
+		currentVersion: "0.17.0",
+		backup: async () => {
+			calls.push("backup");
+			if (backupFails) throw new Error("the database backup failed");
+		},
+		exec: async (_s: string, args: string[]) => {
+			calls.push(args[0] ?? "upgrade");
+			return args[0] === "--check" ? { code: check, out: "" } : run;
+		},
+		notify: async (n: { title: string }) => void notices.push(n.title),
+	});
+	const record = async () => JSON.parse(await readFile(path.join(dir, PG_UPGRADE_FILE), "utf8"));
+
+	// Already on the right version: nothing happens, not even a backup.
+	assert.equal(await maybeUpgradePostgres(make(0, { code: 0, out: "" })), "none");
+	assert.deepEqual(calls, ["--check"]);
+	// No script installed (an old layout): nothing.
+	assert.equal(await maybeUpgradePostgres({ ...make(10, { code: 0, out: "" }), script: path.join(dir, "missing.sh") }), "none");
+
+	// The backup fails: the upgrade doesn't start, and isn't retried by this version.
+	calls.length = 0;
+	assert.equal(await maybeUpgradePostgres(make(10, { code: 0, out: "" }, true)), "failed");
+	assert.deepEqual(calls, ["--check", "backup"]);
+	assert.match((await record()).message, /not upgraded: the database backup failed/);
+	assert.deepEqual(notices, ["The database upgrade to PostgreSQL 16 did not go through"]);
+	calls.length = 0;
+	assert.equal(await maybeUpgradePostgres(make(10, { code: 0, out: "" })), "skipped");
+	assert.deepEqual(calls, ["--check"]);
+	// A newer Ledger tries again; so does the manual command.
+	assert.equal(await maybeUpgradePostgres({ ...make(10, { code: 1, out: "pg-upgrade: not enough free disk space\n" }), currentVersion: "0.17.1" }), "failed");
+	assert.equal((await record()).message, "not enough free disk space");
+	calls.length = 0;
+	notices.length = 0;
+	assert.equal(await maybeUpgradePostgres({ ...make(10, { code: 0, out: "pg-upgrade: done: Ledger now runs on PostgreSQL 16.\n" }), currentVersion: "0.17.1", force: true }), "done");
+	assert.deepEqual(calls, ["--check", "backup", "upgrade"]);
+	assert.deepEqual([(await record()).ok, (await record()).ledger_version], [true, "0.17.1"]);
+	assert.deepEqual(notices, ["Database upgraded to PostgreSQL 16"]);
+
+	// Turned off in ledger.env.
+	process.env.LEDGER_PG_UPGRADE = "off";
+	t.after(() => delete process.env.LEDGER_PG_UPGRADE);
+	calls.length = 0;
+	assert.equal(await maybeUpgradePostgres(make(10, { code: 0, out: "" })), "none");
+	assert.deepEqual(calls, []);
+});

@@ -386,13 +386,116 @@ export async function chooseUpdateRepo(base: string, saved: string | null, apiBa
 	return base;
 }
 
+// ---------------------------------------------------------------------------
+// PostgreSQL major-version upgrade (deploy/pg-upgrade.sh)
+// ---------------------------------------------------------------------------
+
+export const PG_UPGRADE_FILE = "pg-upgrade.json";
+
+export interface PgUpgradeRecord {
+	/** The Ledger version that tried. */
+	ledger_version: string;
+	ok: boolean;
+	message: string;
+	at: string;
+}
+
+export interface PgUpgradeOptions {
+	/** deploy/pg-upgrade.sh as installed. */
+	script: string;
+	statusDir: string;
+	currentVersion: string;
+	/** Try even if this Ledger version already failed (the manual command). */
+	force?: boolean;
+	/** Backs up every organization first; the upgrade doesn't start if this fails. */
+	backup: () => Promise<void>;
+	/** Runs the script; returns its exit code and the end of its output. */
+	exec?: (script: string, args: string[]) => Promise<{ code: number; out: string }>;
+	notify?: (n: { title: string; body: string; level: "success" | "danger" }) => Promise<void>;
+	now?: () => number;
+}
+
+function execCapture(script: string, args: string[]): Promise<{ code: number; out: string }> {
+	return new Promise((resolve) => {
+		const p = spawn("sh", [script, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+		let out = "";
+		const add = (d: Buffer) => {
+			process.stderr.write(d);
+			out = (out + d.toString()).slice(-6000);
+		};
+		p.stdout.on("data", add);
+		p.stderr.on("data", add);
+		p.on("error", (e) => resolve({ code: 127, out: e.message }));
+		p.on("exit", (code) => resolve({ code: code ?? 1, out }));
+	});
+}
+
+/**
+ * Moves the server's PostgreSQL to the version this Ledger release is built
+ * for, when it is older: after a backup, with deploy/pg-upgrade.sh (which
+ * keeps the old cluster and puts it back if Ledger doesn't come up). Tried
+ * once per Ledger version; LEDGER_PG_UPGRADE=off in ledger.env turns it off.
+ */
+export async function maybeUpgradePostgres(o: PgUpgradeOptions): Promise<"none" | "skipped" | "done" | "failed"> {
+	if (!o.force && (process.env.LEDGER_PG_UPGRADE ?? "").toLowerCase() === "off") return "none";
+	if (!(await fsp.stat(o.script).catch(() => null))?.isFile()) return "none";
+	const exec = o.exec ?? execCapture;
+	const check = await exec(o.script, ["--check"]);
+	if (check.code !== 10) return "none"; // already there (0), or not something this script handles
+	const file = path.join(o.statusDir, PG_UPGRADE_FILE);
+	let prev: PgUpgradeRecord | null = null;
+	try {
+		prev = JSON.parse(await fsp.readFile(file, "utf8")) as PgUpgradeRecord;
+	} catch {
+		prev = null;
+	}
+	if (!o.force && prev && !prev.ok && prev.ledger_version === o.currentVersion) return "skipped";
+
+	const last = (out: string) => out.trim().split("\n").filter(Boolean).slice(-3).join(" ").replaceAll("pg-upgrade: ", "").slice(0, 900);
+	let ok = false;
+	let message: string;
+	try {
+		await o.backup();
+		log.info("upgrading PostgreSQL");
+		const r = await exec(o.script, []);
+		ok = r.code === 0;
+		message = last(r.out) || (ok ? "PostgreSQL was upgraded." : `The upgrade script failed (exit ${r.code}).`);
+	} catch (err) {
+		message = `The database was not upgraded: ${(err as Error).message}`;
+	}
+	const rec: PgUpgradeRecord = { ledger_version: o.currentVersion, ok, message, at: new Date((o.now ?? Date.now)()).toISOString() };
+	await writeFileAtomic(file, JSON.stringify(rec, null, 2) + "\n", 0o644).catch((e: Error) => log.warn("could not record the PostgreSQL upgrade", { err: e.message }));
+	log[ok ? "info" : "error"]("postgresql upgrade", { ok, message });
+	await o
+		.notify?.(ok ? { title: "Database upgraded to PostgreSQL 16", body: message, level: "success" } : { title: "The database upgrade to PostgreSQL 16 did not go through", body: `${message} Ledger keeps running on the previous version; it will try again after the next Ledger update, or run \`ledger update pg-upgrade\` on the server.`, level: "danger" })
+		.catch((e: Error) => log.warn("could not post the PostgreSQL upgrade to the dashboard", { err: e.message }));
+	return ok ? "done" : "failed";
+}
+
 export const UPDATE_USAGE = `usage:
-  ledger update run    check for and install a release if requested or due
-                       (run by ledger-update.service as root)`;
+  ledger update run          check for and install a release if requested or due
+                             (run by ledger-update.service as root)
+  ledger update pg-upgrade   move the database to PostgreSQL 16 now (as root)`;
 
 export async function runUpdateCommand(args: string[], currentVersion: string, dirs: UpdateDirs): Promise<void> {
-	if (args.length !== 1 || args[0] !== "run") throw new Error(UPDATE_USAGE);
-	if (process.getuid?.() !== 0) throw new Error("ledger update run must run as root (it is started by ledger-update.service)");
+	if (args.length !== 1 || (args[0] !== "run" && args[0] !== "pg-upgrade")) throw new Error(UPDATE_USAGE);
+	if (process.getuid?.() !== 0) throw new Error("ledger update must run as root (it is started by ledger-update.service)");
+	const pgUpgrade = (force: boolean, backup: () => Promise<void>) =>
+		maybeUpgradePostgres({
+			script: process.env.LEDGER_PG_UPGRADE_SCRIPT || "/usr/local/share/ledger/pg-upgrade.sh",
+			statusDir: dirs.status,
+			currentVersion,
+			force,
+			backup,
+			notify: process.env.DATABASE_URL ? (n) => postUpdateNotice(process.env.DATABASE_URL!, { ...n, key: "pg-upgrade" }) : undefined,
+		});
+	if (args[0] === "pg-upgrade") {
+		const sys0 = systemOps(process.env.LEDGER_UPDATE_CACHE || "/var/cache/ledger-update", process.env.HTTP_ADDR || ":8080");
+		const r = await pgUpgrade(true, sys0.backup);
+		process.stdout.write(r === "none" ? "nothing to do\n" : `${r}\n`);
+		if (r === "failed") process.exitCode = 1;
+		return;
+	}
 	const base = baseUpdateRepo();
 	if (!REPO_RE.test(base)) throw new Error(`LEDGER_UPDATE_REPO must look like owner/name, got ${JSON.stringify(base)}`);
 	const apiBase = process.env.LEDGER_UPDATE_API || "https://api.github.com";
@@ -404,6 +507,8 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 	await fsp.chmod(cacheDir, 0o700);
 	const sys = systemOps(cacheDir, process.env.HTTP_ADDR || ":8080");
 	const databaseUrl = process.env.DATABASE_URL ?? "";
+	// Once after an update: the database moves to the PostgreSQL version this release is built for.
+	await pgUpgrade(false, sys.backup).catch((err: Error) => log.error("postgresql upgrade", { err: err.message }));
 	let modules: UpdaterOptions["modules"];
 	if (databaseUrl) {
 		const base = { restart: sys.restart, healthy: sys.healthy };
@@ -484,11 +589,11 @@ async function provisionOrganizations(databaseUrl: string, dirs: UpdateDirs, bas
 }
 
 /** One notification, key "update", replaced by each outcome. */
-async function postUpdateNotice(databaseUrl: string, n: { title: string; body: string; level: "success" | "danger" }): Promise<void> {
+async function postUpdateNotice(databaseUrl: string, n: { title: string; body: string; level: "success" | "danger"; key?: string }): Promise<void> {
 	const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 });
 	await client.connect();
 	try {
-		await postLedgerNotice(client, { key: "update", ...n, link: "/settings/updates" });
+		await postLedgerNotice(client, { ...n, key: n.key ?? "update", link: "/settings/updates" });
 	} finally {
 		await client.end();
 	}

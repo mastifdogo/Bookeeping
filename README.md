@@ -121,7 +121,8 @@ Without Proxmox, run the steps the script automates yourself, as root, from
 the unpacked release:
 
 ```sh
-apt install -y postgresql
+apt install -y curl ca-certificates
+sh deploy/pgdg.sh && apt update && apt install -y postgresql-16   # PostgreSQL 16 (Debian 12's own is 15)
 sh deploy/install.sh                                  # user, program, systemd units, /etc/ledger/ledger.env
 cp /usr/local/share/ledger/postgresql-lowmem.conf /etc/postgresql/*/main/conf.d/ledger.conf
 systemctl restart postgresql

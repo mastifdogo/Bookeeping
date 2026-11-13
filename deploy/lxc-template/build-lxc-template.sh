@@ -104,8 +104,13 @@ done
 # --- Packages and sources --------------------------------------------------------
 packages=(
 	systemd-sysv dbus iproute2 iputils-ping openssh-server ca-certificates
-	curl less nano procps tzdata postgresql smbclient
+	curl less nano procps tzdata smbclient
 )
+# PostgreSQL 16. Where the distribution's own is older (Debian 12 has 15,
+# Ubuntu 22.04 has 14) it comes from the PostgreSQL project's repository,
+# installed inside the image below; elsewhere from the distribution.
+PG_VERSION=16
+case "$SUITE" in bookworm | jammy) PG_FROM_PGDG=1 ;; *) PG_FROM_PGDG=0; packages+=(postgresql) ;; esac
 # Sources name the distribution's keyring explicitly (signed-by), so the
 # build works on any host: apt on an Ubuntu build machine does not trust
 # Debian's archive keys by default, and vice versa. The keyring package is
@@ -148,9 +153,22 @@ set -eu
 root=\$1
 in_root() { chroot "\$root" "\$@"; }
 
-# Ledger, installed by its own installer inside the image.
 mkdir -p "\$root/opt/ledger-release"
 cp -R "$stage/." "\$root/opt/ledger-release/"
+
+if [ "$PG_FROM_PGDG" = 1 ]; then
+	# The image needs name resolution for this step only.
+	made_resolv=0
+	if [ ! -s "\$root/etc/resolv.conf" ]; then cp /etc/resolv.conf "\$root/etc/resolv.conf"; made_resolv=1; fi
+	in_root sh /opt/ledger-release/deploy/pgdg.sh
+	in_root env DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 apt-get update -q >/dev/null
+	in_root env DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 apt-get install -y -q postgresql-$PG_VERSION >/dev/null
+	in_root apt-get clean
+	[ "\$made_resolv" = 1 ] && rm -f "\$root/etc/resolv.conf"
+	[ -x "\$root/usr/lib/postgresql/$PG_VERSION/bin/postgres" ] || { echo "PostgreSQL $PG_VERSION did not install in the image" >&2; exit 1; }
+fi
+
+# Ledger, installed by its own installer inside the image.
 mkdir -p "\$root/app/csv_data"
 in_root env LEDGER_UID=990 CSV_DIR=/app/csv_data sh /opt/ledger-release/deploy/install.sh >/dev/null
 in_root chown ledger:ledger /app/csv_data

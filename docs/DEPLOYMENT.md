@@ -208,14 +208,17 @@ right `chown` command if it can't.
 
 ```sh
 pct enter 120                        # or ssh root@ledger
-apt update && apt install -y postgresql
+apt update && apt install -y curl ca-certificates
 ```
 
 Copy the release tarball into the container (e.g. `pct push 120
-ledger-….tar.gz /root/ledger.tar.gz` on the host), then:
+ledger-….tar.gz /root/ledger.tar.gz` on the host), then install PostgreSQL
+16 (from the PostgreSQL project's repository: Debian 12's own is 15) and
+Ledger:
 
 ```sh
 cd /root && tar xzf ledger.tar.gz && cd ledger-*/
+sh deploy/pgdg.sh && apt update && apt install -y postgresql-16
 sh deploy/install.sh
 ```
 
@@ -441,6 +444,34 @@ Test a restore now and then (into a scratch database name) so you know the
 backups work.
 
 ## 9. Upgrading
+
+### PostgreSQL 16
+
+Since Ledger 0.17.0 the container template and the deploy script install
+PostgreSQL 16. A server set up earlier runs the PostgreSQL its distribution
+shipped (15 on Debian 12) and is **moved to 16 by the updater**, once, a few
+minutes after it has updated to 0.17.0 or later:
+
+1. it backs up every organization as usual (if that fails, nothing happens);
+2. `/usr/local/share/ledger/pg-upgrade.sh` installs PostgreSQL 16 from
+   apt.postgresql.org, saves all databases and roles to
+   `/var/lib/ledger/pg-upgrade/before-pg16-….sql.gz`, stops Ledger and runs
+   Debian's `pg_upgradecluster` (the data is copied into a new PostgreSQL 16
+   cluster on the same port; the old cluster is left in place, stopped);
+3. Ledger is started and checked. If it doesn't answer, the old cluster is
+   put back and the new one removed.
+
+The outcome is on the dashboard and in `journalctl -u ledger-update`. It
+needs free disk space of about three times the database's size plus 500 MB,
+and the container must reach apt.postgresql.org and www.postgresql.org. A
+failed attempt is not repeated until the next Ledger update; run it by hand
+with `ledger update pg-upgrade` (as root). To keep a server on its current
+PostgreSQL, add `LEDGER_PG_UPGRADE=off` to `/etc/ledger/ledger.env`.
+
+Afterwards the old cluster still takes disk space. Once satisfied, remove
+it: `pg_lsclusters` shows it as `15 main … down`, and
+`pg_dropcluster 15 main` deletes it. Backups made by PostgreSQL 16 can't be
+restored on a server still running 15; the other way round works.
 
 ### Automatically (recommended)
 
