@@ -18,9 +18,15 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to create, e.g. v0.4.0'
+        description: 'Release tag to create, e.g. v0.17.0-debian13.1 (a tag with a suffix is published as a pre-release)'
         required: true
         type: string
+      suite:
+        description: 'Debian release the container template is built on'
+        required: false
+        default: trixie
+        type: choice
+        options: [trixie, bookworm]
 
 permissions:
   contents: write # create the release and upload assets
@@ -35,6 +41,8 @@ jobs:
     timeout-minutes: 45
     env:
       VERSION: ${{ inputs.tag || github.ref_name }}
+      # This branch (debian-13-test) builds the template on Debian 13 unless told otherwise.
+      SUITE: ${{ inputs.suite || 'trixie' }}
     services:
       postgres:
         image: postgres:16
@@ -72,8 +80,11 @@ jobs:
           work=$(mktemp -d)
           get() { curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 300 "$1" -o "$2"; }
           get https://deb.debian.org/debian/dists/bookworm/main/binary-all/Packages.xz "$work/Packages.xz"
+          # The keyring of the release being built knows that release's signing keys.
+          get "https://deb.debian.org/debian/dists/$SUITE/main/binary-all/Packages.xz" "$work/Packages-suite.xz"
           for pkg in debian-archive-keyring mmdebstrap; do
-            read -r file sum < <(xz -dc "$work/Packages.xz" | awk -v p="$pkg" '
+            list="$work/Packages.xz"; [ "$pkg" = debian-archive-keyring ] && list="$work/Packages-suite.xz"
+            read -r file sum < <(xz -dc "$list" | awk -v p="$pkg" '
               $1 == "Package:" { hit = ($2 == p) }
               hit && $1 == "Filename:" { f = $2 }
               hit && $1 == "SHA256:" { s = $2 }
@@ -98,9 +109,8 @@ jobs:
 
       - name: Build LXC templates
         run: |
-          # Debian 12 only (an Ubuntu template can still be built by hand: --suite noble).
           sudo deploy/lxc-template/build-lxc-template.sh \
-            --suite bookworm --version "$VERSION" \
+            --suite "$SUITE" --version "$VERSION" \
             --release "dist/ledger-$VERSION-linux-amd64.tar.gz"
           sudo chown -R "$(id -u):$(id -g)" dist
 
@@ -113,10 +123,10 @@ jobs:
       - name: Release notes
         run: |
           base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$VERSION"
-          deb="debian-12-ledger_${VERSION}_amd64.tar.zst"
+          deb="debian-$([ "$SUITE" = trixie ] && echo 13 || echo 12)-ledger_${VERSION}_amd64.tar.zst"
           sum() { awk -v f="$1" '$2 == f { print $1 }' dist/SHA256SUMS; }
           cat > notes.md <<EOF
-          ## Proxmox LXC template
+          ## Proxmox LXC template (Debian $([ "$SUITE" = trixie ] && echo "13, test build" || echo 12))
 
           On the Proxmox host (as root), download the template into the local template store:
 

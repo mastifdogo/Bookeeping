@@ -110,7 +110,8 @@ packages=(
 # Ubuntu 22.04 has 14) it comes from the PostgreSQL project's repository,
 # installed inside the image below; elsewhere from the distribution.
 PG_VERSION=16
-case "$SUITE" in bookworm | jammy) PG_FROM_PGDG=1 ;; *) PG_FROM_PGDG=0; packages+=(postgresql) ;; esac
+# Debian 13's own is 17: Ledger stays on 16 everywhere, so that also comes from the project's repository.
+case "$SUITE" in bookworm | trixie | jammy) PG_FROM_PGDG=1 ;; *) PG_FROM_PGDG=0; packages+=(postgresql) ;; esac
 # Sources name the distribution's keyring explicitly (signed-by), so the
 # build works on any host: apt on an Ubuntu build machine does not trust
 # Debian's archive keys by default, and vice versa. The keyring package is
