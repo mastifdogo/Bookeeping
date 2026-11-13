@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import type { App } from "./app.ts";
-import { isPgError } from "./db.ts";
+import { isPgError, withDatabase, withTx } from "./db.ts";
 import {
 	BadCredentialsError,
 	ConflictError,
@@ -63,22 +63,27 @@ import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
 import {
 	applyConfigChange,
 	backupsInstalled,
+	fetchDriveBackup,
+	fetchShareBackup,
 	isBackupFolder,
+	isSettingsFolder,
 	listDriveBackups,
+	SETTINGS_FILE,
+	orgBackupDir,
+	readOrgConfig,
 	listShareDumps,
 	checkShare,
 	nextBackupTime,
 	pollDeviceFlow,
 	publicConfig,
 	readBackupStatus,
-	readConfig,
 	revokeGoogle,
 	runBackup,
 	startDeviceFlow,
 	testShare,
 	writeConfig,
 } from "./backup.ts";
-import { RESTORE_CONFIRM, prepareRestore, readRestoreStatus } from "./restore.ts";
+import { RESTORE_CONFIRM, prepareRestore, readRestoreStatus, readSettingsFile } from "./restore.ts";
 import { publicSettings, saveSettings } from "./module-settings.ts";
 import { notifySettings } from "./module-host.ts";
 import {
@@ -95,8 +100,12 @@ import { changePassword, createUser, findUser, hashToken, listUsers, login, logo
 import {
 	allMemberships,
 	createOrganization,
+	currentOrg,
+	filesDir,
 	finishSetup,
+	getOrganization,
 	inOrg,
+	MAIN_ORG,
 	listOrganizations,
 	mirrorUser,
 	ORG_KINDS,
@@ -795,10 +804,30 @@ async function requireBackups(c: Ctx): Promise<void> {
 	}
 }
 
+/**
+ * The current organization's backups: each organization has its own settings,
+ * status and destinations (orgBackupDir), and backs up only its own books.
+ */
+async function orgBackups(c: Ctx) {
+	const org = currentOrg();
+	const db = org.id === MAIN_ORG ? "" : org.db_name;
+	const base = c.app.backup.dir;
+	const dir = orgBackupDir(base, db);
+	return {
+		db,
+		base,
+		dir,
+		work: pathMod.join(dir, "tmp"),
+		databaseUrl: db && c.app.backup.databaseUrl ? withDatabase(c.app.backup.databaseUrl, db) : c.app.backup.databaseUrl,
+		config: () => readOrgConfig(base, db),
+	};
+}
+
 async function restoreInfo(c: Ctx) {
-	const status = await readRestoreStatus(c.app.backup.dir);
+	const b = await orgBackups(c);
+	const status = await readRestoreStatus(b.dir);
 	// A restore that never finished (the updater isn't installed, or the server restarted).
-	if (status.state === "running" && !c.app.backup.restoring && Date.now() - Date.parse(status.started_at ?? "") > 3 * 3600_000) {
+	if (status.state === "running" && !c.app.backup.restoring.has(b.db) && Date.now() - Date.parse(status.started_at ?? "") > 3 * 3600_000) {
 		Object.assign(status, { state: "error", phase: "", message: "The restore did not finish (see journalctl -u ledger-update on the server)." });
 	}
 	return status;
@@ -806,21 +835,74 @@ async function restoreInfo(c: Ctx) {
 
 async function handleRestorable(c: Ctx): Promise<void> {
 	await requireBackups(c);
-	const config = await readConfig(c.app.backup.dir);
+	const b = await orgBackups(c);
+	const config = await b.config();
 	const backups: { source: "share" | "google"; name: string; size_bytes: number; modified_at: string }[] = [];
 	const problems: string[] = [];
 	if (config.share.enabled) {
-		const list = await listShareDumps(config.share, pathMod.join(c.app.backup.dir, "tmp"), 30);
-		backups.push(...list.filter((b) => isBackupFolder(b.name)).map((b) => ({ source: "share" as const, ...b })));
+		const list = await listShareDumps(config.share, b.work, 30);
+		backups.push(...list.map((x) => ({ source: "share" as const, ...x })));
 	}
 	if (config.google.enabled) {
 		try {
-			backups.push(...(await listDriveBackups(config.google, c.app.backup.google, 30)).map((b) => ({ source: "google" as const, ...b })));
+			backups.push(...(await listDriveBackups(config.google, c.app.backup.google, 30)).map((x) => ({ source: "google" as const, ...x })));
 		} catch (err) {
 			problems.push(`Google Drive: ${(err as Error).message}`);
 		}
 	}
-	writeJSON(c.res, 200, { backups, problems, confirm: RESTORE_CONFIRM });
+	// The books' backups and the settings' are separate lists.
+	writeJSON(c.res, 200, { backups: backups.filter((x) => isBackupFolder(x.name)), settings: backups.filter((x) => isSettingsFolder(x.name)), problems, confirm: RESTORE_CONFIRM });
+}
+
+/** Puts back an organization's settings (its modules' settings and backup schedule) from a settings backup. */
+async function handleRestoreSettings(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const body = (await readJSON(c, true)) as { source?: unknown; backup?: unknown };
+	const err = new ValidationError();
+	if (body.source !== "share" && body.source !== "google") err.add("source", "must be share or google");
+	if (typeof body.backup !== "string" || !isSettingsFolder(body.backup)) err.add("backup", "choose a settings backup");
+	err.throwIfAny();
+	const b = await orgBackups(c);
+	const config = await b.config();
+	const dest = pathMod.join(b.dir, "restore-settings");
+	let file;
+	try {
+		if (body.source === "google") await fetchDriveBackup(config.google, c.app.backup.google, body.backup as string, dest);
+		else await fetchShareBackup(config.share, b.work, body.backup as string, dest);
+		file = await readSettingsFile(pathMod.join(dest, SETTINGS_FILE));
+	} catch (e) {
+		throw new ConflictError(`the settings were not restored: ${(e as Error).message}`);
+	} finally {
+		await fsp.rm(dest, { recursive: true, force: true }).catch(() => {});
+	}
+	// Modules' settings: exactly what the file holds.
+	await withTx(c.app.db, {}, async (tx) => {
+		await tx.query(`DELETE FROM module_settings WHERE NOT (module_id = ANY($1::text[]))`, [Object.keys(file.modules)]);
+		for (const [id, values] of Object.entries(file.modules)) {
+			await tx.query(
+				`INSERT INTO module_settings (module_id, "values", updated_by) VALUES ($1, $2::jsonb, $3)
+				 ON CONFLICT (module_id) DO UPDATE SET "values" = EXCLUDED."values", updated_at = now(), updated_by = EXCLUDED.updated_by`,
+				[id, JSON.stringify(values), c.user!.id],
+			);
+		}
+	});
+	for (const m of c.app.modules.modules.values()) if (!m.error) await notifySettings(c.app, m).catch((e: Error) => log.warn("module settings change", { module: m.manifest.id, err: e.message }));
+	// The backup schedule and what is kept; destinations and their passwords are not in the file.
+	const bk = file.backup;
+	if (bk && typeof bk === "object") {
+		try {
+			const next = applyConfigChange(config, {
+				schedule: bk.schedule,
+				include_csv: bk.include_csv,
+				share: { ...config.share, password: null, keep_days: bk.share_keep_days },
+				google: { enabled: config.google.enabled, client_id: config.google.client_id, keep_count: bk.google_keep_count },
+			});
+			await writeConfig(b.dir, next);
+		} catch (e) {
+			log.warn("restore settings: the backup schedule in the file was not applied", { err: (e as Error).message });
+		}
+	}
+	writeJSON(c.res, 200, { ...(await backupsInfo(c)), settings_restored: { backup: body.backup, made_at: file.made_at, modules: Object.keys(file.modules) } });
 }
 
 async function handleRestore(c: Ctx): Promise<void> {
@@ -831,32 +913,35 @@ async function handleRestore(c: Ctx): Promise<void> {
 	if (typeof body.backup !== "string" || !isBackupFolder(body.backup)) err.add("backup", "choose a backup");
 	if (body.confirm !== RESTORE_CONFIRM) err.add("confirm", `type ${RESTORE_CONFIRM} to confirm`);
 	err.throwIfAny();
-	if (!c.app.backup.databaseUrl) throw new ConflictError("DATABASE_URL is not known to the app");
-	if (c.app.backup.running) throw new ConflictError("a backup is running; try again when it has finished");
-	if (c.app.backup.restoring || (await restoreInfo(c)).state === "running") throw new ConflictError("a restore is already running");
+	const b = await orgBackups(c);
+	if (!b.databaseUrl) throw new ConflictError("DATABASE_URL is not known to the app");
+	if (c.app.backup.running.has(b.db)) throw new ConflictError("a backup is running; try again when it has finished");
+	if (c.app.backup.restoring.size > 0 || (await restoreInfo(c)).state === "running") throw new ConflictError("a restore is already running");
 	const job = prepareRestore({
-		backupDir: c.app.backup.dir,
+		baseDir: b.base,
+		db: b.db,
 		configDir: c.app.update.config,
-		databaseUrl: c.app.backup.databaseUrl,
-		csvDir: c.app.csvDir,
+		databaseUrl: b.databaseUrl,
+		csvDir: await filesDir(c.app),
 		google: c.app.backup.google,
 		source: body.source as "share" | "google",
 		backup: body.backup as string,
 		requestedBy: c.user!.username,
 	}).finally(() => {
-		c.app.backup.restoring = null;
+		c.app.backup.restoring.delete(b.db);
 	});
-	c.app.backup.restoring = job;
+	c.app.backup.restoring.set(b.db, job);
 	await new Promise((r) => setTimeout(r, 150));
 	writeJSON(c.res, 202, await backupsInfo(c));
 }
 
 async function backupsInfo(c: Ctx) {
-	const available = await backupsInstalled(c.app.backup.dir);
-	const config = await readConfig(c.app.backup.dir);
-	const status = await readBackupStatus(c.app.backup.dir);
+	const b = await orgBackups(c);
+	const available = await backupsInstalled(b.base);
+	const config = await b.config();
+	const status = await readBackupStatus(b.dir);
 	// A run that died without finishing (container restarted) is not running any more.
-	if (status.state === "running" && !c.app.backup.running && Date.now() - Date.parse(status.started_at ?? "") > 3 * 3600_000) {
+	if (status.state === "running" && !c.app.backup.running.has(b.db) && Date.now() - Date.parse(status.started_at ?? "") > 3 * 3600_000) {
 		Object.assign(status, { state: "error", message: "The last backup did not finish (the server may have restarted)." });
 	}
 	return {
@@ -864,8 +949,10 @@ async function backupsInfo(c: Ctx) {
 		config: publicConfig(config),
 		status,
 		next_run: nextBackupTime(config),
-		share_files: available && config.share.enabled ? await listShareDumps(config.share, pathMod.join(c.app.backup.dir, "tmp")) : [],
+		share_files: available && config.share.enabled ? (await listShareDumps(config.share, b.work, 20)).filter((f) => !isSettingsFolder(f.name)).slice(0, 10) : [],
 		restore: await restoreInfo(c),
+		/** Whether this user may point the backups at another mounted folder (server admins only). */
+		can_change_folder: c.user!.server_admin === true,
 	};
 }
 
@@ -876,21 +963,30 @@ async function handleGetBackups(c: Ctx): Promise<void> {
 async function handlePutBackupConfig(c: Ctx): Promise<void> {
 	await requireBackups(c);
 	const body = await decodeBody(c, true, (v) => plainJson(v));
-	const next = applyConfigChange(await readConfig(c.app.backup.dir), body);
-	await writeConfig(c.app.backup.dir, next);
+	const b = await orgBackups(c);
+	const cur = await b.config();
+	const next = applyConfigChange(cur, body);
+	// A mounted folder is a place on the server: only the server's admins choose it, so one
+	// organization's admin can't aim its backups (or restores) at another organization's folder.
+	if (next.share.mode === "folder" && next.share.path !== cur.share.path && !c.user!.server_admin) {
+		throw new HttpError(403, "only an admin of the main books can change the folder on the server; use an SMB share or Google Drive, or ask them", "forbidden");
+	}
+	await writeConfig(b.dir, next);
 	writeJSON(c.res, 200, await backupsInfo(c));
 }
 
 async function handleRunBackup(c: Ctx): Promise<void> {
 	await requireBackups(c);
-	if (!c.app.backup.databaseUrl) throw new ConflictError("DATABASE_URL is not known to the app");
-	if (c.app.backup.running) throw new ConflictError("a backup is already running");
-	const job = runBackup({ dir: c.app.backup.dir, databaseUrl: c.app.backup.databaseUrl, trigger: "manual", google: c.app.backup.google, csvDir: c.app.csvDir })
+	const b = await orgBackups(c);
+	if (!b.databaseUrl) throw new ConflictError("DATABASE_URL is not known to the app");
+	if (c.app.backup.running.has(b.db)) throw new ConflictError("a backup is already running");
+	if (c.app.backup.restoring.has(b.db)) throw new ConflictError("a restore is running");
+	const job = runBackup({ dir: b.dir, config: await b.config(), databaseUrl: b.databaseUrl, trigger: "manual", google: c.app.backup.google, csvDir: await filesDir(c.app) })
 		.catch((err: Error) => log.error("backup failed", { err: err.message }))
 		.finally(() => {
-			c.app.backup.running = null;
+			c.app.backup.running.delete(b.db);
 		});
-	c.app.backup.running = job;
+	c.app.backup.running.set(b.db, job);
 	// Give it a moment to record that it started, so the page shows "running".
 	await Promise.race([job, new Promise((r) => setTimeout(r, 300))]);
 	writeJSON(c.res, 202, await backupsInfo(c));
@@ -901,41 +997,48 @@ async function handleTestShare(c: Ctx): Promise<void> {
 	// The settings as they are on the page (not saved yet); a missing password means the saved one.
 	const body = await decodeBody(c, true, (v) => (v && typeof v === "object" && !Array.isArray(v) ? (plainJson(v) as Record<string, unknown>) : null));
 	if (!body) throw new DecodeError("expected the share settings");
+	const b = await orgBackups(c);
+	const cur = (await b.config()).share;
 	const err = new ValidationError();
-	const t = checkShare({ keep_days: 30, ...body, enabled: true }, (await readConfig(c.app.backup.dir)).share, err);
+	const t = checkShare({ keep_days: 30, ...body, enabled: true }, cur, err);
 	err.throwIfAny();
-	writeJSON(c.res, 200, await testShare(t, pathMod.join(c.app.backup.dir, "tmp")));
+	if (t.mode === "folder" && t.path !== cur.path && !c.user!.server_admin) throw new HttpError(403, "only an admin of the main books can change the folder on the server", "forbidden");
+	writeJSON(c.res, 200, await testShare(t, b.work));
 }
 
 async function handleGoogleConnect(c: Ctx): Promise<void> {
 	await requireBackups(c);
-	const config = await readConfig(c.app.backup.dir);
-	const code = await startDeviceFlow(config.google, c.app.backup.google);
-	c.app.backup.device = code;
+	const b = await orgBackups(c);
+	const code = await startDeviceFlow((await b.config()).google, c.app.backup.google);
+	c.app.backup.device.set(b.db, code);
 	writeJSON(c.res, 200, { user_code: code.user_code, verification_url: code.verification_url, expires_at: new Date(code.expires_at).toISOString(), interval: code.interval });
 }
 
 async function handleGooglePoll(c: Ctx): Promise<void> {
 	await requireBackups(c);
-	const code = c.app.backup.device;
+	const b = await orgBackups(c);
+	const code = c.app.backup.device.get(b.db);
 	if (!code) throw new ConflictError("start connecting first");
-	const config = await readConfig(c.app.backup.dir);
-	const r = await pollDeviceFlow(config.google, code, c.app.backup.google);
+	const config = await b.config();
+	// Each organization's backups go in a Drive folder of their own.
+	const org = b.db ? await getOrganization(c.app, currentOrg().id) : null;
+	const r = await pollDeviceFlow(config.google, code, c.app.backup.google, org ? `Ledger backups – ${org.name}` : undefined);
 	if (r.state === "connected") {
-		await writeConfig(c.app.backup.dir, { ...config, google: { ...r.google, enabled: true } });
-		c.app.backup.device = null;
+		await writeConfig(b.dir, { ...config, google: { ...r.google, enabled: true } });
+		c.app.backup.device.delete(b.db);
 		writeJSON(c.res, 200, { state: "connected", account: r.google.account });
 		return;
 	}
-	if (r.state !== "pending") c.app.backup.device = null;
+	if (r.state !== "pending") c.app.backup.device.delete(b.db);
 	writeJSON(c.res, 200, { state: r.state, account: "" });
 }
 
 async function handleGoogleDisconnect(c: Ctx): Promise<void> {
 	await requireBackups(c);
-	const config = await readConfig(c.app.backup.dir);
+	const b = await orgBackups(c);
+	const config = await b.config();
 	await revokeGoogle(config.google, c.app.backup.google);
-	await writeConfig(c.app.backup.dir, { ...config, google: { ...config.google, enabled: false, refresh_token: "", folder_id: "", account: "" } });
+	await writeConfig(b.dir, { ...config, google: { ...config.google, enabled: false, refresh_token: "", folder_id: "", account: "" } });
 	writeJSON(c.res, 200, await backupsInfo(c));
 }
 
@@ -1657,15 +1760,16 @@ const ROUTES: Route[] = [
 	route("POST", "/migrations/:uploadId/preview", true, handleMigrationPreview),
 	route("POST", "/migrations/:uploadId/import", true, handleMigrationImport),
 
-	route("GET", "/backups", "server", handleGetBackups),
-	route("PUT", "/backups/config", "server", handlePutBackupConfig),
-	route("POST", "/backups/run", "server", handleRunBackup),
-	route("GET", "/backups/restorable", "server", handleRestorable),
-	route("POST", "/backups/restore", "server", handleRestore),
-	route("POST", "/backups/share/test", "server", handleTestShare),
-	route("POST", "/backups/google/connect", "server", handleGoogleConnect),
-	route("POST", "/backups/google/poll", "server", handleGooglePoll),
-	route("POST", "/backups/google/disconnect", "server", handleGoogleDisconnect),
+	route("GET", "/backups", "admin", handleGetBackups),
+	route("PUT", "/backups/config", "admin", handlePutBackupConfig),
+	route("POST", "/backups/run", "admin", handleRunBackup),
+	route("GET", "/backups/restorable", "admin", handleRestorable),
+	route("POST", "/backups/restore", "admin", handleRestore),
+	route("POST", "/backups/restore-settings", "admin", handleRestoreSettings),
+	route("POST", "/backups/share/test", "admin", handleTestShare),
+	route("POST", "/backups/google/connect", "admin", handleGoogleConnect),
+	route("POST", "/backups/google/poll", "admin", handleGooglePoll),
+	route("POST", "/backups/google/disconnect", "admin", handleGoogleDisconnect),
 
 	route("GET", "/integrations/llm", "server", handleGetLlm),
 	route("PUT", "/integrations/llm", "server", handlePutLlm),

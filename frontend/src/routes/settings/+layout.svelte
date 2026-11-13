@@ -12,7 +12,7 @@
 		{ href: '/settings/users', label: 'Users', title: '', admin: true },
 		{ href: '/settings/llm', label: 'LLM API', title: '', admin: true },
 		{ href: '/settings/gmail', label: 'Gmail', title: '', admin: true },
-		{ href: '/settings/backups', label: 'Backups', title: '', admin: true },
+		{ href: '/settings/backups', label: 'Backups', title: '', admin: true, org: true },
 		{ href: '/settings/import-export', label: 'Import & export', title: '', admin: false },
 		{ href: '/settings/modules', label: 'Modules', title: '', admin: true },
 		{ href: '/settings/updates', label: 'Updates', title: '', admin: true }
@@ -20,7 +20,8 @@
 	let isAdmin = $derived(data.user?.server_admin === true);
 	// Modules' settings belong to each organization: its admins set them.
 	let orgAdmin = $derived(data.user?.role === 'admin');
-	let OWN = $derived(ALL.filter((t) => isAdmin || !t.admin));
+	// So do backups: each organization's admins manage (and restore) their own.
+	let OWN = $derived(ALL.filter((t) => isAdmin || !t.admin || (orgAdmin && 'org' in t)));
 	// Pages hidden from the sidebar stay reachable here; modules always get a
 	// tab of their own (which shows a hidden module's page too).
 	let hidden = $derived(arrangeNav(data.sidebar, data.modules).filter((i) => i.hidden && i.kind === 'core'));

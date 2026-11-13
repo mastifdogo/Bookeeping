@@ -420,7 +420,7 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 				migrateModules: (db) => migrateInstalled(modulesDir(), moduleOps(withDatabase(databaseUrl, db), base)),
 				service: { stop: () => run("systemctl", ["stop", "ledger.service"]), start: () => run("systemctl", ["start", "ledger.service"]), healthy: sys.healthy },
 			}),
-			notify: (n) => withClient(databaseUrl, (c) => postLedgerNotice(c, { key: "restore", ...n, link: "/settings/backups" })),
+			notify: (db, n) => withClient(withDatabase(databaseUrl, db), (c) => postLedgerNotice(c, { key: "restore", ...n, link: "/settings/backups" })),
 		}).catch((err: Error) => log.error("restore", { err: err.message }));
 		await provisionOrganizations(databaseUrl, dirs, base).catch((err: Error) => log.error("create organizations' databases", { err: err.message }));
 		// Modules' migrations go to every organization's database.

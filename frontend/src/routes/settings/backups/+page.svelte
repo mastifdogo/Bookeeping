@@ -36,6 +36,7 @@
 		};
 	}
 
+	const orgName = $derived(data.user?.organization?.name ?? 'this organization');
 	let busy = $state(false);
 	let error: unknown = $state(null);
 	let saved = $state(false);
@@ -95,6 +96,9 @@
 	// Restore: the backups that can be restored are listed when the card is opened.
 	type Restorable = { source: 'share' | 'google'; name: string; size_bytes: number; modified_at: string };
 	let restorable = $state<Restorable[] | null>(null);
+	let settingsBackups = $state<Restorable[]>([]);
+	let chosenSettings = $state('');
+	let settingsDone = $state('');
 	let restoreProblems = $state<string[]>([]);
 	let confirmWord = $state('RESTORE');
 	let chosen = $state('');
@@ -103,7 +107,7 @@
 	let unreachable = $state(false);
 	const restoring = $derived(info.restore.state === 'running');
 	const when = (name: string) => {
-		const m = /^ledger-(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-\d{2}([+-]\d{2})(\d{2})$/.exec(name);
+		const m = /^(?:ledger|settings)-(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-\d{2}([+-]\d{2})(\d{2})$/.exec(name);
 		return m ? `${m[1]} ${m[2]}:${m[3]} (UTC${m[4]}:${m[5]})` : name;
 	};
 	async function loadRestorable() {
@@ -111,6 +115,7 @@
 		try {
 			const r = unwrap(await api().GET('/backups/restorable'));
 			restorable = r.backups;
+			settingsBackups = r.settings;
 			restoreProblems = r.problems;
 			confirmWord = r.confirm;
 		} catch (e) {
@@ -127,6 +132,24 @@
 			typed = '';
 			chosen = '';
 			pollRestore();
+		} catch (e) {
+			restoreError = e;
+		} finally {
+			busy = false;
+		}
+	}
+	async function restoreSettings() {
+		const [source, name] = chosenSettings.split('|') as ['share' | 'google', string];
+		if (!name || !confirm(`Replace ${orgName}'s module settings and backup schedule with the ones saved ${when(name)}?`)) return;
+		restoreError = null;
+		settingsDone = '';
+		busy = true;
+		try {
+			const r = unwrap(await api().POST('/backups/restore-settings', { body: { source, backup: name } }));
+			load(r);
+			const n = r.settings_restored.modules.length;
+			settingsDone = `Settings restored from ${when(name)}: ${n} module${n === 1 ? '' : 's'} and the backup schedule.`;
+			chosenSettings = '';
 		} catch (e) {
 			restoreError = e;
 		} finally {
@@ -234,6 +257,11 @@
 	</div>
 {/if}
 
+<p class="muted">
+	Backups of <strong>{orgName}</strong>. Each organization has its own schedule and destinations, and backs up and restores only its
+	own books; its admins manage them here.
+</p>
+
 <ErrorNotice {error} />
 {#if saved}<div class="notice ok">Settings saved.</div>{/if}
 
@@ -284,8 +312,12 @@
 		<p class="muted small">Ledger also backs up before installing an update.</p>
 		<label class="inline"><input type="checkbox" bind:checked={form.include_csv} /> Also save CSV copies beside each backup</label>
 		<p class="muted small" style="margin:0.2rem 0 0 1.6rem">
-			A General Ledger CSV and each module's data as CSV (one file per module, or per table when a module has several), for the
-			main books and every organization. They open in a spreadsheet; the <code>.dump</code> file is still what restores Ledger.
+			A General Ledger CSV and each module's data as CSV (one file per module, or per table when a module has several). They open
+			in a spreadsheet; the <code>.dump</code> file is still what restores the books.
+		</p>
+		<p class="muted small">
+			Every backup also saves this organization's settings (its modules' settings and this schedule) as a separate
+			<code>settings-…</code> backup beside the books' <code>ledger-…</code> one, kept by the same rules.
 		</p>
 	</section>
 
@@ -327,9 +359,12 @@
 			<div class="row">
 				<label style="flex:1; min-width:16rem">
 					Folder in the container
-					<input bind:value={form.share.path} required placeholder="/app/csv_data/backups" />
+					<input bind:value={form.share.path} required placeholder="/app/csv_data/backups" readonly={!info.can_change_folder} />
 				</label>
 			</div>
+			{#if !info.can_change_folder}
+				<p class="muted small">Only an admin of the main books can choose another folder on the server. You can use an SMB share or Google Drive instead.</p>
+			{/if}
 			<details>
 				<summary class="small">How to mount a share into the container</summary>
 				<ol class="small">
@@ -439,14 +474,13 @@
 <section class="card restore">
 	<h2>Restore from a backup</h2>
 	<p class="muted small">
-		Replaces <strong>everything</strong> in Ledger with what a backup holds: all books (every organization), users, module data and
-		the files modules keep. Ledger backs up the current data first, then stops for a moment while it switches. Anything entered since
-		the chosen backup is no longer in Ledger afterwards (it is in the backup made just before the restore).
+		Replaces the books of <strong>{orgName}</strong> with what a backup holds: accounts, entries, module data and the files modules
+		keep. Ledger backs up the current books first, then stops for a moment while it switches. Anything entered since the chosen
+		backup is no longer in these books afterwards (it is in the backup made just before the restore).
 	</p>
 	<p class="muted small">
-		Settings kept in the books come from the backup: each module's settings, organizations, users and their roles, sidebar layouts.
-		Settings kept on the server stay as they are now: these backup settings, the update schedule, LLM API and Gmail connections, and
-		which modules are installed.
+		Not touched: other organizations, users, passwords and sign-ins, and this organization's settings (modules' settings and
+		these backup settings). Settings have their own backups; restore them separately below.
 	</p>
 	<ErrorNotice error={restoreError} />
 	{#if restoring}
@@ -490,10 +524,31 @@
 				</div>
 				{#if chosen}
 					<p class="small">
-						Users, passwords and sign-ins come from that backup too, so you may have to sign in again with the password you had
-						then. The backup must come from this version of Ledger or an older one.
+						Everyone stays signed in. The backup must come from this version of Ledger or an older one.
 					</p>
 				{/if}
+			{/if}
+			<h3>Restore settings</h3>
+			{#if settingsDone}<div class="notice ok">{settingsDone}</div>{/if}
+			{#if settingsBackups.length === 0}
+				<p class="muted small">No settings backups yet: the next backup saves one.</p>
+			{:else}
+				<div class="row">
+					<label>
+						Settings saved
+						<select bind:value={chosenSettings}>
+							<option value="">— choose —</option>
+							{#each settingsBackups as b (b.source + b.name)}
+								<option value={`${b.source}|${b.name}`}>{when(b.name)} · {b.source === 'share' ? 'network share' : 'Google Drive'}</option>
+							{/each}
+						</select>
+					</label>
+					{#if chosenSettings}<button type="button" onclick={restoreSettings} disabled={busy}>Restore these settings</button>{/if}
+				</div>
+				<p class="muted small">
+					Puts back this organization's module settings and backup schedule as they were then. The books aren't touched, and
+					where backups go (share, Google Drive) stays as it is.
+				</p>
 			{/if}
 		{/if}
 	{/if}

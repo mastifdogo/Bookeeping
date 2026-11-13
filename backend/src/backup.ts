@@ -129,7 +129,10 @@ const DUMP_RE = /^ledger-(?:([a-z0-9_]+)-)?(\d{8}T\d{6}Z)(?:-([a-z0-9-]+))?\.(du
 // <module>[-<table>].csv and, for other organizations' books,
 // <database>.dump and <database>-….csv. (Before 0.13.1 the files sat side by
 // side, named by DUMP_RE; those are still tidied away.)
-const FOLDER_RE = /^ledger-(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})([+-])(\d{2})(\d{2})$/;
+// Beside it, each run leaves settings-<same stamp>/settings.json: the
+// organization's settings (its modules' settings and the backup schedule), a
+// rolling backup of its own that a restore of the books doesn't touch.
+const FOLDER_RE = /^(?:ledger|settings)-(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})([+-])(\d{2})(\d{2})$/;
 
 /** The folder name for a backup made at `at` (ms), in time zone tz. */
 export function backupFolderName(at: number, tz: string): string {
@@ -202,7 +205,37 @@ export async function readConfig(dir: string): Promise<BackupConfig> {
 	}
 }
 
+/**
+ * Where an organization keeps its backup settings, status and working files:
+ * the state directory itself for the main books ("" or the main database),
+ * orgs/<database> inside it for any other organization.
+ */
+export function orgBackupDir(base: string, db: string): string {
+	return db ? path.join(base, "orgs", db) : base;
+}
+
+/**
+ * An organization's backup settings. Until its admins save their own, another
+ * organization follows the main books' schedule and share, in a folder of its
+ * own (named after its database) inside the main books' backup folder, so
+ * its books are backed up from the start. Google Drive is connected per
+ * organization.
+ */
+export async function readOrgConfig(base: string, db: string): Promise<BackupConfig> {
+	if (!db) return readConfig(base);
+	const dir = orgBackupDir(base, db);
+	if ((await readSmallFile(path.join(dir, CONFIG_FILE))) !== null) return readConfig(dir);
+	const main = await readConfig(base);
+	return {
+		schedule: { ...main.schedule },
+		include_csv: main.include_csv,
+		share: { ...main.share, path: path.posix.join(main.share.path, db), directory: main.share.directory ? `${main.share.directory}/${db}` : db },
+		google: { ...defaultConfig().google, keep_count: main.google.keep_count },
+	};
+}
+
 export async function writeConfig(dir: string, c: BackupConfig): Promise<void> {
+	await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
 	await writeFileAtomic(path.join(dir, CONFIG_FILE), JSON.stringify(c, null, 2) + "\n", 0o600);
 }
 
@@ -219,6 +252,7 @@ export async function readBackupStatus(dir: string): Promise<BackupStatus> {
 }
 
 async function writeStatus(dir: string, s: BackupStatus): Promise<void> {
+	await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
 	await writeFileAtomic(path.join(dir, STATUS_FILE), JSON.stringify(s, null, 2) + "\n", 0o600);
 }
 
@@ -497,13 +531,16 @@ function dumpTime(name: string): number | null {
 // ---------------------------------------------------------------------------
 
 /** Whether a name is a backup folder's (ledger-2026-11-11_20-30-00-0600). */
-export const isBackupFolder = (name: string) => FOLDER_RE.test(name);
+export const isBackupFolder = (name: string) => name.startsWith("ledger-") && FOLDER_RE.test(name);
+/** Whether a name is a settings backup's folder (settings-2026-11-11_20-30-00-0600). */
+export const isSettingsFolder = (name: string) => name.startsWith("settings-") && FOLDER_RE.test(name);
+export const SETTINGS_FILE = "settings.json";
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._ ()-]{0,127}$/;
 
 /** Copies a backup folder from the share into dest (regular files only). */
 export async function fetchShareBackup(t: ShareTarget, workDir: string, name: string, dest: string): Promise<void> {
-	if (!isBackupFolder(name)) throw new Error(`${name} is not a backup folder`);
+	if (!FOLDER_RE.test(name)) throw new Error(`${name} is not a backup folder`);
 	await fsp.rm(dest, { recursive: true, force: true });
 	await fsp.mkdir(dest, { recursive: true, mode: 0o700 });
 	if (t.mode === "folder") {
@@ -544,17 +581,17 @@ async function driveChildren(ep: GoogleEndpoints, token: string, parent: string)
 
 const DRIVE_FOLDER = "application/vnd.google-apps.folder";
 
-/** The newest backup folders on Google Drive. */
+/** The newest backup folders (books and settings) on Google Drive. */
 export async function listDriveBackups(g: GoogleTarget, ep: GoogleEndpoints, limit = 10): Promise<BackupEntry[]> {
 	if (!g.refresh_token || !g.folder_id) return [];
 	const token = await accessToken(g, ep);
-	const folders = (await driveChildren(ep, token, g.folder_id)).filter((f) => isBackupFolder(f.name));
+	const folders = (await driveChildren(ep, token, g.folder_id)).filter((f) => FOLDER_RE.test(f.name));
 	return newestFirst(folders.map((f) => ({ name: f.name, size_bytes: 0, modified_at: new Date(folderTime(f.name)!).toISOString() }))).slice(0, limit);
 }
 
 /** Downloads a backup folder from Google Drive into dest. */
 export async function fetchDriveBackup(g: GoogleTarget, ep: GoogleEndpoints, name: string, dest: string): Promise<void> {
-	if (!isBackupFolder(name)) throw new Error(`${name} is not a backup folder`);
+	if (!FOLDER_RE.test(name)) throw new Error(`${name} is not a backup folder`);
 	if (!g.refresh_token || !g.folder_id) throw new Error("Google Drive is not connected");
 	const token = await accessToken(g, ep);
 	const top = (await driveChildren(ep, token, g.folder_id)).find((f) => f.name === name);
@@ -618,7 +655,8 @@ async function copyToShare(folder: string, items: BackupItem[], t: ShareTarget, 
 		if (at !== null && now - at > t.keep_days * 86_400_000) (e.dir ? oldDirs : oldFiles).push(e.name);
 	}
 	if (oldDirs.length + oldFiles.length > 0) await smbclient(t, workDir, [...cd, ...oldDirs.map((d) => `deltree "${d}"`), ...oldFiles.map((f) => `del "${f}"`)]);
-	return `Saved ${folder} to ${shareLabel(t)}${oldDirs.length ? `; removed ${oldDirs.length} older than ${t.keep_days} days` : ""}.`;
+	const gone = oldDirs.filter(isBackupFolder).length;
+	return `Saved ${folder} to ${shareLabel(t)}${gone ? `; removed ${gone} older than ${t.keep_days} days` : ""}.`;
 }
 
 // A directory mounted into the container.
@@ -691,7 +729,7 @@ async function copyToFolder(folder: string, items: BackupItem[], t: ShareTarget,
 		const at = isFolder ? folderTime(n) : st?.mtimeMs ?? null;
 		if (st && at !== null && now - at > t.keep_days * 86_400_000) {
 			await fsp.rm(path.join(t.path, n), { recursive: true, force: true });
-			if (isFolder) removed++;
+			if (isBackupFolder(n)) removed++;
 		}
 	}
 	return `Saved ${folder} to ${t.path}${removed ? `; removed ${removed} older than ${t.keep_days} days` : ""}.`;
@@ -769,6 +807,8 @@ export async function pollDeviceFlow(
 	g: GoogleTarget,
 	code: DeviceCode,
 	ep: GoogleEndpoints,
+	/** The Drive folder to create (each organization has its own). */
+	folderName = FOLDER_NAME,
 ): Promise<{ state: "pending" | "denied" | "expired" } | { state: "connected"; google: GoogleTarget }> {
 	if (Date.now() > code.expires_at) return { state: "expired" };
 	const r = await postForm(`${ep.oauth}/token`, {
@@ -787,7 +827,7 @@ export async function pollDeviceFlow(
 	const access = String(r.body.access_token);
 	const refresh = typeof r.body.refresh_token === "string" ? r.body.refresh_token : "";
 	if (!refresh) throw new ConflictError("Google did not return a refresh token; remove Ledger's access at myaccount.google.com/permissions and connect again");
-	const folder = await driveJson(ep, access, "POST", "/drive/v3/files?fields=id", { name: FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" });
+	const folder = await driveJson(ep, access, "POST", "/drive/v3/files?fields=id", { name: folderName.slice(0, 120), mimeType: "application/vnd.google-apps.folder" });
 	const about = await driveJson(ep, access, "GET", "/drive/v3/about?fields=user(emailAddress)").catch(() => ({}));
 	const account = String((about as { user?: { emailAddress?: string } }).user?.emailAddress ?? "");
 	return { state: "connected", google: { ...g, refresh_token: refresh, folder_id: String((folder as { id: string }).id), account } };
@@ -848,7 +888,7 @@ async function uploadFileToDrive(file: string, parent: string, token: string, ep
 	if (!start.ok || !session) {
 		const j = (await start.json().catch(() => ({}))) as Record<string, unknown>;
 		throw new Error(
-			start.status === 404 ? `the "${FOLDER_NAME}" folder is gone from Google Drive; connect again to recreate it` : `Google Drive answered ${start.status}: ${googleError(j, start.statusText)}`,
+			start.status === 404 ? `the backups folder is gone from Google Drive; connect again to recreate it` : `Google Drive answered ${start.status}: ${googleError(j, start.statusText)}`,
 		);
 	}
 	const put = await fetch(session, {
@@ -873,7 +913,7 @@ async function uploadToDrive(folder: string, items: BackupItem[], g: GoogleTarge
 		mimeType: "application/vnd.google-apps.folder",
 		parents: [g.folder_id],
 	}).catch((e: Error) => {
-		throw new Error(/404/.test(e.message) ? `the "${FOLDER_NAME}" folder is gone from Google Drive; connect again to recreate it` : e.message);
+		throw new Error(/404/.test(e.message) ? `the backups folder is gone from Google Drive; connect again to recreate it` : e.message);
 	})) as { id: string };
 	try {
 		const ids = new Map<string, string>([["", created.id]]);
@@ -892,12 +932,14 @@ async function uploadToDrive(folder: string, items: BackupItem[], g: GoogleTarge
 	// files from before 0.13.1 go once they're older than the oldest folder kept.
 	const q = encodeURIComponent(`'${g.folder_id}' in parents and trashed = false`);
 	const list = (await driveJson(ep, token, "GET", `/drive/v3/files?q=${q}&pageSize=1000&fields=files(id,name)`)) as { files?: { id: string; name: string }[] };
-	const folders = (list.files ?? []).filter((f) => FOLDER_RE.test(f.name)).sort((a, b) => folderTime(b.name)! - folderTime(a.name)!);
+	// (Books and settings are counted separately: each kind keeps its newest keep_count.)
+	const sameKind = isSettingsFolder(folder) ? isSettingsFolder : isBackupFolder;
+	const folders = (list.files ?? []).filter((f) => sameKind(f.name)).sort((a, b) => folderTime(b.name)! - folderTime(a.name)!);
 	const old = folders.slice(g.keep_count);
 	const oldestKept = folders.length >= g.keep_count ? folderTime(folders[Math.min(g.keep_count, folders.length) - 1]!.name)! : null;
-	const legacy = oldestKept === null ? [] : (list.files ?? []).filter((f) => DUMP_RE.test(f.name) && (dumpTime(f.name) ?? Infinity) < oldestKept);
+	const legacy = oldestKept === null || isSettingsFolder(folder) ? [] : (list.files ?? []).filter((f) => DUMP_RE.test(f.name) && (dumpTime(f.name) ?? Infinity) < oldestKept);
 	for (const f of [...old, ...legacy]) await driveJson(ep, token, "DELETE", `/drive/v3/files/${encodeURIComponent(f.id)}`);
-	return `Uploaded ${folder} to Google Drive (${g.account || "connected account"}, folder "${FOLDER_NAME}")${old.length ? `; removed ${old.length} older` : ""}.`;
+	return `Uploaded ${folder} to Google Drive (${g.account || "connected account"})${old.length ? `; removed ${old.length} older` : ""}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,15 +1046,44 @@ function run(cmd: string, args: string[]): Promise<void> {
 	});
 }
 
+/** What a settings backup holds. Secrets set in modules' settings are in it, as they are in the dump. */
+export interface OrgSettingsFile {
+	ledger_settings: 1;
+	made_at: string;
+	organization: string;
+	/** Each module's saved settings (module id → values). */
+	modules: Record<string, Record<string, unknown>>;
+	/** The backup schedule and what is kept (destinations and their passwords are not in the file). */
+	backup: { schedule: BackupSchedule; include_csv: boolean; share_keep_days: number; google_keep_count: number };
+}
+
+async function orgSettings(db: pg.Client, config: BackupConfig, at: number): Promise<OrgSettingsFile> {
+	const mods = await db.query<{ module_id: string; values: Record<string, unknown> }>(`SELECT module_id, "values" FROM module_settings ORDER BY module_id`).catch(() => ({ rows: [] }));
+	const org = await db.query<{ name: string }>(`SELECT name FROM organizations WHERE id = 1`).catch(() => ({ rows: [] as { name: string }[] }));
+	return {
+		ledger_settings: 1,
+		made_at: new Date(at).toISOString(),
+		organization: org.rows[0]?.name ?? "",
+		modules: Object.fromEntries(mods.rows.map((r) => [r.module_id, r.values])),
+		backup: { schedule: config.schedule, include_csv: config.include_csv, share_keep_days: config.share.keep_days, google_keep_count: config.google.keep_count },
+	};
+}
+
 export interface BackupOptions {
+	/** The organization's backup directory (orgBackupDir): settings, status, working files. */
 	dir: string;
+	/** The organization's database. */
 	databaseUrl: string;
+	/** The organization's settings (default: config.json in dir). */
+	config?: BackupConfig;
+	/** The organization's name, for the settings file. */
+	orgName?: string;
 	trigger: "manual" | "scheduled";
 	now?: () => number;
 	google?: GoogleEndpoints;
 	/** Installed modules, to name their CSV copies (default: /var/lib/ledger/modules). */
 	modulesDir?: string;
-	/** The data share (CSV_DIR), where modules keep their files (ctx.storage). */
+	/** The organization's files directory (CSV_DIR, or .orgs/<database> in it), where modules keep their files (ctx.storage). */
 	csvDir?: string;
 	/** Writes a database's CSV copies (tests make it fail). */
 	csvCopies?: typeof writeCsvCopies;
@@ -1029,13 +1100,14 @@ export interface BackupOutcome {
 const LOCK_KEY = 0x1ed6e7; // pg_try_advisory_lock key: one backup at a time
 
 /**
- * Dumps the database and sends it to each enabled destination. Never
+ * Dumps one organization's database and sends it to each of that
+ * organization's enabled destinations. Never
  * throws for a failed backup: the outcome is in the status file, and ok is
  * true when at least one destination got the dump.
  */
 export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 	const now = o.now ?? Date.now;
-	const config = await readConfig(o.dir);
+	const config = o.config ?? (await readConfig(o.dir));
 	const prev = await readBackupStatus(o.dir);
 	let slot: number | null = null;
 	if (o.trigger === "scheduled") {
@@ -1070,14 +1142,8 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 		try {
 			if (targets.length === 0) throw new Error("no backup destination is turned on; choose a network share or Google Drive under Settings → Backups");
 			await fsp.mkdir(localDir, { recursive: true, mode: 0o700 });
-			// The main database, then each other organization's.
-			const orgs = await client
-				.query<{ db_name: string }>(`SELECT db_name FROM organizations WHERE id <> 1 AND status = 'ready' ORDER BY id`)
-				.then((r) => r.rows.map((x) => x.db_name), () => [] as string[]);
-			const dumps = [
-				{ file: path.join(localDir, "ledger.dump"), prefix: "", url: o.databaseUrl },
-				...orgs.map((d) => ({ file: path.join(localDir, `${d}.dump`), prefix: `${d}-`, url: withDatabase(o.databaseUrl, d) })),
-			];
+			// This organization's database only: every organization backs up by its own settings.
+			const dumps = [{ file: path.join(localDir, "ledger.dump"), prefix: "", url: o.databaseUrl }];
 			status.size_bytes = 0;
 			const csvs: string[] = [];
 			const csvProblems: string[] = [];
@@ -1096,19 +1162,25 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 				}
 			}
 			// What goes in the folder: the dumps and CSVs made here, and the files modules keep
-			// (from the data share: files/<module>/… for the main books, <database>-files/<module>/… for others).
+			// (from the organization's files directory, as files/<module>/…).
 			const items: BackupItem[] = (await listTree(localDir)).map((f) => ({ src: f.full, rel: f.rel }));
 			const csvDir = o.csvDir ?? (process.env.CSV_DIR || "/app/csv_data");
 			const stored: BackupItem[] = [];
-			for (const d of dumps) {
-				const root = path.join(d.prefix ? path.join(csvDir, ".orgs", d.prefix.slice(0, -1)) : csvDir, ".modules");
-				for (const f of await listTree(root)) stored.push({ src: f.full, rel: `${d.prefix}files/${f.rel}` });
-			}
+			for (const f of await listTree(path.join(csvDir, ".modules"))) stored.push({ src: f.full, rel: `files/${f.rel}` });
 			items.push(...stored);
+			// The organization's settings, as a separate rolling backup beside the books'.
+			const settingsName = name.replace(/^ledger-/, "settings-");
+			const settingsDir = path.join(workDir, settingsName);
+			await fsp.mkdir(settingsDir, { recursive: true, mode: 0o700 });
+			await fsp.writeFile(path.join(settingsDir, SETTINGS_FILE), JSON.stringify({ ...(await orgSettings(client, config, now())), ...(o.orgName !== undefined ? { organization: o.orgName } : {}) }, null, 2) + "\n", { mode: 0o600 });
+			const settingsItems: BackupItem[] = [{ src: path.join(settingsDir, SETTINGS_FILE), rel: SETTINGS_FILE }];
 			for (const t of targets) {
 				try {
 					const messages = [t === "share" ? await copyToShare(name, items, config.share, now(), workDir) : await uploadToDrive(name, items, config.google, o.google ?? googleEndpoints())];
-					const parts = [dumps.length === 1 ? "the database dump" : `${dumps.length} database dumps`];
+					if (t === "share") await copyToShare(settingsName, settingsItems, config.share, now(), workDir);
+					else await uploadToDrive(settingsName, settingsItems, config.google, o.google ?? googleEndpoints());
+					messages.push(`Settings saved beside it as ${settingsName}.`);
+					const parts = ["the database dump"];
 					if (csvs.length) parts.push(`${csvs.length} CSV ${csvs.length === 1 ? "copy" : "copies"} (general ledger${csvs.length > dumps.length ? " and modules" : ""})`);
 					if (stored.length) parts.push(`${stored.length} file${stored.length === 1 ? "" : "s"} kept by modules`);
 					if (parts.length > 1) messages.push(`It holds ${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}.`);
@@ -1138,6 +1210,7 @@ export async function runBackup(o: BackupOptions): Promise<BackupOutcome> {
 			status.message = (e as Error).message;
 		} finally {
 			await fsp.rm(localDir, { recursive: true, force: true });
+			await fsp.rm(path.join(workDir, name.replace(/^ledger-/, "settings-")), { recursive: true, force: true });
 		}
 		status.finished_at = new Date(now()).toISOString();
 		await writeStatus(o.dir, status);
@@ -1175,19 +1248,52 @@ export function nextBackupTime(c: BackupConfig, now = Date.now()): string | null
 // ---------------------------------------------------------------------------
 
 export const BACKUP_USAGE = `usage:
-  ledger backup run            back up now to the destinations set in the app
-  ledger backup run --if-due   only when the schedule says so (ledger-backup.timer)`;
+  ledger backup run            back up every organization now, each to the destinations its admins set in the app
+  ledger backup run --if-due   only the organizations whose schedule says so (ledger-backup.timer)`;
 
 export async function runBackupCommand(args: string[]): Promise<void> {
 	const ifDue = args.length === 2 && args[1] === "--if-due";
 	if (args[0] !== "run" || (args.length !== 1 && !ifDue)) throw new Error(BACKUP_USAGE);
 	const databaseUrl = process.env.DATABASE_URL;
 	if (!databaseUrl) throw new Error("DATABASE_URL is not set (run as ledger-backup.service, which loads /etc/ledger/ledger.env)");
-	const dir = backupStateDir();
-	if (!(await backupsInstalled(dir))) throw new Error(`${dir} does not exist; run deploy/install.sh from a current release`);
-	const out = await runBackup({ dir, databaseUrl, trigger: ifDue ? "scheduled" : "manual" });
-	if (!out.ran) return;
-	process.stdout.write(`${out.status.state}: ${out.status.message}\n`);
-	for (const r of out.status.results) process.stdout.write(`  ${r.target}: ${r.ok ? "ok" : "FAILED"}: ${r.message}\n`);
-	if (!out.ok) process.exitCode = 1;
+	const base = backupStateDir();
+	if (!(await backupsInstalled(base))) throw new Error(`${base} does not exist; run deploy/install.sh from a current release`);
+	const csvDir = process.env.CSV_DIR || "/app/csv_data";
+	// The main books, then every other organization, each by its own settings.
+	const orgs: { name: string; db: string }[] = [{ name: "Main books", db: "" }];
+	const client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 10_000 });
+	await client.connect();
+	try {
+		const r = await client.query<{ name: string; db_name: string }>(`SELECT name, db_name FROM organizations WHERE id <> 1 AND status = 'ready' ORDER BY id`).catch(() => ({ rows: [] }));
+		for (const o of r.rows) if (/^[a-z_][a-z0-9_]{0,62}$/.test(o.db_name)) orgs.push({ name: o.name, db: o.db_name });
+		const main = await client.query<{ name: string }>(`SELECT name FROM organizations WHERE id = 1`).catch(() => ({ rows: [] }));
+		if (main.rows[0]) orgs[0]!.name = main.rows[0].name;
+	} finally {
+		await client.end().catch(() => undefined);
+	}
+	for (const org of orgs) {
+		try {
+			const config = await readOrgConfig(base, org.db);
+			// An organization that has turned its backups off doesn't hold up the others (or an update).
+			if (org.db && !config.share.enabled && !config.google.enabled) {
+				if (!ifDue) process.stdout.write(`${org.name}: skipped, no backup destination is turned on\n`);
+				continue;
+			}
+			const out = await runBackup({
+				dir: orgBackupDir(base, org.db),
+				databaseUrl: org.db ? withDatabase(databaseUrl, org.db) : databaseUrl,
+				config,
+				csvDir: org.db ? path.join(csvDir, ".orgs", org.db) : csvDir,
+				orgName: org.name,
+				trigger: ifDue ? "scheduled" : "manual",
+			});
+			if (!out.ran) continue;
+			process.stdout.write(`${org.name}: ${out.status.state}: ${out.status.message}\n`);
+			for (const r of out.status.results) process.stdout.write(`  ${r.target}: ${r.ok ? "ok" : "FAILED"}: ${r.message}\n`);
+			if (!out.ok) process.exitCode = 1;
+		} catch (e) {
+			process.stdout.write(`${org.name}: FAILED: ${(e as Error).message}\n`);
+			process.exitCode = 1;
+		}
+	}
 }

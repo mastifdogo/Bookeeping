@@ -700,7 +700,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Backup settings, the last run and the newest dumps on the share */
+        /** The current organization's backup settings, last run and newest backups on the share */
         get: operations["getBackups"];
         put?: never;
         post?: never;
@@ -775,10 +775,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Replace all data with a backup's
-         * @description Runs in the background: backs up the current data, fetches and checks the chosen backup, then the server stops for a moment while its databases and module files are replaced by the backup's. If anything fails, nothing is changed. Progress is in `restore` of GET /backups.
+         * Replace the current organization's books with a backup's
+         * @description Runs in the background: backs up the organization's current books, fetches and checks the chosen backup, then the server stops for a moment while the organization's database and module files are replaced by the backup's. Users, passwords, sign-ins, other organizations and this organization's settings are not touched. If anything fails, nothing is changed. Progress is in `restore` of GET /backups.
          */
         post: operations["restoreBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/restore-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Put back the current organization's settings from a settings backup
+         * @description Modules' settings become what the file holds; the backup schedule and retention too (destinations are not in the file). The books are not touched.
+         */
+        post: operations["restoreBackupSettings"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2151,7 +2171,20 @@ export interface components {
                 keep_count: number;
             };
         };
+        RestorableBackup: {
+            /** @enum {string} */
+            source: "share" | "google";
+            /** @description The backup's folder */
+            name: string;
+            /** @description 0 when not known (Google Drive) */
+            size_bytes: number;
+            /** Format: date-time */
+            modified_at: string;
+        };
+        /** @description The current organization's backups (each organization has its own settings, schedule and destinations) */
         BackupInfo: {
+            /** @description Whether this user may choose another folder on the server (server admins only) */
+            can_change_folder: boolean;
             /** @description Backups are set up on this server */
             available: boolean;
             /** @description The restore in progress, or the last one */
@@ -3648,16 +3681,10 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        backups: {
-                            /** @enum {string} */
-                            source: "share" | "google";
-                            /** @description The backup's folder */
-                            name: string;
-                            /** @description 0 when not known (Google Drive) */
-                            size_bytes: number;
-                            /** Format: date-time */
-                            modified_at: string;
-                        }[];
+                        /** @description Backups of the books (ledger-…) */
+                        backups: components["schemas"]["RestorableBackup"][];
+                        /** @description Backups of the settings (settings-…) */
+                        settings: components["schemas"]["RestorableBackup"][];
                         /** @description Destinations that could not be listed */
                         problems: string[];
                         /** @description What the user must type to confirm a restore */
@@ -3693,6 +3720,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    restoreBackupSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    source: "share" | "google";
+                    /** @description A settings backup's folder (settings-…) */
+                    backup: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"] & {
+                        settings_restored: {
+                            backup: string;
+                            made_at: string;
+                            modules: string[];
+                        };
+                    };
                 };
             };
             409: components["responses"]["Error"];

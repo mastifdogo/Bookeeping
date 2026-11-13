@@ -1,19 +1,24 @@
 // Restoring from a backup (Settings → Backups → Restore).
 //
-// Replaces everything in Ledger with what a backup folder holds: the main
-// database, each other organization's database, and the files modules keep.
-// It takes two processes, because the app's database role can't replace a
-// database:
+// Replaces one organization's books with what one of its backup folders
+// holds: its database (entries, accounts, module data and settings) and the
+// files its modules keep. Other organizations are not touched, and neither
+// are the server's users, passwords, sign-ins, organizations and who may
+// open which books: those stay as they are, also when the main books (whose
+// database holds them) are restored. It takes two processes, because the
+// app's database role can't replace a database:
 //
 //   the app (user ledger)   backs up what is there now, fetches the chosen
 //                           backup into <backup dir>/restore/<name>, checks
 //                           the dumps and leaves a request for root
 //   `ledger update run`     (root, started by ledger-update.path) restores
-//                           each dump into a new database beside the live
-//                           one, brings it up to this version's schema, then
-//                           stops Ledger, swaps the databases and module
-//                           files in, and starts it; if Ledger doesn't come
-//                           up healthy, everything is swapped back
+//                           the dump into a new database beside the live
+//                           one, brings it up to this version's schema,
+//                           copies the server's users and sign-ins into it
+//                           (main books), then stops Ledger, swaps the
+//                           database and module files in, and starts it; if
+//                           Ledger doesn't come up healthy, it is all
+//                           swapped back
 //
 // A dump is restored through a temporary role that can do only what the
 // database's owner can, so a tampered dump can't run statements as the
@@ -25,7 +30,7 @@ import { createReadStream, promises as fsp } from "node:fs";
 import path from "node:path";
 import { log } from "./log.ts";
 import { readSmallFile, writeFileAtomic } from "./update.ts";
-import { checkDump, fetchDriveBackup, fetchShareBackup, isBackupFolder, readConfig, runBackup, type GoogleEndpoints } from "./backup.ts";
+import { type OrgSettingsFile, checkDump, fetchDriveBackup, fetchShareBackup, isBackupFolder, orgBackupDir, readOrgConfig, runBackup, type GoogleEndpoints } from "./backup.ts";
 
 export const RESTORE_RUN_NOW_FILE = "restore-run-now";
 export const RESTORE_STATUS_FILE = "restore-status.json";
@@ -70,6 +75,8 @@ export async function writeRestoreStatus(dir: string, s: RestoreStatus): Promise
 export const restoreStagingDir = (backupDir: string, name: string) => path.join(backupDir, "restore", name);
 
 export interface RestoreRequest {
+	/** The organization's database ("" for the main books). */
+	db: string;
 	backup: string;
 	source: RestoreStatus["source"];
 	requested_by: string;
@@ -81,8 +88,11 @@ export interface RestoreRequest {
 // ---------------------------------------------------------------------------
 
 export interface PrepareOptions {
-	backupDir: string;
+	/** The server's backup state directory, and the organization's database ("" for the main books). */
+	baseDir: string;
+	db: string;
 	configDir: string;
+	/** The organization's database and files directory. */
 	databaseUrl: string;
 	csvDir: string;
 	google: GoogleEndpoints;
@@ -108,43 +118,61 @@ export async function prepareRestore(o: PrepareOptions): Promise<RestoreStatus> 
 		finished_at: null,
 		requested_by: o.requestedBy,
 	};
-	const staging = restoreStagingDir(o.backupDir, o.backup);
+	const backupDir = orgBackupDir(o.baseDir, o.db);
+	const staging = restoreStagingDir(backupDir, o.backup);
+	const reqFile = path.join(o.configDir, RESTORE_RUN_NOW_FILE);
 	try {
-		await writeRestoreStatus(o.backupDir, status);
-		const saved = await runBackup({ dir: o.backupDir, databaseUrl: o.databaseUrl, trigger: "manual", google: o.google, csvDir: o.csvDir, now: o.now });
+		await fsp.mkdir(backupDir, { recursive: true, mode: 0o700 });
+		if ((await readSmallFile(reqFile)) !== null) throw new Error("another restore is waiting for the server; try again in a few minutes");
+		await writeRestoreStatus(backupDir, status);
+		const config = await readOrgConfig(o.baseDir, o.db);
+		const saved = await runBackup({ dir: backupDir, config, databaseUrl: o.databaseUrl, trigger: "manual", google: o.google, csvDir: o.csvDir, now: o.now });
 		if (!saved.ok) throw new Error(`the backup of the current data failed (${saved.status.message})`);
 		if (saved.status.file === o.backup) throw new Error("that is the backup that was just made");
 
 		status.phase = "fetch";
 		status.message = `Current data saved as ${saved.status.file}. Fetching ${o.backup}…`;
-		await writeRestoreStatus(o.backupDir, status);
-		const config = await readConfig(o.backupDir);
-		await fsp.rm(path.join(o.backupDir, "restore"), { recursive: true, force: true });
+		await writeRestoreStatus(backupDir, status);
+		await fsp.rm(path.join(backupDir, "restore"), { recursive: true, force: true });
 		if (o.source === "google") await fetchDriveBackup(config.google, o.google, o.backup, staging);
-		else await fetchShareBackup(config.share, path.join(o.backupDir, "tmp"), o.backup, staging);
-		const dumps = (await fsp.readdir(staging)).filter((n) => n.endsWith(".dump"));
-		if (!dumps.includes("ledger.dump")) throw new Error(`${o.backup} has no ledger.dump`);
-		for (const d of dumps) {
-			await checkDump(path.join(staging, d)).catch(() => {
-				throw new Error(`${d} in ${o.backup} is damaged or not a database dump`);
-			});
-		}
+		else await fetchShareBackup(config.share, path.join(backupDir, "tmp"), o.backup, staging);
+		if (!(await fsp.lstat(path.join(staging, "ledger.dump")).catch(() => null))?.isFile()) throw new Error(`${o.backup} has no ledger.dump`);
+		await checkDump(path.join(staging, "ledger.dump")).catch(() => {
+			throw new Error(`ledger.dump in ${o.backup} is damaged or not a database dump`);
+		});
 
 		status.phase = "waiting";
 		status.message = `Current data saved as ${saved.status.file}. Ledger will stop for a moment while it switches to ${o.backup}…`;
-		await writeRestoreStatus(o.backupDir, status);
-		const req: RestoreRequest = { backup: o.backup, source: o.source, requested_by: o.requestedBy, started_at: status.started_at! };
-		await writeFileAtomic(path.join(o.configDir, RESTORE_RUN_NOW_FILE), JSON.stringify(req) + "\n", 0o640);
+		await writeRestoreStatus(backupDir, status);
+		const req: RestoreRequest = { db: o.db, backup: o.backup, source: o.source, requested_by: o.requestedBy, started_at: status.started_at! };
+		await writeFileAtomic(reqFile, JSON.stringify(req) + "\n", 0o640);
 	} catch (err) {
 		status.state = "error";
 		status.phase = "";
 		status.message = `Nothing was changed: ${(err as Error).message}`;
 		status.finished_at = new Date(now()).toISOString();
 		await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
-		await writeRestoreStatus(o.backupDir, status).catch(() => {});
+		await writeRestoreStatus(backupDir, status).catch(() => {});
 		log.error("restore not started", { backup: o.backup, err: (err as Error).message });
 	}
 	return status;
+}
+
+/** Reads and checks a fetched settings backup. */
+export async function readSettingsFile(file: string): Promise<OrgSettingsFile> {
+	const text = await readSmallFile(file);
+	let v: OrgSettingsFile;
+	try {
+		v = JSON.parse(text ?? "") as OrgSettingsFile;
+	} catch {
+		throw new Error("the settings file is missing or damaged");
+	}
+	const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+	if (!isObj(v) || v.ledger_settings !== 1 || !isObj(v.modules)) throw new Error("that is not a Ledger settings file");
+	for (const [id, values] of Object.entries(v.modules)) {
+		if (!/^[a-z][a-z0-9-]{1,31}$/.test(id) || !isObj(values)) throw new Error(`the settings file has invalid settings for ${id}`);
+	}
+	return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +203,7 @@ export interface RestoreOps {
 }
 
 export interface RestoreOptions {
+	/** The server's backup state directory (organizations' directories are inside it). */
 	backupDir: string;
 	/** Where the app leaves the request (the update-config directory). */
 	configDir: string;
@@ -183,8 +212,8 @@ export interface RestoreOptions {
 	ownerRole?: string;
 	ops: RestoreOps;
 	now?: () => number;
-	/** Posts the outcome to the dashboard of the (restored) main books. */
-	notify?: (n: { title: string; body: string; level: "success" | "danger" }) => Promise<void>;
+	/** Posts the outcome to the dashboard of the organization (its database) whose books were restored. */
+	notify?: (db: string, n: { title: string; body: string; level: "success" | "danger" }) => Promise<void>;
 }
 
 /** After a restore, module schemas belong to their own roles again and the app role can use them. */
@@ -235,9 +264,42 @@ END $fix$;`;
 const lines = (out: string) => out.split("\n").map((l) => l.trim()).filter(Boolean);
 
 /**
+ * Tables of the main database that belong to the server, not to the main
+ * books: a restore keeps them as they are now.
+ */
+export const SERVER_TABLES = ["users", "sessions", "organizations", "memberships", "user_settings"] as const;
+
+/** An organization's settings in its database: kept by a restore of its books, saved and restored separately. */
+export const ORG_SETTINGS_TABLES = ["module_settings"] as const;
+
+/** SQL (for the restored main database) that makes a server table hold the rows in `json` (users: added or updated, never removed, since the books refer to them). */
+function loadServerTableSql(table: string, json: string): string {
+	const tag = `$j${randomBytes(6).toString("hex")}$`;
+	if (json.includes(tag)) throw new Error("unexpected data");
+	return `
+DO $load$
+DECLARE cols text; sets text; seq text; rows json := ${tag}${json}${tag}::json;
+BEGIN
+	IF to_regclass('public.${table}') IS NULL THEN RETURN; END IF;
+	SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum), string_agg(format('%I = EXCLUDED.%I', attname, attname), ', ' ORDER BY attnum) FILTER (WHERE attname <> 'id')
+	  INTO cols, sets FROM pg_attribute
+	 WHERE attrelid = 'public.${table}'::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = '';
+	${table === "users" ? "" : `DELETE FROM public.${table};`}
+	EXECUTE format('INSERT INTO public.${table} (%s) OVERRIDING SYSTEM VALUE SELECT %s FROM json_populate_recordset(NULL::public.${table}, $1)%s', cols, cols,
+		${table === "users" ? `' ON CONFLICT (id) DO UPDATE SET ' || sets` : "''"}) USING rows;
+	IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.${table}'::regclass AND attname = 'id' AND NOT attisdropped) THEN
+		seq := pg_get_serial_sequence('public.${table}', 'id');
+	END IF;
+	IF seq IS NOT NULL THEN
+		EXECUTE format('SELECT setval(%L, greatest((SELECT coalesce(max(id), 1) FROM public.${table}), (SELECT last_value FROM %s)))', seq, seq);
+	END IF;
+END $load$;`;
+}
+
+/**
  * Carries out a restore the app has asked for. Returns false when there is
  * no request. Never throws for a failed restore: the outcome is in the
- * status file.
+ * organization's status file.
  */
 export async function performRestore(o: RestoreOptions): Promise<boolean> {
 	const now = o.now ?? Date.now;
@@ -248,8 +310,9 @@ export async function performRestore(o: RestoreOptions): Promise<boolean> {
 	let req: RestoreRequest;
 	try {
 		req = JSON.parse(text) as RestoreRequest;
+		if (typeof req.db !== "string" || (req.db !== "" && !IDENT.test(req.db))) throw new Error("bad database name");
 	} catch {
-		log.error("restore request is not valid JSON; ignored");
+		log.error("restore request is not valid; ignored");
 		return true;
 	}
 	const { ops } = o;
@@ -257,7 +320,7 @@ export async function performRestore(o: RestoreOptions): Promise<boolean> {
 		...EMPTY_RESTORE,
 		state: "running",
 		phase: "restore",
-		message: "Restoring the databases…",
+		message: "Restoring the books…",
 		backup: String(req.backup),
 		source: req.source === "google" ? "google" : "share",
 		started_at: typeof req.started_at === "string" ? req.started_at : new Date(now()).toISOString(),
@@ -267,24 +330,33 @@ export async function performRestore(o: RestoreOptions): Promise<boolean> {
 	const mainDb = decodeURIComponent(url.pathname.slice(1)) || "ledger";
 	const appRole = decodeURIComponent(url.username) || "ledger_app";
 	const ownerRole = o.ownerRole ?? (process.env.OWNER_ROLE || "ledger_owner");
-	const staging = restoreStagingDir(o.backupDir, status.backup);
-	const TMP = "_restoring";
-	const OLD = "_before_restore";
-	const made: string[] = []; // new databases (without the suffix)
-	const retired: string[] = []; // live databases set aside
-	const swappedIn: string[] = [];
-	const fileSwaps: { dir: string; src: string }[] = [];
+	const isMain = req.db === "" || req.db === mainDb;
+	const db = isMain ? mainDb : req.db;
+	const backupDir = orgBackupDir(o.backupDir, isMain ? "" : db);
+	const staging = restoreStagingDir(backupDir, status.backup);
+	const filesDir = path.join(isMain ? o.csvDir : path.join(o.csvDir, ".orgs", db), ".modules");
+	const tmp = db + "_restoring";
+	const old = db + "_before_restore";
+	let made = false;
+	let retired = false;
+	let swappedIn = false;
+	let filesSwapped = false;
 	let stopped = false;
-	const exists = async (db: string) => (await ops.psql("postgres", `SELECT 1 FROM pg_database WHERE datname = ${ql(db)}`)).trim() === "1";
-	const drop = (db: string) => ops.psql("postgres", `DROP DATABASE IF EXISTS ${qi(db)} WITH (FORCE)`);
+	const drop = (name: string) => ops.psql("postgres", `DROP DATABASE IF EXISTS ${qi(name)} WITH (FORCE)`);
 
-	const restoreOne = async (db: string, dump: string) => {
+	try {
+		await fsp.mkdir(backupDir, { recursive: true, mode: 0o700 }).catch(() => {});
+		await writeRestoreStatus(backupDir, status);
+		if (!isBackupFolder(status.backup)) throw new Error(`${status.backup} is not a backup folder`);
 		if (!IDENT.test(db) || db.length > 48) throw new Error(`can't restore into a database named ${db}`);
-		const st = await fsp.lstat(dump).catch(() => null);
-		if (!st?.isFile()) throw new Error(`${path.basename(dump)} is missing from the backup`);
-		const tmp = db + TMP;
+		// Only the books of an organization this server has.
+		if (!isMain && (await ops.psql(mainDb, `SELECT 1 FROM organizations WHERE id <> 1 AND status = 'ready' AND db_name = ${ql(db)}`)).trim() !== "1") throw new Error("these books are not an organization on this server");
+		const dump = path.join(staging, "ledger.dump");
+		if (!(await fsp.lstat(staging).catch(() => null))?.isDirectory() || !(await fsp.lstat(dump).catch(() => null))?.isFile()) throw new Error("the backup's files were not fetched");
+
+		// 1. The dump, restored into a new database beside the live one.
 		await drop(tmp);
-		made.push(db);
+		made = true;
 		await ops.psql("postgres", `CREATE DATABASE ${qi(tmp)} OWNER ${qi(ownerRole)} ENCODING 'UTF8' TEMPLATE template0`);
 		await ops.psql(
 			tmp,
@@ -305,100 +377,71 @@ export async function performRestore(o: RestoreOptions): Promise<boolean> {
 		// A backup from a newer Ledger has tables this version doesn't know how to use.
 		const known = await ops.knownMigrations();
 		const has = (await ops.psql(tmp, `SELECT to_regclass('public.schema_migrations') IS NOT NULL`)).trim() === "t";
-		const applied = has ? lines(await ops.psql(tmp, `SELECT name FROM public.schema_migrations`)) : [];
-		const unknown = applied.filter((n) => !known.has(n));
+		const unknown = (has ? lines(await ops.psql(tmp, `SELECT name FROM public.schema_migrations`)) : []).filter((n) => !known.has(n));
 		if (unknown.length > 0) throw new Error(`this backup was made by a newer version of Ledger (it has ${unknown[0]}); update Ledger first, then restore`);
-		if ((await ops.psql(tmp, `SELECT to_regclass('public.journal_entries') IS NOT NULL`)).trim() !== "t") throw new Error(`${path.basename(dump)} is not a Ledger database`);
+		if ((await ops.psql(tmp, `SELECT to_regclass('public.journal_entries') IS NOT NULL`)).trim() !== "t") throw new Error("ledger.dump is not a Ledger database");
 		await ops.migrate(tmp);
 		await ops.migrateModules(tmp);
-	};
 
-	const undo = async () => {
-		// Put back whatever was swapped, newest change first.
-		for (const f of fileSwaps.reverse()) {
-			await ops.asDataOwner(`rm -rf -- "$DIR"; if [ -e "$DIR.before-restore" ]; then mv -- "$DIR.before-restore" "$DIR"; fi`, { DIR: f.dir }).catch((e: Error) => log.error("restore: could not put module files back", { dir: f.dir, err: e.message }));
-		}
-		for (const db of swappedIn) await ops.psql("postgres", `ALTER DATABASE ${qi(db)} RENAME TO ${qi(db + TMP)}`).catch((e: Error) => log.error("restore undo", { db, err: e.message }));
-		for (const db of retired) await ops.psql("postgres", `ALTER DATABASE ${qi(db + OLD)} RENAME TO ${qi(db)}`).catch((e: Error) => log.error("restore undo", { db, err: e.message }));
-		for (const db of made) await drop(db + TMP).catch(() => {});
-	};
-
-	try {
-		await writeRestoreStatus(o.backupDir, status);
-		if (!isBackupFolder(status.backup)) throw new Error(`${status.backup} is not a backup folder`);
-		const dir = await fsp.lstat(staging).catch(() => null);
-		if (!dir?.isDirectory()) throw new Error("the backup's files were not fetched");
-
-		// 1. Every database, restored beside the live ones.
-		await restoreOne(mainDb, path.join(staging, "ledger.dump"));
-		const orgRows = lines(await ops.psql(mainDb + TMP, `SELECT db_name FROM organizations WHERE id <> 1 AND status = 'ready' ORDER BY id`));
-		const orgDbs: string[] = [];
-		for (const db of orgRows) {
-			const dump = path.join(staging, `${db}.dump`);
-			if (IDENT.test(db) && (await fsp.lstat(dump).catch(() => null))?.isFile()) {
-				await restoreOne(db, dump);
-				orgDbs.push(db);
-			} else {
-				await ops.psql(mainDb + TMP, `UPDATE organizations SET status = 'error', message = 'These books were not in the backup that was restored.' WHERE db_name = ${ql(db)}`);
-			}
-		}
-
-		// 2. Which live databases go: the main one and every organization's, restored or not.
-		const live = [mainDb];
-		const liveOrgs = lines(await ops.psql(mainDb, `SELECT db_name FROM organizations WHERE id <> 1`).catch(() => ""));
-		for (const db of new Set([...liveOrgs, ...orgDbs])) if (IDENT.test(db) && db !== mainDb && (await exists(db))) live.push(db);
-
-		// 3. The swap, with Ledger stopped.
+		// 2. The swap, with Ledger stopped so nothing is written meanwhile.
 		status.phase = "swap";
-		status.message = "Switching to the restored data…";
-		await writeRestoreStatus(o.backupDir, status);
+		status.message = "Switching to the restored books…";
+		await writeRestoreStatus(backupDir, status);
 		stopped = true;
 		await ops.stop();
-		for (const db of live) {
-			await drop(db + OLD);
-			await ops.psql("postgres", `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${ql(db)} AND pid <> pg_backend_pid()`);
-			await ops.psql("postgres", `ALTER DATABASE ${qi(db)} RENAME TO ${qi(db + OLD)}`);
-			retired.push(db);
+		{
+			// What stays as it is now: the organization's settings (they have their own rolling
+			// backup) and, in the main database, users, passwords, sign-ins, organizations and
+			// who may open which books.
+			for (const t of isMain ? [...SERVER_TABLES, ...ORG_SETTINGS_TABLES] : ORG_SETTINGS_TABLES) {
+				const json = (await ops.psql(mainDb, `SELECT coalesce(json_agg(t), '[]') FROM public.${t} t`)).trim() || "[]";
+				await ops.psql(tmp, `SET session_replication_role = replica;\n${loadServerTableSql(t, json)}`);
+			}
 		}
-		for (const db of [mainDb, ...orgDbs]) {
-			await ops.psql("postgres", `ALTER DATABASE ${qi(db + TMP)} RENAME TO ${qi(db)}`);
-			swappedIn.push(db);
-		}
+		await drop(old);
+		await ops.psql("postgres", `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${ql(db)} AND pid <> pg_backend_pid()`);
+		await ops.psql("postgres", `ALTER DATABASE ${qi(db)} RENAME TO ${qi(old)}`);
+		retired = true;
+		await ops.psql("postgres", `ALTER DATABASE ${qi(tmp)} RENAME TO ${qi(db)}`);
+		swappedIn = true;
 		// Files modules keep: only what the backup holds.
-		const swaps = [{ dir: path.join(o.csvDir, ".modules"), src: path.join(staging, "files") }, ...[...new Set([...liveOrgs, ...orgDbs])].filter((d) => IDENT.test(d)).map((d) => ({ dir: path.join(o.csvDir, ".orgs", d, ".modules"), src: path.join(staging, `${d}-files`) }))];
-		for (const f of swaps) {
-			fileSwaps.push(f);
-			await ops.asDataOwner(
-				`rm -rf -- "$DIR.before-restore"
-				 if [ -e "$DIR" ]; then mv -- "$DIR" "$DIR.before-restore"; fi
-				 if [ -d "$SRC" ] && [ ! -L "$SRC" ]; then mkdir -p -- "$(dirname "$DIR")" && cp -R -P -- "$SRC" "$DIR" && chmod -R u+rwX,g+rX,o-rwx -- "$DIR"; fi`,
-				{ DIR: f.dir, SRC: f.src },
-			);
-		}
+		filesSwapped = true;
+		await ops.asDataOwner(
+			`rm -rf -- "$DIR.before-restore"
+			 if [ -e "$DIR" ]; then mv -- "$DIR" "$DIR.before-restore"; fi
+			 if [ -d "$SRC" ] && [ ! -L "$SRC" ]; then mkdir -p -- "$(dirname "$DIR")" && cp -R -P -- "$SRC" "$DIR" && chmod -R u+rwX,g+rX,o-rwx -- "$DIR"; fi`,
+			{ DIR: filesDir, SRC: path.join(staging, "files") },
+		);
 		await ops.start();
-		if (!(await ops.healthy())) throw new Error("Ledger did not start with the restored data, so the previous data was put back");
+		if (!(await ops.healthy())) throw new Error("Ledger did not start with the restored books, so the previous ones were put back");
 
-		// 4. Done: the previous data goes (it is in the backup made just before).
+		// 3. Done: the previous books go (they are in the backup made just before).
 		stopped = false;
-		for (const db of retired) await drop(db + OLD).catch((e: Error) => log.warn("restore: could not drop the previous database", { db, err: e.message }));
-		for (const f of fileSwaps) await ops.asDataOwner(`rm -rf -- "$DIR.before-restore"`, { DIR: f.dir }).catch(() => {});
+		await drop(old).catch((e: Error) => log.warn("restore: could not drop the previous database", { db: old, err: e.message }));
+		await ops.asDataOwner(`rm -rf -- "$DIR.before-restore"`, { DIR: filesDir }).catch(() => {});
 		await fsp.rm(staging, { recursive: true, force: true });
 		status.state = "ok";
-		status.message = `Restored from ${status.backup}: ${orgDbs.length ? `${orgDbs.length + 1} sets of books` : "the books"} and the files modules keep. Everything is as it was when that backup was made.`;
+		status.message = `Restored from ${status.backup}. These books, their module data and the files modules keep are as they were when that backup was made. Settings, users and sign-ins were left as they are.`;
 	} catch (err) {
 		status.state = "error";
 		status.message = `Nothing was changed: ${(err as Error).message}`;
-		log.error("restore failed", { backup: status.backup, err: (err as Error).message });
-		await undo();
+		log.error("restore failed", { db, backup: status.backup, err: (err as Error).message });
+		// Put back whatever was swapped.
+		if (filesSwapped) {
+			await ops.asDataOwner(`rm -rf -- "$DIR"; if [ -e "$DIR.before-restore" ]; then mv -- "$DIR.before-restore" "$DIR"; fi`, { DIR: filesDir }).catch((e: Error) => log.error("restore: could not put module files back", { err: e.message }));
+		}
+		if (swappedIn) await ops.psql("postgres", `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${ql(db)} AND pid <> pg_backend_pid(); ALTER DATABASE ${qi(db)} RENAME TO ${qi(tmp)}`).catch((e: Error) => log.error("restore undo", { err: e.message }));
+		if (retired) await ops.psql("postgres", `ALTER DATABASE ${qi(old)} RENAME TO ${qi(db)}`).catch((e: Error) => log.error("restore undo", { err: e.message }));
+		if (made) await drop(tmp).catch(() => {});
 		if (stopped) await ops.start().catch((e: Error) => log.error("restore: could not start Ledger again", { err: e.message }));
 		await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
 	}
 	status.phase = "";
 	status.finished_at = new Date(now()).toISOString();
-	await writeRestoreStatus(o.backupDir, status).catch((e: Error) => log.error("restore: could not write the status", { err: e.message }));
-	log.info("restore", { state: status.state, backup: status.backup });
+	await writeRestoreStatus(backupDir, status).catch((e: Error) => log.error("restore: could not write the status", { err: e.message }));
+	log.info("restore", { state: status.state, db, backup: status.backup });
 	await o
-		.notify?.(status.state === "ok" ? { title: "Restored from a backup", body: status.message, level: "success" } : { title: "Restore failed", body: status.message, level: "danger" })
+		.notify?.(db, status.state === "ok" ? { title: "Restored from a backup", body: status.message, level: "success" } : { title: "Restore failed", body: status.message, level: "danger" })
 		.catch((e: Error) => log.warn("could not post the restore to the dashboard", { err: e.message }));
 	return true;
 }

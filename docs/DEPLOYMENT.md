@@ -295,7 +295,15 @@ Any proxy works (Nginx Proxy Manager, Traefik, OPNsense/HAProxy) as long as it:
 
 ## 8. Backups and restore
 
-Backups are set up in the app under **Settings → Backups**:
+Backups are set up in the app under **Settings → Backups**. Since Ledger
+0.14.0 every organization has its own: its admins choose its schedule and
+destinations, and it backs up and restores only its own books. Until an
+organization's admins save their own settings, it follows the main books'
+schedule and network share, in a folder of its own named after its database
+(e.g. `backups/ledger_org2/`); Google Drive is connected per organization.
+Only admins of the main books can point an organization at another folder on
+the server. Settings are kept in `/var/lib/ledger/backup/` (main books) and
+`/var/lib/ledger/backup/orgs/<database>/`.
 
 - **Schedule**: days, time and time zone (default: every day at 02:30).
   `ledger-backup.timer` checks every 15 minutes whether one is due. Ledger
@@ -330,13 +338,17 @@ backup schedule's time zone with its UTC offset, e.g.
 "Ledger backups"). It holds:
 
 ```
-ledger.dump                    the database (pg_dump custom format, checked with pg_restore --list)
+ledger.dump                    the organization's database (pg_dump custom format, checked with pg_restore --list)
 general-ledger.csv             the General Ledger, same columns as the export
 <module>.csv                   each module's data (<module>-<table>.csv when it has several tables)
-files/<module>/...            files modules keep (invoice PDFs, scans), Ledger 0.13.2+
-ledger_org2.dump, ledger_org2-general-ledger.csv, ...   each other organization's books
-ledger_org2-files/<module>/... that organization's module files
+files/<module>/...             files modules keep (invoice PDFs, scans)
 ```
+
+Beside it, each run leaves `settings-<same date and time>/settings.json`:
+the organization's settings (each module's settings, and the backup schedule
+and retention), a rolling backup of its own kept by the same rules. (Backups
+made by 0.13.x held every organization's dump in one folder, as
+`<database>.dump`; restore those by hand, below.)
 
 The CSV copies (unless turned off under Settings → Backups) are read in
 one consistent snapshot and written in batches, so large tables are fine;
@@ -362,27 +374,35 @@ From Google Drive, download the dump and copy it into the container
 before restoring. From an SMB share, fetch it inside the container:
 `smbclient //nas/backups -U ledger -c 'cd ledger/ledger-2026-11-11_20-30-00-0600; get ledger.dump /root/ledger.dump'`.
 
-**Restore in the app** (Ledger 0.13.3 and later): Settings → Backups →
-**Restore from a backup**. Choose a backup from the network share or Google
-Drive and type RESTORE. Ledger then:
+**Restore in the app** (Ledger 0.14.0 and later): Settings → Backups →
+**Restore from a backup**, in the organization whose books you want to
+restore. Choose one of its backups from the network share or Google Drive
+and type RESTORE. Ledger then:
 
-1. backs up the current data to the destinations (if that fails, it stops);
-2. fetches the chosen backup and checks its dumps;
+1. backs up the organization's current books to its destinations (if that
+   fails, it stops);
+2. fetches the chosen backup and checks its dump;
 3. as root (`ledger update run`, started by `ledger-update.path`), restores
-   every dump into a new database beside the live one and applies any
+   the dump into a new database beside the live one and applies any
    migrations newer than the backup;
-4. stops Ledger, swaps the databases in, replaces the files modules keep
-   with the backup's, and starts Ledger. If it doesn't come up healthy, the
-   previous databases and files are put back.
+4. stops Ledger, swaps the database in, replaces the files the
+   organization's modules keep with the backup's, and starts Ledger. If it
+   doesn't come up healthy, the previous database and files are put back.
 
-Everything in the databases comes from the backup: all organizations' books,
-users and passwords, module data and module settings. An organization
-created after the backup is removed. What lives outside the databases is
-not touched: backup settings, the update schedule, LLM API and Gmail
-connections (`/var/lib/ledger/`), installed modules, and CSV files on the
-share. A backup made by a newer Ledger than the one installed is refused.
-The outcome is shown on the Backups page and the dashboard;
+Only that organization's books change: accounts, entries, module data and
+module files. Not touched: other organizations; users, passwords, sign-ins
+and who may open which books (also when the main books, whose database
+holds them, are restored); the organization's settings (modules' settings,
+backup settings); and what lives outside the databases (LLM API and Gmail
+connections, the update schedule, installed modules, CSV files on the
+share). A backup made by a newer Ledger than the one installed is refused.
+The outcome is shown on the Backups page and the organization's dashboard;
 `journalctl -u ledger-update` has the details.
+
+**Restore settings** on the same page puts back the organization's module
+settings and backup schedule from one of its `settings-…` backups, without
+touching the books. Where backups go (share, Drive account) is not in the
+file and stays as it is.
 
 **Restore by hand** (keeps the current database as `ledger_old`):
 

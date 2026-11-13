@@ -1052,7 +1052,7 @@ paths:
     get:
       tags: [System]
       operationId: getBackups
-      summary: Backup settings, the last run and the newest dumps on the share
+      summary: The current organization's backup settings, last run and newest backups on the share
       responses:
         '200':
           description: Backups
@@ -1110,18 +1110,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [backups, problems, confirm]
+                required: [backups, settings, problems, confirm]
                 properties:
-                  backups:
-                    type: array
-                    items:
-                      type: object
-                      required: [source, name, size_bytes, modified_at]
-                      properties:
-                        source: { type: string, enum: [share, google] }
-                        name: { type: string, description: The backup's folder }
-                        size_bytes: { type: integer, description: 0 when not known (Google Drive) }
-                        modified_at: { type: string, format: date-time }
+                  backups: { type: array, description: Backups of the books (ledger-…), items: { $ref: '#/components/schemas/RestorableBackup' } }
+                  settings: { type: array, description: Backups of the settings (settings-…), items: { $ref: '#/components/schemas/RestorableBackup' } }
                   problems: { type: array, items: { type: string }, description: Destinations that could not be listed }
                   confirm: { type: string, description: What the user must type to confirm a restore }
         default: { $ref: '#/components/responses/Error' }
@@ -1130,12 +1122,14 @@ paths:
     post:
       tags: [System]
       operationId: restoreBackup
-      summary: Replace all data with a backup's
+      summary: Replace the current organization's books with a backup's
       description: >
-        Runs in the background: backs up the current data, fetches and checks
-        the chosen backup, then the server stops for a moment while its
-        databases and module files are replaced by the backup's. If anything
-        fails, nothing is changed. Progress is in `restore` of GET /backups.
+        Runs in the background: backs up the organization's current books,
+        fetches and checks the chosen backup, then the server stops for a
+        moment while the organization's database and module files are replaced
+        by the backup's. Users, passwords, sign-ins, other organizations and
+        this organization's settings are not touched. If anything fails,
+        nothing is changed. Progress is in `restore` of GET /backups.
       requestBody:
         required: true
         content:
@@ -1153,6 +1147,44 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BackupInfo' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/restore-settings:
+    post:
+      tags: [System]
+      operationId: restoreBackupSettings
+      summary: Put back the current organization's settings from a settings backup
+      description: Modules' settings become what the file holds; the backup schedule and retention too (destinations are not in the file). The books are not touched.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source, backup]
+              properties:
+                source: { type: string, enum: [share, google] }
+                backup: { type: string, description: A settings backup's folder (settings-…) }
+      responses:
+        '200':
+          description: Restored
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/BackupInfo'
+                  - type: object
+                    required: [settings_restored]
+                    properties:
+                      settings_restored:
+                        type: object
+                        required: [backup, made_at, modules]
+                        properties:
+                          backup: { type: string }
+                          made_at: { type: string }
+                          modules: { type: array, items: { type: string } }
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
@@ -2873,10 +2905,20 @@ components:
             client_id: { type: string }
             client_secret: { type: string, nullable: true }
             keep_count: { type: integer, minimum: 1, maximum: 1000 }
+    RestorableBackup:
+      type: object
+      required: [source, name, size_bytes, modified_at]
+      properties:
+        source: { type: string, enum: [share, google] }
+        name: { type: string, description: The backup's folder }
+        size_bytes: { type: integer, description: 0 when not known (Google Drive) }
+        modified_at: { type: string, format: date-time }
     BackupInfo:
       type: object
-      required: [available, config, status, next_run, share_files, restore]
+      description: The current organization's backups (each organization has its own settings, schedule and destinations)
+      required: [available, config, status, next_run, share_files, restore, can_change_folder]
       properties:
+        can_change_folder: { type: boolean, description: Whether this user may choose another folder on the server (server admins only) }
         available: { type: boolean, description: Backups are set up on this server }
         restore:
           type: object

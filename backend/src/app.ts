@@ -30,8 +30,8 @@ export interface App {
 	modules: ModuleHost;
 	/** AI and Gmail settings (integrationsDir), Gmail endpoints and a pending OAuth attempt. */
 	integrations: { dir: string; gmail: GmailEndpoints; pendingGmail: PendingAuth | null };
-	/** Backups: settings/status directory, database URL for pg_dump, Google endpoints. */
-	backup: { dir: string; databaseUrl: string; google: GoogleEndpoints; device: DeviceCode | null; running: Promise<unknown> | null; restoring: Promise<unknown> | null };
+	/** Backups: state directory (each organization's settings and status are inside), main database URL, Google endpoints; per organization (database name, "" for the main books): a pending Drive connection, a running backup, a restore being prepared. */
+	backup: { dir: string; databaseUrl: string; google: GoogleEndpoints; device: Map<string, DeviceCode>; running: Map<string, Promise<unknown>>; restoring: Map<string, Promise<unknown>> };
 }
 
 export function newApp(
@@ -66,6 +66,6 @@ export function newApp(
 		update: cfg.update ?? updateDirs(),
 		modules: new ModuleHost(cfg.modulesDir ?? modulesDir()),
 		integrations: { dir: cfg.integrationsDir ?? integrationsDir(), gmail: cfg.gmail ?? gmailEndpoints(), pendingGmail: null },
-		backup: { dir: cfg.backupDir ?? backupStateDir(), databaseUrl: cfg.databaseUrl ?? "", google: cfg.google ?? googleEndpoints(), device: null, running: null, restoring: null },
+		backup: { dir: cfg.backupDir ?? backupStateDir(), databaseUrl: cfg.databaseUrl ?? "", google: cfg.google ?? googleEndpoints(), device: new Map(), running: new Map(), restoring: new Map() },
 	};
 }
