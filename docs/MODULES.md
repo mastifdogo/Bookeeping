@@ -357,6 +357,25 @@ while it is still `new`. Files are at most 25 MB; `meta` at most 16 KB of
 JSON. Sending to a module that isn't running or doesn't accept that kind
 fails with 409. Settings → Modules shows what each module takes.
 
+## Customers and vendors (`ctx.entities`)
+
+Ledger 0.16.0 and later. Ledger keeps one list of entities per organization:
+the people and businesses the books deal with, each a customer, a vendor, or
+both. Every module shares it (and people manage it under Entities in the
+sidebar), so use it instead of your own table of names and store only the
+entity's `id`:
+
+```js
+const vendor = await ctx.entities.ensure("Hydro One", "vendor", { email: "bills@hydro.example" }); // found, given the role, or created
+const customers = await ctx.entities.list({ role: "customer" });
+await ctx.ledger.createJournalEntry({ entry_date, description, entity_id: vendor.id, lines }, req.user);
+```
+
+`list`, `get`, `find(name)`, `create`, `update` and `ensure` are described
+in `docs/MODULE_LLM_CONTEXT.md`. Entities are made inactive, never deleted.
+Accounts also carry a tag (`kind`: chequing, savings or credit card) so you
+can offer bank and card accounts first.
+
 ## Files the module keeps (`ctx.storage`)
 
 Ledger 0.13.2 and later. A module stores its own files (PDFs it generates,

@@ -2,7 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import Amount from '#lib/components/Amount.svelte';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
-	import { ACCOUNT_TYPES, CURRENCIES, api, unwrap, type Account, type AccountType, type Currency } from '#lib/api/client.ts';
+	import { ACCOUNT_KINDS, ACCOUNT_TYPES, CURRENCIES, api, kindLabel, unwrap, type Account, type AccountKind, type AccountType, type Currency } from '#lib/api/client.ts';
 	import { naturalBalance } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
@@ -15,6 +15,12 @@
 	let currency = $state<Currency>('CAD');
 	let description = $state('');
 	let parent = $state('');
+	// Chequing, savings (assets) or credit card (liabilities).
+	let kind = $state<AccountKind | ''>('');
+	let kinds = $derived(ACCOUNT_KINDS.filter((k) => k.type === type));
+	$effect(() => {
+		if (kind && !kinds.some((k) => k.value === kind)) kind = '';
+	});
 	// A sub-account sits under an account of the same type and currency.
 	let parents = $derived(data.accounts.filter((a) => a.type === type && a.currency === currency));
 	$effect(() => {
@@ -29,7 +35,7 @@
 		saving = true;
 		error = null;
 		try {
-			const acc = unwrap(await api().POST('/accounts', { body: { code, name, type, currency, description, parent_code: parent || null } }));
+			const acc = unwrap(await api().POST('/accounts', { body: { code, name, type, currency, description, parent_code: parent || null, kind: kind || null } }));
 			created = `Created ${acc.code} ${acc.name} (${acc.currency})${acc.parent_code ? ` under ${acc.parent_code}` : ''}.`;
 			code = name = description = '';
 			await invalidateAll();
@@ -144,6 +150,15 @@
 					{#each CURRENCIES as c (c)}<option value={c}>{c}</option>{/each}
 				</select>
 			</label>
+			{#if kinds.length}
+				<label>
+					Tag
+					<select bind:value={kind}>
+						<option value="">— none —</option>
+						{#each kinds as k (k.value)}<option value={k.value}>{k.label}</option>{/each}
+					</select>
+				</label>
+			{/if}
 			<label>
 				Sub-account of
 				<select bind:value={parent}>
@@ -154,7 +169,10 @@
 			<label style="flex:1">Description <input bind:value={description} maxlength="1000" /></label>
 			<button class="primary" disabled={saving}>{saving ? 'Saving…' : 'Create'}</button>
 		</div>
-		<p class="muted small" style="margin-bottom:0">The code and currency cannot be changed later.</p>
+		<p class="muted small" style="margin-bottom:0">
+			The code and currency cannot be changed later. A tag (chequing, savings, credit card) marks bank and card accounts, so forms and
+			modules can offer them first.
+		</p>
 	</form>
 {/if}
 
@@ -180,6 +198,7 @@
 						<td class="mono"><a href="/accounts/{encodeURIComponent(a.code)}">{a.code}</a></td>
 						<td style:padding-left={depth ? `${0.6 + depth * 1.25}rem` : undefined}>
 							{#if depth}<span class="muted" aria-hidden="true">↳ </span>{/if}{a.name}
+							{#if a.kind}<span class="badge">{kindLabel(a.kind)}</span>{/if}
 							{#if !tree && a.parent_code}<span class="muted small">(under {a.parent_code})</span>{/if}
 							{#if a.description}<div class="muted small">{a.description}</div>{/if}
 						</td>

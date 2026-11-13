@@ -985,6 +985,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/entities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Customers and vendors (one list shared with modules), by name */
+        get: operations["listEntities"];
+        put?: never;
+        /** Add a customer, a vendor, or one that is both */
+        post: operations["createEntity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/entities/{entityId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityId: number;
+            };
+            cookie?: never;
+        };
+        /** One entity */
+        get: operations["getEntity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change an entity (entities are made inactive, never deleted) */
+        patch: operations["updateEntity"];
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -1551,6 +1589,7 @@ export interface components {
             };
         };
         Account: {
+            kind: components["schemas"]["AccountKind"] | null;
             /** @description The account this one sits under (same type and currency), or null */
             parent_code: string | null;
             /** @description balance_cents plus the balances of every sub-account below it */
@@ -1578,6 +1617,7 @@ export interface components {
             description: string;
             /** @description Make it a sub-account of this account (same type and currency, at most 5 levels deep) */
             parent_code?: string | null;
+            kind?: components["schemas"]["AccountKind"] | null;
         };
         AccountUpdate: {
             name?: string;
@@ -1585,6 +1625,8 @@ export interface components {
             is_active?: boolean;
             /** @description Move it under this account (same type and currency); null makes it top-level */
             parent_code?: string | null;
+            /** @description null removes the tag */
+            kind?: components["schemas"]["AccountKind"] | null;
         };
         /**
          * @description Exactly one of debit_cents / credit_cents must be > 0. The amount is
@@ -1597,7 +1639,40 @@ export interface components {
             /** @default  */
             memo: string;
         };
+        /** @description A person or business the books deal with; a customer, a vendor, or both. */
+        Entity: {
+            id: number;
+            name: string;
+            is_customer: boolean;
+            is_vendor: boolean;
+            email: string;
+            phone: string;
+            address: string;
+            notes: string;
+            is_active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        EntityInput: {
+            name?: string;
+            is_customer?: boolean;
+            is_vendor?: boolean;
+            email?: string;
+            phone?: string;
+            address?: string;
+            notes?: string;
+            is_active?: boolean;
+        };
+        /**
+         * @description What a bank-type account is. chequing and savings are asset accounts, credit_card a liability.
+         * @enum {string}
+         */
+        AccountKind: "chequing" | "savings" | "credit_card";
         JournalEntryCreate: {
+            /** @description The vendor or customer the entry is with */
+            entity_id?: number | null;
             /** Format: date */
             entry_date: string;
             description: string;
@@ -1617,6 +1692,11 @@ export interface components {
             memo: string;
         };
         JournalEntry: {
+            /** @description The vendor or customer the entry is with */
+            entity: {
+                id: number;
+                name: string;
+            } | null;
             /** Format: int64 */
             id: number;
             /** Format: date */
@@ -2905,6 +2985,8 @@ export interface operations {
                 to?: components["parameters"]["To"];
                 /** @description Only entries with at least one line on this account */
                 account_code?: components["schemas"]["AccountCode"];
+                /** @description Only entries with this customer or vendor */
+                entity_id?: number;
                 /** @description Leave out entries that were reversed and the reversing entries */
                 hide_reversed?: boolean;
                 limit?: components["parameters"]["Limit"];
@@ -4171,6 +4253,114 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listEntities: {
+        parameters: {
+            query?: {
+                /** @description Only customers or only vendors (an entity that is both matches either) */
+                role?: "customer" | "vendor";
+                /** @description Part of the name */
+                q?: string;
+                include_inactive?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entities */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Entity"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createEntity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntityInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Entity"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getEntity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Entity"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateEntity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntityInput"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Entity"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

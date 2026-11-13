@@ -157,7 +157,8 @@ db/migrations/        Later schema changes, applied in order by deploy/migrate-d
 backend/src/main.ts       Startup, HTTP server, `ledger user` dispatch
 backend/src/types.ts      Models matching the spec
 backend/src/ledger.ts     Journal entry validation, transactional posting, reversal
-backend/src/accounts.ts   Chart of accounts (with sub-accounts), account ledger, trial balance
+backend/src/accounts.ts   Chart of accounts (sub-accounts, bank and card tags), account ledger, trial balance
+backend/src/entities.ts   Customers and vendors: one list shared with modules (ctx.entities)
 backend/src/files.ts      General Ledger CSV export, file listing/download, uploads
 backend/src/import.ts     All-or-nothing CSV import of journal entries
 backend/src/auth.ts       Users, bcrypt passwords, sessions

@@ -2861,3 +2861,83 @@ test("sub-accounts: a parent of the same kind, totals on the chart and the state
 	await assert.rejects(db.query(`UPDATE accounts SET parent_id = (SELECT id FROM accounts WHERE code = '1000') WHERE code = '5110'`), /same type and currency as its parent/);
 	await assert.rejects(db.query(`UPDATE accounts SET parent_id = (SELECT id FROM accounts WHERE code = '5110') WHERE code = '5100'`), /under one of its own sub-accounts/);	await db.end();
 });
+
+test("account tags, entities (customer, vendor or both) and the vendor on an expense", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	// Tags: chequing and savings are asset accounts, a credit card is a liability.
+	let r = await call("POST", "/accounts", { code: "1000", name: "Chequing", type: "asset", currency: "CAD", kind: "chequing" });
+	expectStatus(r, 201);
+	assert.equal(r.json().kind, "chequing");
+	expectStatus(await call("POST", "/accounts", { code: "2100", name: "Visa", type: "liability", currency: "CAD", kind: "credit_card" }), 201);
+	r = await call("POST", "/accounts", { code: "2200", name: "Odd", type: "liability", currency: "CAD", kind: "savings" });
+	expectStatus(r, 422);
+	assert.match(JSON.stringify(r.json()), /savings accounts are asset accounts/);
+	expectStatus(await call("POST", "/accounts", { code: "2300", name: "Odd", type: "liability", currency: "CAD", kind: "wallet" }), 422);
+	r = await call("POST", "/accounts", { code: "5000", name: "Supplies", type: "expense", currency: "CAD" });
+	assert.equal(r.json().kind, null);
+	r = await call("PATCH", "/accounts/1000", { kind: "savings" });
+	assert.equal(r.json().kind, "savings");
+	r = await call("PATCH", "/accounts/1000", { name: "Main account" });
+	assert.equal(r.json().kind, "savings", "other changes leave the tag alone");
+	assert.equal((await call("PATCH", "/accounts/1000", { kind: null })).json().kind, null);
+	expectStatus(await call("PATCH", "/accounts/5000", { kind: "chequing" }), 422);
+
+	// Entities: a customer, a vendor, or both; names are unique whatever the capitals.
+	r = await call("POST", "/entities", { name: "  Staples ", is_vendor: true, email: "ar@staples.example" });
+	expectStatus(r, 201);
+	const staples = r.json();
+	assert.deepEqual([staples.name, staples.is_vendor, staples.is_customer, staples.is_active], ["Staples", true, false, true]);
+	expectStatus(await call("POST", "/entities", { name: "Globex", is_customer: true }), 201);
+	expectStatus(await call("POST", "/entities", { name: "Acme", is_customer: true, is_vendor: true }), 201);
+	expectStatus(await call("POST", "/entities", { name: "Nobody" }), 422);
+	expectStatus(await call("POST", "/entities", { name: "STAPLES", is_customer: true }), 409);
+	assert.deepEqual((await call("GET", "/entities")).json().data.map((e: any) => e.name), ["Acme", "Globex", "Staples"]);
+	assert.deepEqual((await call("GET", "/entities?role=vendor")).json().data.map((e: any) => e.name), ["Acme", "Staples"]);
+	assert.deepEqual((await call("GET", "/entities?role=customer&q=glo")).json().data.map((e: any) => e.name), ["Globex"]);
+	r = await call("PATCH", `/entities/${staples.id}`, { is_customer: true, phone: "555-0100" });
+	assert.deepEqual([r.json().is_customer, r.json().is_vendor, r.json().phone, r.json().email], [true, true, "555-0100", "ar@staples.example"]);
+	expectStatus(await call("PATCH", `/entities/${staples.id}`, { is_customer: false, is_vendor: false }), 422);
+	expectStatus(await call("GET", "/entities/999"), 404);
+
+	// An expense with its vendor.
+	const expense = { entry_date: "2026-03-01", description: "Paper", entity_id: staples.id, lines: [{ account_code: "5000", debit_cents: 4200 }, { account_code: "2100", credit_cents: 4200 }] };
+	r = await call("POST", "/journal-entries", expense);
+	expectStatus(r, 201);
+	assert.deepEqual(r.json().entity, { id: staples.id, name: "Staples" });
+	expectStatus(await call("POST", "/journal-entries", { ...expense, entity_id: 999 }), 422);
+	r = await call("POST", "/journal-entries", { ...expense, entity_id: null, description: "No vendor" });
+	assert.equal(r.json().entity, null);
+	assert.deepEqual((await call("GET", `/journal-entries?entity_id=${staples.id}`)).json().data.map((e: any) => e.description), ["Paper"]);
+	// Inactive entities stay on old entries but can't be used for new ones.
+	expectStatus(await call("PATCH", `/entities/${staples.id}`, { is_active: false }), 200);
+	expectStatus(await call("POST", "/journal-entries", expense), 422);
+	assert.deepEqual((await call("GET", "/entities?role=vendor")).json().data.map((e: any) => e.name), ["Acme"]);
+	assert.equal((await call("GET", "/entities?include_inactive=true")).json().data.length, 3);
+
+	// Modules share the list, post entries with an entity, and can hand each other entity lists.
+	await loadModules(t, app, {
+		payables: {
+			manifest: { files: { accepts: ["entity"] } },
+			code: `export default function (ctx) {
+				ctx.route("POST", "/bill", async (req) => {
+					const vendor = await ctx.entities.ensure(req.body.vendor, "vendor", { email: req.body.email });
+					const e = await ctx.ledger.createJournalEntry({ entry_date: "2026-03-05", description: "Bill", entity_id: vendor.id,
+						lines: [{ account_code: "5000", debit_cents: 1000 }, { account_code: "2100", credit_cents: 1000 }] }, req.user);
+					return { vendor, entity: e.entity, vendors: (await ctx.entities.list({ role: "vendor" })).map((x) => x.name), found: (await ctx.entities.find("globex"))?.name };
+				});
+			}`,
+		},
+	});
+	r = await call("POST", "/m/payables/bill", { vendor: "Hydro One", email: "bills@hydro.example" });
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().vendor.name, r.json().vendor.is_vendor, r.json().vendor.email, r.json().entity.name, r.json().found], ["Hydro One", true, "bills@hydro.example", "Hydro One", "Globex"]);
+	assert.deepEqual(r.json().vendors, ["Acme", "Hydro One"]);
+	// ensure() adds the role to an existing entity (and reactivates it) instead of making a second one.
+	r = await call("POST", "/m/payables/bill", { vendor: "globex" });
+	assert.deepEqual([r.json().vendor.name, r.json().vendor.is_customer, r.json().vendor.is_vendor], ["Globex", true, true]);
+	r = await call("POST", "/m/payables/bill", { vendor: "Staples" });
+	assert.equal(r.json().vendor.is_active, true);
+	assert.equal((await call("GET", "/entities?include_inactive=true")).json().data.length, 4);
+});

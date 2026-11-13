@@ -147,6 +147,11 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
   `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$` (e.g. `1000`, `4100`).
 - `Account.balance_cents` is signed debit-positive (assets/expenses normally
   positive; liabilities/equity/revenue normally negative).
+- **Account tags** (Ledger ≥ 0.16.0): `Account.kind` is `"chequing"`,
+  `"savings"` (asset accounts), `"credit_card"` (a liability) or `null`.
+  Offer tagged accounts first wherever the user picks a bank or card
+  account (statements, payments), and pass `kind` to `createAccount` when
+  you create one.
 - **Sub-accounts** (Ledger ≥ 0.15.0): `Account.parent_code` is the account
   it sits under (same type and currency, at most 5 levels) or `null`;
   `balance_cents` is the account's own postings and `total_balance_cents`
@@ -415,6 +420,33 @@ updated_at }`; `status` is `new`, `accepted`, `done` or `rejected`. `data`
 is a Buffer, Uint8Array or base64 text, at most 25 MB; `meta` ≤ 16 KB as
 JSON. Sending to a module that isn't running or doesn't accept the kind
 answers 409. Files belong to the organization the request works in.
+
+### ctx.entities (Ledger ≥ 0.16.0)
+
+Customers and vendors: **one list shared by Ledger and every module**, per
+organization. An entity is a customer, a vendor, or both. Use it instead of
+a names table of your own, so the same business isn't kept under three
+spellings: keep only the entity's `id` in your tables (plus what is yours,
+e.g. payment terms).
+
+```js
+await ctx.entities.list({ role: "vendor", q: "hyd", includeInactive: false }); // → [entity], by name
+await ctx.entities.get(id);                 // → entity (404 if none)
+await ctx.entities.find("hydro one");       // → entity or null (name, any capitals)
+await ctx.entities.create({ name, is_customer?, is_vendor?, email?, phone?, address?, notes? }); // 409 if the name exists
+await ctx.entities.update(id, { is_customer: true, phone: "555-0100", is_active: false });
+await ctx.entities.ensure("Hydro One", "vendor", { email }); // finds it, adds the role or creates it → entity
+```
+
+Entity: `{ id, name, is_customer, is_vendor, email, phone, address, notes,
+is_active, created_at, updated_at }`. Names are unique whatever the
+capitals. Entities are never deleted, only made inactive (entries point at
+them). Pass `entity_id` in `ctx.ledger.createJournalEntry({ …, entity_id })`
+to record who an entry is with; entries come back with `entity: { id, name }`
+or `null`. People manage the list under Entities in the sidebar. Modules
+hand each other entity lists as files of kind `entity` (`ctx.files`, with
+`customer` and `vendor`): `meta.columns` may name a `role` column
+("customer", "vendor" or "both").
 
 ### ctx.storage (Ledger ≥ 0.13.2)
 

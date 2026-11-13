@@ -46,6 +46,7 @@
 <div class="toolbar">
 	<h1 style="margin:0">Journal</h1>
 	<span class="spacer"></span>
+	<a class="button" href="/journal/expense">+ New expense</a>
 	<a class="button" href="/journal/new">+ New entry</a>
 </div>
 
@@ -80,6 +81,7 @@
 						<td><a class="quiet" href="/journal/{e.id}">{e.id}</a></td>
 						<td>
 							{e.description}
+							{#if e.entity}<span class="muted small">· {e.entity.name}</span>{/if}
 							{#each e.links as l (l.module_id + ':' + l.ref)}
 								{#if l.href}<a class="link-chip" href={l.href} title="Linked from {l.module_id}">{l.label}</a>{:else}<span class="link-chip" title="Linked from {l.module_id}">{l.label}</span>{/if}
 							{/each}

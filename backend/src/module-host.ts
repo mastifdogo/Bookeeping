@@ -17,6 +17,7 @@ import { compatible, scanInstalled, type InstalledModule, type ModuleManifest } 
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
+import { createEntity, ensureEntity, findEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
 import { moduleValues, saveSettings, type SettingValue } from "./module-settings.ts";
 import type { SearchProvider } from "./search.ts";
 import { connectionReady, llmComplete, pickConnection, readLlmConfig, type LlmRequest } from "./llm.ts";
@@ -96,6 +97,7 @@ function toEntry(e: unknown): JournalEntryCreate {
 		entry_date: typeof o.entry_date === "string" ? o.entry_date : "",
 		description: typeof o.description === "string" ? o.description : "",
 		reference: typeof o.reference === "string" ? o.reference : "",
+		entity_id: typeof o.entity_id === "number" ? o.entity_id : typeof o.entity_id === "bigint" ? Number(o.entity_id) : null,
 		lines: lines.map((l, i) => {
 			const x = (l ?? {}) as Record<string, unknown>;
 			return {
@@ -289,10 +291,23 @@ function makeContext(app: App, m: LoadedModule) {
 		},
 		HttpError,
 		response: (status: number, body?: unknown) => new ModuleResponse(status, body),
+		/**
+		 * Customers and vendors: one list shared by Ledger and every module, per
+		 * organization. Use it instead of a table of your own names.
+		 */
+		entities: {
+			list: (f: { role?: EntityRole; q?: string; includeInactive?: boolean } = {}) => listEntities(app, f),
+			get: (entityId: number) => getEntity(app, Number(entityId)),
+			find: (name: string) => findEntity(app, name),
+			create: (e: EntityInput) => createEntity(app, e),
+			update: (entityId: number, e: EntityInput) => updateEntity(app, Number(entityId), e),
+			/** The entity with that name in that role ("customer" | "vendor"), created or given the role if needed. */
+			ensure: (name: string, role: EntityRole, details?: EntityInput) => ensureEntity(app, name, role, details),
+		},
 		ledger: {
 			listAccounts: (opts: { includeInactive?: boolean } = {}) => listAccounts(app, opts.includeInactive ?? false),
 			getAccount: (code: string) => getAccount(app, code),
-			createAccount: (a: AccountCreate) => createAccount(app, { code: a.code, name: a.name, type: a.type, currency: a.currency, description: a.description ?? "" }),
+			createAccount: (a: AccountCreate) => createAccount(app, { code: a.code, name: a.name, type: a.type, currency: a.currency, description: a.description ?? "", parent_code: a.parent_code ?? null, kind: a.kind ?? null }),
 			accountLedger: (code: string, opts: { from?: string; to?: string } = {}) => getAccountLedger(app, code, opts.from ?? null, opts.to ?? null),
 			listJournalEntries: (f: { from?: string; to?: string; accountCode?: string; limit?: number; offset?: number } = {}) =>
 				listJournalEntries(app, {

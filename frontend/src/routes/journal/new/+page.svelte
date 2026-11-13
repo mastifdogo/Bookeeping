@@ -15,6 +15,7 @@
 	let entryDate = $state(today());
 	let description = $state('');
 	let reference = $state('');
+	let entityId = $state<number | ''>('');
 	let lines = $state<Line[]>([blankLine(), blankLine()]);
 	let saving = $state(false);
 	let error = $state<unknown>(null);
@@ -99,6 +100,7 @@
 				entry_date: entryDate,
 				description,
 				reference,
+				entity_id: entityId === '' ? null : entityId,
 				lines: lines
 					.map((l, i) => ({ l, p: parsed[i] }))
 					.filter(({ p }) => p.debit > 0 || p.credit > 0)
@@ -127,7 +129,17 @@
 		<label>Date <input type="date" bind:value={entryDate} required /></label>
 		<label style="flex:2">Description <input bind:value={description} required maxlength="500" placeholder="What happened?" /></label>
 		<label style="flex:1">Reference <input bind:value={reference} maxlength="100" placeholder="Invoice / receipt #" /></label>
+		{#if data.entities.length}
+			<label>
+				Customer / vendor
+				<select bind:value={entityId}>
+					<option value="">— none —</option>
+					{#each data.entities as en (en.id)}<option value={en.id}>{en.name}</option>{/each}
+				</select>
+			</label>
+		{/if}
 	</div>
+	<p class="muted small">Paying a bill or a receipt? <a href="/journal/expense">New expense</a> is quicker.</p>
 
 	<div class="table-wrap">
 		<table class="lines">

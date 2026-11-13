@@ -9,6 +9,15 @@ import type { components, paths } from './schema';
 
 export type Schemas = components['schemas'];
 export type Account = Schemas['Account'];
+export type AccountKind = Schemas['AccountKind'];
+export type Entity = Schemas['Entity'];
+/** Tags for bank-type accounts, and the account type each belongs to. */
+export const ACCOUNT_KINDS: { value: AccountKind; label: string; type: Schemas['AccountType'] }[] = [
+	{ value: 'chequing', label: 'Chequing', type: 'asset' },
+	{ value: 'savings', label: 'Savings', type: 'asset' },
+	{ value: 'credit_card', label: 'Credit card', type: 'liability' }
+];
+export const kindLabel = (k: AccountKind | null | undefined) => ACCOUNT_KINDS.find((x) => x.value === k)?.label ?? '';
 export type AccountType = Schemas['AccountType'];
 export type Currency = Schemas['Currency'];
 export type JournalEntry = Schemas['JournalEntry'];

@@ -10,7 +10,7 @@ import { queryRow, queryRows } from "./db.ts";
 import { HttpError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
 
-export const FILE_KINDS = ["transaction", "receipt", "statement", "bill", "customer", "vendor"] as const;
+export const FILE_KINDS = ["transaction", "receipt", "statement", "bill", "customer", "vendor", "entity"] as const;
 export type FileKind = (typeof FILE_KINDS)[number];
 export type FileStatus = "new" | "accepted" | "done" | "rejected";
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;

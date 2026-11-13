@@ -49,7 +49,7 @@ export interface ModuleManifest {
 	/** Settings shown on the module's Settings tab (optional). */
 	settings: SettingsSpec | null;
 	/** Kinds of files other modules may send it with ctx.files (optional). */
-	files: { accepts: ("transaction" | "receipt" | "statement" | "bill" | "customer" | "vendor")[] } | null;
+	files: { accepts: ("transaction" | "receipt" | "statement" | "bill" | "customer" | "vendor" | "entity")[] } | null;
 }
 
 /**
@@ -141,7 +141,7 @@ export function validateManifest(v: unknown): ModuleManifest {
 	let files: ModuleManifest["files"] = null;
 	if (o.files !== undefined && o.files !== null) {
 		const f = (typeof o.files === "object" && !Array.isArray(o.files) ? o.files : null) as Record<string, unknown> | null;
-		const kinds = ["transaction", "receipt", "statement", "bill", "customer", "vendor"];
+		const kinds = ["transaction", "receipt", "statement", "bill", "customer", "vendor", "entity"];
 		if (!f || Object.keys(f).some((k) => k !== "accepts") || !Array.isArray(f.accepts) || !f.accepts.every((k) => kinds.includes(k as string)) || new Set(f.accepts).size !== f.accepts.length) {
 			err.add("files", 'must be {"accepts": [...]} with any of transaction, receipt, statement, bill, customer, vendor');
 		} else if (!server) {

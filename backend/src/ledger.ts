@@ -215,6 +215,11 @@ export async function createJournalEntry(
 		const accounts = await lockAccounts(tx, lineCodes(e.lines));
 		const v = new ValidationError();
 		checkLinesPostable(v, e, accounts, jsonFieldNames);
+		if (e.entity_id !== null && e.entity_id !== undefined) {
+			const ent = Number.isSafeInteger(e.entity_id) && e.entity_id > 0 ? await queryRow<{ is_active: boolean }>(tx, `SELECT is_active FROM entities WHERE id = $1`, [e.entity_id]) : null;
+			if (!ent) v.add("entity_id", "there is no such customer or vendor");
+			else if (!ent.is_active) v.add("entity_id", "that customer or vendor is inactive");
+		}
 		v.throwIfAny();
 		const id = await insertJournalEntry(tx, e, accounts, null, null, actorId);
 		// Posted and linked together, or neither.
@@ -292,10 +297,10 @@ export async function insertJournalEntry(
 ): Promise<bigint> {
 	const row = await queryRow<{ id: bigint }>(
 		tx,
-		`INSERT INTO journal_entries (entry_date, description, reference, reverses_id, import_id, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO journal_entries (entry_date, description, reference, reverses_id, import_id, created_by, entity_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id`,
-		[e.entry_date, trimSpace(e.description), trimSpace(e.reference), reversesId, importId, actorId],
+		[e.entry_date, trimSpace(e.description), trimSpace(e.reference), reversesId, importId, actorId, e.entity_id ?? null],
 	);
 	const id = row!.id;
 
@@ -431,10 +436,11 @@ export async function reverseJournalEntry(app: App, id: bigint, req: ReverseRequ
 
 const ENTRY_SELECT = `
 	SELECT e.id, e.entry_date, e.description, e.reference, e.reverses_id,
-	       r.id AS reversed_by_id, e.import_id, u.username, e.posted_at
+	       r.id AS reversed_by_id, e.import_id, u.username, e.posted_at, e.entity_id, en.name AS entity_name
 	  FROM journal_entries e
 	  LEFT JOIN journal_entries r ON r.reverses_id = e.id
-	  LEFT JOIN users u ON u.id = e.created_by`;
+	  LEFT JOIN users u ON u.id = e.created_by
+	  LEFT JOIN entities en ON en.id = e.entity_id`;
 
 interface EntryRow {
 	id: bigint;
@@ -446,6 +452,8 @@ interface EntryRow {
 	import_id: bigint | null;
 	username: string | null;
 	posted_at: Date;
+	entity_id: bigint | null;
+	entity_name: string | null;
 }
 
 function toEntry(r: EntryRow): JournalEntry {
@@ -458,6 +466,7 @@ function toEntry(r: EntryRow): JournalEntry {
 		reversed_by_id: toNumber(r.reversed_by_id),
 		import_id: toNumber(r.import_id),
 		created_by: r.username,
+		entity: r.entity_id === null ? null : { id: Number(r.entity_id), name: r.entity_name ?? "" },
 		posted_at: r.posted_at,
 		totals: [],
 		lines: [],
@@ -477,6 +486,8 @@ export interface EntryFilter {
 	from: string | null;
 	to: string | null;
 	accountCode: string | null;
+	/** Only entries with this entity (vendor, customer). */
+	entityId?: number | null;
 	/** Leave out reversed entries and the entries that reverse them. */
 	hideReversed?: boolean;
 	limit: number;
@@ -494,9 +505,10 @@ export async function listJournalEntries(app: App, f: EntryFilter): Promise<Jour
 		        SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id
 		         WHERE t.journal_entry_id = e.id AND a.code = $3))
 		  AND (NOT $6 OR (e.reverses_id IS NULL AND r.id IS NULL))
+		  AND ($7::bigint IS NULL OR e.entity_id = $7)
 		ORDER BY e.entry_date DESC, e.id DESC
 		LIMIT $4 OFFSET $5`,
-		[f.from, f.to, f.accountCode, f.limit, f.offset, f.hideReversed === true],
+		[f.from, f.to, f.accountCode, f.limit, f.offset, f.hideReversed === true, f.entityId ?? null],
 	);
 	const entries = rows.map(toEntry);
 	await attachLines(app, entries);

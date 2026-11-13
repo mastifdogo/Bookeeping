@@ -3,7 +3,7 @@
 	import Amount from '#lib/components/Amount.svelte';
 	import { openRow } from '#lib/rows.ts';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
-	import { api, unwrap, type Account } from '#lib/api/client.ts';
+	import { ACCOUNT_KINDS, api, kindLabel, unwrap, type Account, type AccountKind } from '#lib/api/client.ts';
 	import { naturalBalance } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
@@ -21,6 +21,8 @@
 	let name = $state('');
 	let description = $state('');
 	let parent = $state('');
+	let kind = $state<AccountKind | ''>('');
+	let kinds = $derived(ACCOUNT_KINDS.filter((k) => k.type === account.type));
 	// Accounts this one could sit under: same type and currency, not itself or anything below it.
 	let candidates = $state<Account[]>([]);
 	let children = $derived(data.accounts.filter((a) => a.parent_code === account.code));
@@ -40,6 +42,7 @@
 		name = account.name;
 		description = account.description;
 		parent = account.parent_code ?? '';
+		kind = account.kind ?? '';
 		const below = new Set([account.code]);
 		for (let grew = true; grew; ) {
 			grew = false;
@@ -49,7 +52,7 @@
 		editing = true;
 	}
 
-	async function update(body: { name?: string; description?: string; is_active?: boolean; parent_code?: string | null }) {
+	async function update(body: { name?: string; description?: string; is_active?: boolean; parent_code?: string | null; kind?: AccountKind | null }) {
 		busy = true;
 		error = null;
 		try {
@@ -72,6 +75,7 @@
 		{account.name}
 		<span class="badge">{account.type}</span>
 		<span class="badge">{account.currency}</span>
+		{#if account.kind}<span class="badge">{kindLabel(account.kind)}</span>{/if}
 		{#if !account.is_active}<span class="badge warn">inactive</span>{/if}
 	</h1>
 	<span class="spacer"></span>
@@ -101,11 +105,20 @@
 		class="card toolbar"
 		onsubmit={(e) => {
 			e.preventDefault();
-			update({ name, description, ...(parent !== (account.parent_code ?? '') ? { parent_code: parent || null } : {}) });
+			update({ name, description, ...(parent !== (account.parent_code ?? '') ? { parent_code: parent || null } : {}), ...(kind !== (account.kind ?? '') ? { kind: kind || null } : {}) });
 		}}
 	>
 		<label style="flex:1">Name <input bind:value={name} required maxlength="200" /></label>
 		<label style="flex:2">Description <input bind:value={description} maxlength="1000" /></label>
+		{#if kinds.length}
+			<label>
+				Tag
+				<select bind:value={kind}>
+					<option value="">— none —</option>
+					{#each kinds as k (k.value)}<option value={k.value}>{k.label}</option>{/each}
+				</select>
+			</label>
+		{/if}
 		<label>
 			Sub-account of
 			<select bind:value={parent}>

@@ -67,6 +67,7 @@
 		<div><div class="muted small">Date</div><div class="mono">{e.entry_date}</div></div>
 		<div><div class="muted small">Description</div><div>{e.description}</div></div>
 		<div><div class="muted small">Reference</div><div>{e.reference || '—'}</div></div>
+		{#if e.entity}<div><div class="muted small">Customer / vendor</div><div><a href="/journal?entity_id={e.entity.id}">{e.entity.name}</a></div></div>{/if}
 		<div>
 			<div class="muted small">Posted</div>
 			<div class="small">{new Date(e.posted_at).toLocaleString()}{#if e.created_by} by <strong>{e.created_by}</strong>{/if}</div>

@@ -100,9 +100,10 @@ function date(o: Record<string, unknown>, key: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 export function decodeAccountCreate(v: unknown): AccountCreate {
-	const o = object(v, "AccountCreate", ["code", "name", "type", "currency", "description", "parent_code"]);
+	const o = object(v, "AccountCreate", ["code", "name", "type", "currency", "description", "parent_code", "kind"]);
 	const p = "AccountCreate.";
 	return {
+		kind: str(o, "kind", p) ?? null,
 		parent_code: str(o, "parent_code", p) ?? null,
 		code: str(o, "code", p) ?? "",
 		name: str(o, "name", p) ?? "",
@@ -113,7 +114,7 @@ export function decodeAccountCreate(v: unknown): AccountCreate {
 }
 
 export function decodeAccountUpdate(v: unknown): AccountUpdate {
-	const o = object(v, "AccountUpdate", ["name", "description", "is_active", "parent_code"]);
+	const o = object(v, "AccountUpdate", ["name", "description", "is_active", "parent_code", "kind"]);
 	const p = "AccountUpdate.";
 	const out: AccountUpdate = {};
 	const name = str(o, "name", p);
@@ -123,6 +124,7 @@ export function decodeAccountUpdate(v: unknown): AccountUpdate {
 	if (description !== undefined) out.description = description;
 	if (isActive !== undefined) out.is_active = isActive;
 	// null is meaningful here: it makes the account top-level.
+	if (Object.hasOwn(o, "kind")) out.kind = o.kind === null ? null : (str(o, "kind", p) ?? null);
 	if (Object.hasOwn(o, "parent_code")) out.parent_code = o.parent_code === null ? null : (str(o, "parent_code", p) ?? null);
 	return out;
 }
@@ -139,7 +141,8 @@ function decodeLine(v: unknown, i: number): JournalLineCreate {
 }
 
 export function decodeJournalEntryCreate(v: unknown): JournalEntryCreate {
-	const o = object(v, "JournalEntryCreate", ["entry_date", "description", "reference", "lines"]);
+	const o = object(v, "JournalEntryCreate", ["entry_date", "description", "reference", "lines", "entity_id"]);
+	const entity = int64(o, "entity_id", "JournalEntryCreate.");
 	const p = "JournalEntryCreate.";
 	const lines = o.lines;
 	if (lines !== undefined && lines !== null && !Array.isArray(lines)) throw mismatch(lines, `${p}lines`, "array");
@@ -147,6 +150,7 @@ export function decodeJournalEntryCreate(v: unknown): JournalEntryCreate {
 		entry_date: date(o, "entry_date") ?? "",
 		description: str(o, "description", p) ?? "",
 		reference: str(o, "reference", p) ?? "",
+		entity_id: entity === undefined ? null : Number(entity),
 		lines: ((lines as unknown[] | null | undefined) ?? []).map(decodeLine),
 	};
 }

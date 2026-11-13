@@ -26,6 +26,11 @@ export interface CurrencyInfo {
 	minor_units: number;
 }
 
+export const ACCOUNT_KINDS = ["chequing", "savings", "credit_card"] as const;
+export type AccountKind = (typeof ACCOUNT_KINDS)[number];
+/** The account type each tag belongs to. */
+export const KIND_TYPE: Record<AccountKind, AccountType> = { chequing: "asset", savings: "asset", credit_card: "liability" };
+
 export interface Account {
 	code: string;
 	name: string;
@@ -35,6 +40,8 @@ export interface Account {
 	is_active: boolean;
 	/** The account's own postings (debit-positive). */
 	balance_cents: bigint;
+	/** What a bank-type account is, or null. */
+	kind: AccountKind | null;
 	/** The account this one sits under (same type and currency), or null. */
 	parent_code: string | null;
 	/** balance_cents plus the balances of every sub-account below it. */
@@ -51,6 +58,8 @@ export interface AccountCreate {
 	description: string;
 	/** The parent account's code; null or omitted for a top-level account. */
 	parent_code?: string | null;
+	/** chequing or savings (asset accounts) or credit_card (liability); null or omitted for none. */
+	kind?: string | null;
 }
 
 export interface AccountUpdate {
@@ -59,6 +68,8 @@ export interface AccountUpdate {
 	is_active?: boolean;
 	/** Moves the account under another (same type and currency); null makes it top-level. */
 	parent_code?: string | null;
+	/** Changes the tag; null removes it. */
+	kind?: string | null;
 }
 
 export interface JournalLineCreate {
@@ -74,6 +85,8 @@ export interface JournalEntryCreate {
 	description: string;
 	reference: string;
 	lines: JournalLineCreate[];
+	/** The entity (vendor, customer) the entry is with, if any. */
+	entity_id?: number | null;
 }
 
 export interface JournalLine {
@@ -102,6 +115,8 @@ export interface JournalEntry {
 	reversed_by_id: number | null;
 	import_id: number | null;
 	created_by: string | null;
+	/** The vendor or customer the entry is with. */
+	entity: { id: number; name: string } | null;
 	posted_at: Date;
 	totals: CurrencyTotal[];
 	lines: JournalLine[];

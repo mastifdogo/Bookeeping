@@ -121,6 +121,7 @@ import {
 	type OrgCreate,
 	type OrgKind,
 } from "./orgs.ts";
+import { createEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
 import { MultipartError, formDataBoundary, parseHeaderParams, parseMultipart } from "./multipart.ts";
 import { CONTENT_TYPES, staticHandler } from "./static.ts";
 import { promises as fsp } from "node:fs";
@@ -771,6 +772,38 @@ async function handleAccountLedger(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await getAccountLedger(c.app, c.params.accountCode!, from, to));
 }
 
+// Entities: customers and vendors, shared with modules.
+
+function entityIdParam(c: Ctx): number {
+	const n = /^[1-9][0-9]{0,15}$/.test(c.params.entityId ?? "") ? Number(c.params.entityId) : NaN;
+	if (!Number.isSafeInteger(n)) throw new NotFoundError();
+	return n;
+}
+
+const entityBody = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? (plainJson(v) as EntityInput) : ({} as EntityInput));
+
+async function handleListEntities(c: Ctx): Promise<void> {
+	const role = c.query.get("role") ?? "";
+	if (role !== "" && role !== "customer" && role !== "vendor") {
+		const v = new ValidationError();
+		v.add("role", "must be customer or vendor");
+		v.throwIfAny();
+	}
+	writeJSON(c.res, 200, { data: await listEntities(c.app, { role: (role || null) as EntityRole | null, q: c.query.get("q"), includeInactive: queryBool(c.query, "include_inactive") }) });
+}
+
+async function handleCreateEntity(c: Ctx): Promise<void> {
+	writeJSON(c.res, 201, await createEntity(c.app, await decodeBody(c, true, entityBody)));
+}
+
+async function handleGetEntity(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await getEntity(c.app, entityIdParam(c)));
+}
+
+async function handleUpdateEntity(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await updateEntity(c.app, entityIdParam(c), await decodeBody(c, true, entityBody)));
+}
+
 async function handleListJournalEntries(c: Ctx): Promise<void> {
 	const [from, to] = queryDateRange(c.query);
 	const f: EntryFilter = { from, to, accountCode: null, hideReversed: queryBool(c.query, "hide_reversed"), limit: 50, offset: 0 };
@@ -779,6 +812,12 @@ async function handleListJournalEntries(c: Ctx): Promise<void> {
 	if (code !== "") {
 		if (!ACCOUNT_CODE_RE.test(code)) v.add("account_code", "is not a valid account code");
 		else f.accountCode = code;
+	}
+	const entity = c.query.get("entity_id") ?? "";
+	if (entity !== "") {
+		const n = atoi(entity);
+		if (n === null || n < 1) v.add("entity_id", "must be a customer's or vendor's id");
+		else f.entityId = n;
 	}
 	const limit = c.query.get("limit") ?? "";
 	if (limit !== "") {
@@ -1836,6 +1875,11 @@ const ROUTES: Route[] = [
 	route("GET", "/accounts/:accountCode", true, handleGetAccount),
 	route("PATCH", "/accounts/:accountCode", true, handleUpdateAccount),
 	route("GET", "/accounts/:accountCode/ledger", true, handleAccountLedger),
+
+	route("GET", "/entities", true, handleListEntities),
+	route("POST", "/entities", true, handleCreateEntity),
+	route("GET", "/entities/:entityId", true, handleGetEntity),
+	route("PATCH", "/entities/:entityId", true, handleUpdateEntity),
 
 	route("GET", "/journal-entries", true, handleListJournalEntries),
 	route("POST", "/journal-entries", true, handleCreateJournalEntry),

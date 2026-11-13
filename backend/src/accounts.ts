@@ -6,9 +6,12 @@ import { checkText, trimSpace } from "./text.ts";
 import { today } from "./date.ts";
 import {
 	ACCOUNT_CODE_RE,
+	ACCOUNT_KINDS,
+	KIND_TYPE,
 	isAccountType,
 	isCurrency,
 	type Account,
+	type AccountKind,
 	type AccountCreate,
 	type AccountLedger,
 	type AccountType,
@@ -20,7 +23,7 @@ import {
 } from "./types.ts";
 
 const ACCOUNT_SELECT = `
-	SELECT a.id, a.code, a.name, a.type, a.currency, a.description, a.is_active,
+	SELECT a.id, a.code, a.name, a.type, a.currency, a.description, a.is_active, a.kind,
 	       COALESCE((SELECT sum(t.amount) FROM transactions t WHERE t.account_id = a.id), 0)::bigint AS balance,
 	       (SELECT p.code FROM accounts p WHERE p.id = a.parent_id) AS parent_code,
 	       COALESCE((WITH RECURSIVE sub AS (SELECT a.id UNION ALL SELECT c.id FROM accounts c JOIN sub ON c.parent_id = sub.id)
@@ -37,6 +40,7 @@ interface AccountRow {
 	description: string;
 	is_active: boolean;
 	balance: bigint;
+	kind: AccountKind | null;
 	parent_code: string | null;
 	total_balance: bigint;
 	created_at: Date;
@@ -55,6 +59,7 @@ function toAccount(r: AccountRow): Account {
 		description: r.description,
 		is_active: r.is_active,
 		balance_cents: r.balance,
+		kind: r.kind,
 		parent_code: r.parent_code,
 		total_balance_cents: r.total_balance,
 		created_at: r.created_at,
@@ -72,16 +77,32 @@ export async function createAccount(app: App, input: AccountCreate): Promise<Acc
 	checkText(v, "description", input.description, 0, 1000);
 	if (!isAccountType(input.type)) v.add("type", "must be one of asset, liability, equity, revenue, expense");
 	if (!isCurrency(input.currency)) v.add("currency", "must be CAD or USD");
+	const kind = checkKind(v, input.kind, input.type);
 	v.throwIfAny();
 	const parentId = input.parent_code ? await parentFor(app, v, { id: null, code, type: input.type, currency: input.currency }, input.parent_code) : null;
 	v.throwIfAny();
 
 	await app.db.query(
-		`INSERT INTO accounts (code, name, type, currency, description, parent_id)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		[code, trimSpace(input.name), input.type, input.currency, trimSpace(input.description), parentId],
+		`INSERT INTO accounts (code, name, type, currency, description, parent_id, kind)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		[code, trimSpace(input.name), input.type, input.currency, trimSpace(input.description), parentId, kind],
 	);
 	return getAccount(app, code);
+}
+
+/** Checks an account tag against the account's type; returns it (null for none). */
+function checkKind(v: ValidationError, kind: string | null | undefined, type: string): AccountKind | null {
+	if (kind === null || kind === undefined || kind === "") return null;
+	if (!(ACCOUNT_KINDS as readonly string[]).includes(kind)) {
+		v.add("kind", `must be one of ${ACCOUNT_KINDS.join(", ")}`);
+		return null;
+	}
+	const k = kind as AccountKind;
+	if (KIND_TYPE[k] !== type) {
+		v.add("kind", `${k.replace("_", " ")} accounts are ${KIND_TYPE[k]} accounts; this one is ${type}`);
+		return null;
+	}
+	return k;
 }
 
 export const MAX_ACCOUNT_DEPTH = 5;
@@ -155,12 +176,17 @@ export async function listAccounts(app: App, includeInactive: boolean): Promise<
 
 export async function updateAccount(app: App, code: string, input: AccountUpdate): Promise<Account> {
 	const v = new ValidationError();
-	if (input.name === undefined && input.description === undefined && input.is_active === undefined && input.parent_code === undefined) {
-		v.add("", "at least one of name, description, is_active, parent_code is required");
+	if (input.name === undefined && input.description === undefined && input.is_active === undefined && input.parent_code === undefined && input.kind === undefined) {
+		v.add("", "at least one of name, description, is_active, parent_code, kind is required");
 	}
 	if (input.name !== undefined) checkText(v, "name", input.name, 1, 200);
 	if (input.description !== undefined) checkText(v, "description", input.description, 0, 1000);
 	v.throwIfAny();
+	let kind: AccountKind | null = null;
+	if (input.kind) {
+		kind = checkKind(v, input.kind, (await getAccountRow(app, code)).type);
+		v.throwIfAny();
+	}
 	let parentId: bigint | null = null;
 	if (input.parent_code) {
 		const cur = await getAccountRow(app, code);
@@ -173,7 +199,8 @@ export async function updateAccount(app: App, code: string, input: AccountUpdate
 		    SET name        = COALESCE($2, name),
 		        description = COALESCE($3, description),
 		        is_active   = COALESCE($4, is_active),
-		        parent_id   = CASE WHEN $5 THEN $6::bigint ELSE parent_id END
+		        parent_id   = CASE WHEN $5 THEN $6::bigint ELSE parent_id END,
+		        kind        = CASE WHEN $7 THEN $8::text ELSE kind END
 		  WHERE code = $1`,
 		[
 			code,
@@ -182,6 +209,8 @@ export async function updateAccount(app: App, code: string, input: AccountUpdate
 			input.is_active ?? null,
 			input.parent_code !== undefined,
 			parentId,
+			input.kind !== undefined,
+			kind,
 		],
 	);
 	if (r.rowCount === 0) throw new NotFoundError();

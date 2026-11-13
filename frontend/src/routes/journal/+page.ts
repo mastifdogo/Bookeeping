@@ -32,6 +32,7 @@ export const load: PageLoad = async ({ fetch, url }) => {
 						to: filter.to || undefined,
 						account_code: filter.account_code || undefined,
 						hide_reversed: filter.hide_reversed || undefined,
+						entity_id: Number(q.get('entity_id')) || undefined,
 						limit: _PAGE_SIZE,
 						offset: filter.offset
 					}

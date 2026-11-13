@@ -421,6 +421,10 @@ paths:
           in: query
           description: Only entries with at least one line on this account
           schema: { $ref: '#/components/schemas/AccountCode' }
+        - name: entity_id
+          in: query
+          description: Only entries with this customer or vendor
+          schema: { type: integer }
         - name: hide_reversed
           in: query
           description: Leave out entries that were reversed and the reversing entries
@@ -1448,6 +1452,74 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /entities:
+    get:
+      tags: [Entities]
+      operationId: listEntities
+      summary: Customers and vendors (one list shared with modules), by name
+      parameters:
+        - { name: role, in: query, schema: { type: string, enum: [customer, vendor] }, description: Only customers or only vendors (an entity that is both matches either) }
+        - { name: q, in: query, schema: { type: string }, description: Part of the name }
+        - { name: include_inactive, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: Entities
+          content:
+            application/json:
+              schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: '#/components/schemas/Entity' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Entities]
+      operationId: createEntity
+      summary: Add a customer, a vendor, or one that is both
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EntityInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entity' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /entities/{entityId}:
+    parameters:
+      - { name: entityId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Entities]
+      operationId: getEntity
+      summary: One entity
+      responses:
+        '200':
+          description: The entity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entity' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Entities]
+      operationId: updateEntity
+      summary: Change an entity (entities are made inactive, never deleted)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EntityInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entity' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /search:
     get:
       tags: [Reports]
@@ -2247,8 +2319,9 @@ components:
 
     Account:
       type: object
-      required: [code, name, type, currency, description, is_active, balance_cents, parent_code, total_balance_cents, created_at, updated_at]
+      required: [code, name, type, currency, description, is_active, balance_cents, kind, parent_code, total_balance_cents, created_at, updated_at]
       properties:
+        kind: { allOf: [{ $ref: '#/components/schemas/AccountKind' }], nullable: true }
         parent_code: { type: string, nullable: true, description: 'The account this one sits under (same type and currency), or null' }
         total_balance_cents:
           allOf: [{ $ref: '#/components/schemas/SignedCents' }]
@@ -2275,6 +2348,7 @@ components:
         currency: { $ref: '#/components/schemas/Currency' }
         description: { type: string, maxLength: 1000, default: '' }
         parent_code: { type: string, nullable: true, description: 'Make it a sub-account of this account (same type and currency, at most 5 levels deep)' }
+        kind: { allOf: [{ $ref: '#/components/schemas/AccountKind' }], nullable: true }
     AccountUpdate:
       type: object
       additionalProperties: false
@@ -2284,6 +2358,7 @@ components:
         description: { type: string, maxLength: 1000 }
         is_active: { type: boolean }
         parent_code: { type: string, nullable: true, description: 'Move it under this account (same type and currency); null makes it top-level' }
+        kind: { allOf: [{ $ref: '#/components/schemas/AccountKind' }], nullable: true, description: null removes the tag }
 
     JournalLineCreate:
       type: object
@@ -2297,11 +2372,44 @@ components:
         debit_cents: { $ref: '#/components/schemas/Cents' }
         credit_cents: { $ref: '#/components/schemas/Cents' }
         memo: { type: string, maxLength: 500, default: '' }
+    Entity:
+      type: object
+      description: A person or business the books deal with; a customer, a vendor, or both.
+      required: [id, name, is_customer, is_vendor, email, phone, address, notes, is_active, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        is_customer: { type: boolean }
+        is_vendor: { type: boolean }
+        email: { type: string }
+        phone: { type: string }
+        address: { type: string }
+        notes: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EntityInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        is_customer: { type: boolean }
+        is_vendor: { type: boolean }
+        email: { type: string, maxLength: 200 }
+        phone: { type: string, maxLength: 100 }
+        address: { type: string, maxLength: 1000 }
+        notes: { type: string, maxLength: 2000 }
+        is_active: { type: boolean }
+    AccountKind:
+      type: string
+      enum: [chequing, savings, credit_card]
+      description: What a bank-type account is. chequing and savings are asset accounts, credit_card a liability.
     JournalEntryCreate:
       type: object
       required: [entry_date, description, lines]
       additionalProperties: false
       properties:
+        entity_id: { type: integer, nullable: true, description: The vendor or customer the entry is with }
         entry_date: { type: string, format: date }
         description: { type: string, minLength: 1, maxLength: 500 }
         reference: { type: string, maxLength: 100, default: '' }
@@ -2325,8 +2433,16 @@ components:
         memo: { type: string }
     JournalEntry:
       type: object
-      required: [id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, posted_at, totals, lines, links]
+      required: [id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, entity, posted_at, totals, lines, links]
       properties:
+        entity:
+          type: object
+          nullable: true
+          description: The vendor or customer the entry is with
+          required: [id, name]
+          properties:
+            id: { type: integer }
+            name: { type: string }
         id: { type: integer, format: int64 }
         entry_date: { type: string, format: date }
         description: { type: string }
