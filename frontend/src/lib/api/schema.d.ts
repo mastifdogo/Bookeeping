@@ -1480,11 +1480,19 @@ export interface components {
              */
             new_password: string;
         };
+        /** @description Lines come as a tree, a parent account first and then its sub-accounts. */
         ReportLine: {
             account_code: components["schemas"]["AccountCode"];
             account_name: string;
-            /** @description Natural-sign balance (a contra balance is negative) */
+            /** @description Natural-sign balance of the account's own postings (a contra balance is negative) */
             amount_cents: components["schemas"]["SignedCents"];
+            /** @description 0 for a top-level account, 1 for its sub-accounts, and so on */
+            depth: number;
+            parent_code: string | null;
+            /** @description Whether sub-account lines follow this one */
+            has_children: boolean;
+            /** @description amount_cents plus every sub-account line below it */
+            total_cents: components["schemas"]["SignedCents"];
         };
         BalanceSheet: {
             /** Format: date */
@@ -1543,6 +1551,10 @@ export interface components {
             };
         };
         Account: {
+            /** @description The account this one sits under (same type and currency), or null */
+            parent_code: string | null;
+            /** @description balance_cents plus the balances of every sub-account below it */
+            total_balance_cents: components["schemas"]["SignedCents"];
             code: components["schemas"]["AccountCode"];
             name: string;
             type: components["schemas"]["AccountType"];
@@ -1564,11 +1576,15 @@ export interface components {
             currency: components["schemas"]["Currency"];
             /** @default  */
             description: string;
+            /** @description Make it a sub-account of this account (same type and currency, at most 5 levels deep) */
+            parent_code?: string | null;
         };
         AccountUpdate: {
             name?: string;
             description?: string;
             is_active?: boolean;
+            /** @description Move it under this account (same type and currency); null makes it top-level */
+            parent_code?: string | null;
         };
         /**
          * @description Exactly one of debit_cents / credit_cents must be > 0. The amount is

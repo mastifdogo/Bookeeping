@@ -14,6 +14,12 @@
 	let type = $state<AccountType>('asset');
 	let currency = $state<Currency>('CAD');
 	let description = $state('');
+	let parent = $state('');
+	// A sub-account sits under an account of the same type and currency.
+	let parents = $derived(data.accounts.filter((a) => a.type === type && a.currency === currency));
+	$effect(() => {
+		if (parent && !parents.some((a) => a.code === parent)) parent = '';
+	});
 	let saving = $state(false);
 	let error = $state<unknown>(null);
 	let created = $state('');
@@ -23,8 +29,8 @@
 		saving = true;
 		error = null;
 		try {
-			const acc = unwrap(await api().POST('/accounts', { body: { code, name, type, currency, description } }));
-			created = `Created ${acc.code} ${acc.name} (${acc.currency}).`;
+			const acc = unwrap(await api().POST('/accounts', { body: { code, name, type, currency, description, parent_code: parent || null } }));
+			created = `Created ${acc.code} ${acc.name} (${acc.currency})${acc.parent_code ? ` under ${acc.parent_code}` : ''}.`;
 			code = name = description = '';
 			await invalidateAll();
 		} catch (err) {
@@ -68,6 +74,27 @@
 		const f = cmp[sort.key];
 		const dir = sort.desc ? -1 : 1;
 		return [...data.accounts].sort((a, b) => dir * f(a, b) || byCode(a.code, b.code));
+	});
+	// By code (the default) the chart is a tree: each account, then its sub-accounts, indented.
+	let tree = $derived(sort.key === 'code' && !sort.desc);
+	let rows = $derived.by((): { a: Account; depth: number; kids: boolean }[] => {
+		if (!tree) return sorted.map((a) => ({ a, depth: 0, kids: false }));
+		const codes = new Set(sorted.map((a) => a.code));
+		const under = new Map<string, Account[]>();
+		for (const a of sorted) {
+			// A sub-account whose parent isn't listed (inactive and hidden) shows at the top level.
+			const key = a.parent_code && codes.has(a.parent_code) ? a.parent_code : '';
+			under.set(key, [...(under.get(key) ?? []), a]);
+		}
+		const out: { a: Account; depth: number; kids: boolean }[] = [];
+		const walk = (key: string, depth: number) => {
+			for (const a of under.get(key) ?? []) {
+				out.push({ a, depth, kids: under.has(a.code) });
+				if (depth < 10) walk(a.code, depth + 1);
+			}
+		};
+		walk('', 0);
+		return out;
 	});
 	const columns: { key: SortKey; label: string; num?: boolean }[] = [
 		{ key: 'code', label: 'Code' },
@@ -117,6 +144,13 @@
 					{#each CURRENCIES as c (c)}<option value={c}>{c}</option>{/each}
 				</select>
 			</label>
+			<label>
+				Sub-account of
+				<select bind:value={parent}>
+					<option value="">— none (top level) —</option>
+					{#each parents as p (p.code)}<option value={p.code}>{p.code} {p.name}</option>{/each}
+				</select>
+			</label>
 			<label style="flex:1">Description <input bind:value={description} maxlength="1000" /></label>
 			<button class="primary" disabled={saving}>{saving ? 'Saving…' : 'Create'}</button>
 		</div>
@@ -141,13 +175,22 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each sorted as a (a.code)}
+				{#each rows as { a, depth, kids } (a.code)}
 					<tr class="clickable" onclick={(e) => openRow(e, a.code)}>
 						<td class="mono"><a href="/accounts/{encodeURIComponent(a.code)}">{a.code}</a></td>
-						<td>{a.name}{#if a.description}<div class="muted small">{a.description}</div>{/if}</td>
+						<td style:padding-left={depth ? `${0.6 + depth * 1.25}rem` : undefined}>
+							{#if depth}<span class="muted" aria-hidden="true">↳ </span>{/if}{a.name}
+							{#if !tree && a.parent_code}<span class="muted small">(under {a.parent_code})</span>{/if}
+							{#if a.description}<div class="muted small">{a.description}</div>{/if}
+						</td>
 						<td>{a.type}</td>
 						<td>{a.currency}</td>
-						<td class="num"><Amount cents={naturalBalance(a.type, a.balance_cents)} /></td>
+						<td class="num">
+							<Amount cents={naturalBalance(a.type, a.balance_cents)} />
+							{#if kids || a.total_balance_cents !== a.balance_cents}
+								<div class="muted small">with sub-accounts <Amount cents={naturalBalance(a.type, a.total_balance_cents)} /></div>
+							{/if}
+						</td>
 						<td>{#if !a.is_active}<span class="badge warn">inactive</span>{/if}</td>
 					</tr>
 				{/each}
@@ -155,7 +198,10 @@
 		</table>
 	{/if}
 </div>
-<p class="muted small">Balances use each account's normal side: debit for assets and expenses, credit for liabilities, equity and revenue.</p>
+<p class="muted small">
+	Balances use each account's normal side: debit for assets and expenses, credit for liabilities, equity and revenue. Sub-accounts are
+	listed under their parent when the chart is sorted by code; a parent's own balance is what is posted to it directly.
+</p>
 
 <style>
 	button.sort {

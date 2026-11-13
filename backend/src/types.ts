@@ -33,7 +33,12 @@ export interface Account {
 	currency: Currency;
 	description: string;
 	is_active: boolean;
+	/** The account's own postings (debit-positive). */
 	balance_cents: bigint;
+	/** The account this one sits under (same type and currency), or null. */
+	parent_code: string | null;
+	/** balance_cents plus the balances of every sub-account below it. */
+	total_balance_cents: bigint;
 	created_at: Date;
 	updated_at: Date;
 }
@@ -44,12 +49,16 @@ export interface AccountCreate {
 	type: string;
 	currency: string;
 	description: string;
+	/** The parent account's code; null or omitted for a top-level account. */
+	parent_code?: string | null;
 }
 
 export interface AccountUpdate {
 	name?: string;
 	description?: string;
 	is_active?: boolean;
+	/** Moves the account under another (same type and currency); null makes it top-level. */
+	parent_code?: string | null;
 }
 
 export interface JournalLineCreate {

@@ -3,7 +3,8 @@
 	import Amount from '#lib/components/Amount.svelte';
 	import { openRow } from '#lib/rows.ts';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
-	import { api, unwrap } from '#lib/api/client.ts';
+	import { api, unwrap, type Account } from '#lib/api/client.ts';
+	import { naturalBalance } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -19,6 +20,11 @@
 	let editing = $state(false);
 	let name = $state('');
 	let description = $state('');
+	let parent = $state('');
+	// Accounts this one could sit under: same type and currency, not itself or anything below it.
+	let candidates = $state<Account[]>([]);
+	let children = $derived(data.accounts.filter((a) => a.parent_code === account.code));
+	let parentAccount = $derived(data.accounts.find((a) => a.code === account.parent_code));
 	let busy = $state(false);
 	let error = $state<unknown>(null);
 
@@ -33,10 +39,17 @@
 	function startEdit() {
 		name = account.name;
 		description = account.description;
+		parent = account.parent_code ?? '';
+		const below = new Set([account.code]);
+		for (let grew = true; grew; ) {
+			grew = false;
+			for (const a of data.accounts) if (a.parent_code && below.has(a.parent_code) && !below.has(a.code)) (below.add(a.code), (grew = true));
+		}
+		candidates = data.accounts.filter((a) => a.type === account.type && a.currency === account.currency && !below.has(a.code));
 		editing = true;
 	}
 
-	async function update(body: { name?: string; description?: string; is_active?: boolean }) {
+	async function update(body: { name?: string; description?: string; is_active?: boolean; parent_code?: string | null }) {
 		busy = true;
 		error = null;
 		try {
@@ -69,6 +82,17 @@
 	</button>
 </div>
 {#if account.description && !editing}<p class="muted">{account.description}</p>{/if}
+{#if parentAccount || children.length}
+	<p class="small">
+		{#if parentAccount}Sub-account of <a href="/accounts/{encodeURIComponent(parentAccount.code)}"><span class="mono">{parentAccount.code}</span> {parentAccount.name}</a>.{/if}
+		{#if children.length}
+			Sub-accounts:
+			{#each children as c, i (c.code)}{i ? ', ' : ''}<a href="/accounts/{encodeURIComponent(c.code)}"><span class="mono">{c.code}</span> {c.name}</a>{/each}.
+			Balance with sub-accounts: <strong><Amount cents={naturalBalance(account.type, account.total_balance_cents)} currency={account.currency} /></strong>
+			(this page lists what is posted to {account.code} itself).
+		{/if}
+	</p>
+{/if}
 
 <ErrorNotice {error} />
 
@@ -77,11 +101,18 @@
 		class="card toolbar"
 		onsubmit={(e) => {
 			e.preventDefault();
-			update({ name, description });
+			update({ name, description, ...(parent !== (account.parent_code ?? '') ? { parent_code: parent || null } : {}) });
 		}}
 	>
 		<label style="flex:1">Name <input bind:value={name} required maxlength="200" /></label>
 		<label style="flex:2">Description <input bind:value={description} maxlength="1000" /></label>
+		<label>
+			Sub-account of
+			<select bind:value={parent}>
+				<option value="">— none (top level) —</option>
+				{#each candidates as p (p.code)}<option value={p.code}>{p.code} {p.name}</option>{/each}
+			</select>
+		</label>
 		<button class="primary" disabled={busy}>Save</button>
 		<button type="button" onclick={() => (editing = false)}>Cancel</button>
 	</form>

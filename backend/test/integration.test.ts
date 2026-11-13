@@ -2781,3 +2781,83 @@ test("restore from a backup: one organization's books replaced; users, sign-ins 
 	assert.deepEqual(await codes(), ["1000", "3000"]);
 	assert.deepEqual(await dbs(), [mainDb, orgRow.db_name, org3Db].sort());
 });
+
+test("sub-accounts: a parent of the same kind, totals on the chart and the statements", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	const acc = (code: string, name: string, type: string, extra: Record<string, unknown> = {}) => call("POST", "/accounts", { code, name, type, currency: "CAD", ...extra });
+	expectStatus(await acc("1000", "Bank", "asset"), 201);
+	expectStatus(await acc("4000", "Sales", "revenue"), 201);
+	let r = await acc("4010", "Consulting", "revenue", { parent_code: "4000" });
+	expectStatus(r, 201);
+	assert.equal(r.json().parent_code, "4000");
+	expectStatus(await acc("4011", "Workshops", "revenue", { parent_code: "4010" }), 201);
+	expectStatus(await acc("4020", "Products", "revenue", { parent_code: "4000" }), 201);
+	expectStatus(await acc("4900", "Other income", "revenue"), 201);
+	expectStatus(await acc("5000", "Rent", "expense"), 201);
+
+	// A parent must exist and be the same type and currency.
+	r = await acc("4030", "Odd", "revenue", { parent_code: "1000" });
+	expectStatus(r, 422);
+	assert.match(JSON.stringify(r.json()), /must be a revenue account in CAD/);
+	expectStatus(await acc("4031", "Odd", "revenue", { parent_code: "4999" }), 422);
+	expectStatus(await call("POST", "/accounts", { code: "4040", name: "US sales", type: "revenue", currency: "USD", parent_code: "4000" }), 422);
+	// No loops: an account can't go under itself or one of its own sub-accounts.
+	expectStatus(await call("PATCH", "/accounts/4000", { parent_code: "4000" }), 422);
+	r = await call("PATCH", "/accounts/4000", { parent_code: "4011" });
+	expectStatus(r, 422);
+	assert.match(JSON.stringify(r.json()), /can't be under one of its own sub-accounts/);
+	// At most 5 levels.
+	for (const [code, parent] of [["4012", "4011"], ["4013", "4012"]]) expectStatus(await acc(code!, `Level ${code}`, "revenue", { parent_code: parent }), 201);
+	expectStatus(await acc("4014", "Too deep", "revenue", { parent_code: "4013" }), 422);
+	// Moving and detaching.
+	r = await call("PATCH", "/accounts/4900", { parent_code: "4000" });
+	expectStatus(r, 200);
+	assert.equal(r.json().parent_code, "4000");
+	r = await call("PATCH", "/accounts/4900", { parent_code: null });
+	assert.equal(r.json().parent_code, null);
+	r = await call("PATCH", "/accounts/4900", { name: "Other revenue" });
+	assert.equal(r.json().parent_code, null, "other changes leave the parent alone");
+
+	// Postings to the parent and to sub-accounts.
+	const post = (code: string, cents: number) => call("POST", "/journal-entries", { entry_date: "2026-03-01", description: `Sale ${code}`, lines: [{ account_code: "1000", debit_cents: cents }, { account_code: code, credit_cents: cents }] });
+	for (const [code, cents] of [["4000", 1000], ["4010", 20000], ["4011", 300000], ["4020", 4000000]] as const) expectStatus(await post(code, cents), 201);
+	const accounts = (await call("GET", "/accounts")).json().data;
+	const of = (code: string) => accounts.find((a: any) => a.code === code);
+	assert.deepEqual([of("4000").balance_cents, of("4000").total_balance_cents], [-1000, -4321000], "own postings, and with everything below");
+	assert.deepEqual([of("4010").balance_cents, of("4010").total_balance_cents], [-20000, -320000]);
+	assert.deepEqual([of("4011").parent_code, of("4011").total_balance_cents], ["4010", -300000]);
+
+	// The income statement lists the tree: parent first, then its sub-accounts, with totals.
+	r = await call("GET", "/reports/income-statement?from=2026-01-01&to=2026-12-31");
+	expectStatus(r, 200);
+	const sec = r.json().currencies[0];
+	assert.deepEqual(
+		sec.revenue.map((l: any) => [l.account_code, l.depth, l.parent_code, l.has_children, l.amount_cents, l.total_cents]),
+		[
+			["4000", 0, null, true, 1000, 4321000],
+			["4010", 1, "4000", true, 20000, 320000],
+			["4011", 2, "4010", false, 300000, 300000], // its empty sub-accounts (4012, 4013) are not listed
+			["4020", 1, "4000", false, 4000000, 4000000],
+		],
+	);
+	assert.equal(sec.total_revenue_cents, 4321000);
+	// A parent with no postings of its own still heads its sub-accounts.
+	expectStatus(await acc("5100", "Vehicle", "expense"), 201);
+	expectStatus(await acc("5110", "Fuel", "expense", { parent_code: "5100" }), 201);
+	expectStatus(await call("POST", "/journal-entries", { entry_date: "2026-03-02", description: "Gas", lines: [{ account_code: "5110", debit_cents: 6000 }, { account_code: "1000", credit_cents: 6000 }] }), 201);
+	const exp = (await call("GET", "/reports/income-statement?from=2026-01-01&to=2026-12-31")).json().currencies[0].expenses;
+	assert.deepEqual(exp.map((l: any) => [l.account_code, l.depth, l.amount_cents, l.total_cents]), [["5100", 0, 0, 6000], ["5110", 1, 6000, 6000]]);
+	const bs = (await call("GET", "/reports/balance-sheet?as_of=2026-12-31")).json().currencies[0];
+	assert.equal(bs.balanced, true);
+
+	// The type of an account with sub-accounts can't drift from theirs (the database refuses it too).
+	const pgm = (await import("pg")).default;
+	const db = new pgm.Client({ connectionString: ta.app.backup.databaseUrl });
+	await db.connect();
+	db.on("error", () => {});
+	t.after(() => db.end().catch(() => {}));
+	await assert.rejects(db.query(`UPDATE accounts SET parent_id = (SELECT id FROM accounts WHERE code = '1000') WHERE code = '5110'`), /same type and currency as its parent/);
+	await assert.rejects(db.query(`UPDATE accounts SET parent_id = (SELECT id FROM accounts WHERE code = '5110') WHERE code = '5100'`), /under one of its own sub-accounts/);	await db.end();
+});

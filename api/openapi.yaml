@@ -2145,13 +2145,20 @@ components:
 
     ReportLine:
       type: object
-      required: [account_code, account_name, amount_cents]
+      required: [account_code, account_name, amount_cents, depth, parent_code, has_children, total_cents]
+      description: Lines come as a tree, a parent account first and then its sub-accounts.
       properties:
         account_code: { $ref: '#/components/schemas/AccountCode' }
         account_name: { type: string }
         amount_cents:
           allOf: [{ $ref: '#/components/schemas/SignedCents' }]
-          description: Natural-sign balance (a contra balance is negative)
+          description: Natural-sign balance of the account's own postings (a contra balance is negative)
+        depth: { type: integer, description: '0 for a top-level account, 1 for its sub-accounts, and so on' }
+        parent_code: { type: string, nullable: true }
+        has_children: { type: boolean, description: Whether sub-account lines follow this one }
+        total_cents:
+          allOf: [{ $ref: '#/components/schemas/SignedCents' }]
+          description: amount_cents plus every sub-account line below it
     BalanceSheet:
       type: object
       required: [as_of, currencies]
@@ -2240,8 +2247,12 @@ components:
 
     Account:
       type: object
-      required: [code, name, type, currency, description, is_active, balance_cents, created_at, updated_at]
+      required: [code, name, type, currency, description, is_active, balance_cents, parent_code, total_balance_cents, created_at, updated_at]
       properties:
+        parent_code: { type: string, nullable: true, description: 'The account this one sits under (same type and currency), or null' }
+        total_balance_cents:
+          allOf: [{ $ref: '#/components/schemas/SignedCents' }]
+          description: balance_cents plus the balances of every sub-account below it
         code: { $ref: '#/components/schemas/AccountCode' }
         name: { type: string }
         type: { $ref: '#/components/schemas/AccountType' }
@@ -2263,6 +2274,7 @@ components:
         type: { $ref: '#/components/schemas/AccountType' }
         currency: { $ref: '#/components/schemas/Currency' }
         description: { type: string, maxLength: 1000, default: '' }
+        parent_code: { type: string, nullable: true, description: 'Make it a sub-account of this account (same type and currency, at most 5 levels deep)' }
     AccountUpdate:
       type: object
       additionalProperties: false
@@ -2271,6 +2283,7 @@ components:
         name: { type: string, minLength: 1, maxLength: 200 }
         description: { type: string, maxLength: 1000 }
         is_active: { type: boolean }
+        parent_code: { type: string, nullable: true, description: 'Move it under this account (same type and currency); null makes it top-level' }
 
     JournalLineCreate:
       type: object

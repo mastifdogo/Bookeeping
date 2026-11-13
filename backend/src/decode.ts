@@ -100,9 +100,10 @@ function date(o: Record<string, unknown>, key: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 export function decodeAccountCreate(v: unknown): AccountCreate {
-	const o = object(v, "AccountCreate", ["code", "name", "type", "currency", "description"]);
+	const o = object(v, "AccountCreate", ["code", "name", "type", "currency", "description", "parent_code"]);
 	const p = "AccountCreate.";
 	return {
+		parent_code: str(o, "parent_code", p) ?? null,
 		code: str(o, "code", p) ?? "",
 		name: str(o, "name", p) ?? "",
 		type: str(o, "type", p) ?? "",
@@ -112,7 +113,7 @@ export function decodeAccountCreate(v: unknown): AccountCreate {
 }
 
 export function decodeAccountUpdate(v: unknown): AccountUpdate {
-	const o = object(v, "AccountUpdate", ["name", "description", "is_active"]);
+	const o = object(v, "AccountUpdate", ["name", "description", "is_active", "parent_code"]);
 	const p = "AccountUpdate.";
 	const out: AccountUpdate = {};
 	const name = str(o, "name", p);
@@ -121,6 +122,8 @@ export function decodeAccountUpdate(v: unknown): AccountUpdate {
 	if (name !== undefined) out.name = name;
 	if (description !== undefined) out.description = description;
 	if (isActive !== undefined) out.is_active = isActive;
+	// null is meaningful here: it makes the account top-level.
+	if (Object.hasOwn(o, "parent_code")) out.parent_code = o.parent_code === null ? null : (str(o, "parent_code", p) ?? null);
 	return out;
 }
 

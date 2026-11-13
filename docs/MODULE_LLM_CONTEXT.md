@@ -147,6 +147,13 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
   `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$` (e.g. `1000`, `4100`).
 - `Account.balance_cents` is signed debit-positive (assets/expenses normally
   positive; liabilities/equity/revenue normally negative).
+- **Sub-accounts** (Ledger ≥ 0.15.0): `Account.parent_code` is the account
+  it sits under (same type and currency, at most 5 levels) or `null`;
+  `balance_cents` is the account's own postings and `total_balance_cents`
+  adds every sub-account below it. Both a parent and its sub-accounts can be
+  posted to. Show the chart as a tree (indent by depth) and, in account
+  pickers, list sub-accounts under their parent; when you total a group, use
+  the parent's `total_balance_cents` instead of adding accounts yourself.
 - Journal entries must balance **per currency** (total debits = total
   credits in each currency), each line is either debit or credit (>0, not
   both), accounts must exist and be active. Posted entries are **immutable**:
@@ -158,7 +165,7 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
 |---|---|
 | `listAccounts({ includeInactive? })` | `Account[]` |
 | `getAccount(code)` | `Account` (throws 404 if missing) |
-| `createAccount({ code, name, type, currency, description? })` | `Account` |
+| `createAccount({ code, name, type, currency, description?, parent_code? })` | `Account` (`parent_code`: Ledger ≥ 0.15.0) |
 | `accountLedger(code, { from?, to? })` | `{ account, opening_balance_cents, closing_balance_cents, lines: [{ journal_entry_id, line_id, entry_date, description, reference, memo, debit_cents, credit_cents, running_balance_cents }] }` |
 | `listJournalEntries({ from?, to?, accountCode?, limit? (1-500, default 50), offset? })` | `JournalEntry[]`, newest first |
 | `getJournalEntry(id)` | `JournalEntry` |
