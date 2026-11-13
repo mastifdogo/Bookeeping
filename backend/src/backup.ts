@@ -12,9 +12,10 @@
 // credentials are not inside the dumps.
 
 import { spawn } from "node:child_process";
-import { createReadStream, promises as fsp } from "node:fs";
+import { createReadStream, createWriteStream, promises as fsp } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import pg from "pg";
 import { getTypeParser, withDatabase } from "./db.ts";
 import { csvRecord } from "./csv.ts";
@@ -490,6 +491,93 @@ function dumpTime(name: string): number | null {
 	const m = /-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-[a-z0-9-]+)?\.(?:dump|csv)$/.exec(name);
 	return m ? Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!) : null;
 }
+
+// ---------------------------------------------------------------------------
+// Fetching a backup back (Settings → Backups → Restore)
+// ---------------------------------------------------------------------------
+
+/** Whether a name is a backup folder's (ledger-2026-11-11_20-30-00-0600). */
+export const isBackupFolder = (name: string) => FOLDER_RE.test(name);
+
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._ ()-]{0,127}$/;
+
+/** Copies a backup folder from the share into dest (regular files only). */
+export async function fetchShareBackup(t: ShareTarget, workDir: string, name: string, dest: string): Promise<void> {
+	if (!isBackupFolder(name)) throw new Error(`${name} is not a backup folder`);
+	await fsp.rm(dest, { recursive: true, force: true });
+	await fsp.mkdir(dest, { recursive: true, mode: 0o700 });
+	if (t.mode === "folder") {
+		const src = path.join(t.path, name);
+		const st = await fsp.lstat(src).catch(() => null);
+		if (!st?.isDirectory()) throw new Error(`${name} is no longer in ${t.path}`);
+		for (const f of await listTree(src)) {
+			if (!(await fsp.lstat(f.full)).isFile()) continue;
+			await fsp.mkdir(path.dirname(path.join(dest, f.rel)), { recursive: true, mode: 0o700 });
+			await fsp.copyFile(f.full, path.join(dest, f.rel));
+		}
+		return;
+	}
+	await smbclient(t, workDir, [`cd "${t.directory ? `${t.directory}/` : ""}${name}"`, `lcd "${dest}"`, "recurse ON", "prompt OFF", "mget *"]);
+}
+
+interface DriveFile {
+	id: string;
+	name: string;
+	mimeType?: string;
+	size?: string;
+}
+
+async function driveChildren(ep: GoogleEndpoints, token: string, parent: string): Promise<DriveFile[]> {
+	const q = encodeURIComponent(`'${parent}' in parents and trashed = false`);
+	const out: DriveFile[] = [];
+	let page = "";
+	do {
+		const r = (await driveJson(ep, token, "GET", `/drive/v3/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,name,mimeType,size)${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`)) as {
+			files?: DriveFile[];
+			nextPageToken?: string;
+		};
+		out.push(...(r.files ?? []));
+		page = r.nextPageToken ?? "";
+	} while (page);
+	return out;
+}
+
+const DRIVE_FOLDER = "application/vnd.google-apps.folder";
+
+/** The newest backup folders on Google Drive. */
+export async function listDriveBackups(g: GoogleTarget, ep: GoogleEndpoints, limit = 10): Promise<BackupEntry[]> {
+	if (!g.refresh_token || !g.folder_id) return [];
+	const token = await accessToken(g, ep);
+	const folders = (await driveChildren(ep, token, g.folder_id)).filter((f) => isBackupFolder(f.name));
+	return newestFirst(folders.map((f) => ({ name: f.name, size_bytes: 0, modified_at: new Date(folderTime(f.name)!).toISOString() }))).slice(0, limit);
+}
+
+/** Downloads a backup folder from Google Drive into dest. */
+export async function fetchDriveBackup(g: GoogleTarget, ep: GoogleEndpoints, name: string, dest: string): Promise<void> {
+	if (!isBackupFolder(name)) throw new Error(`${name} is not a backup folder`);
+	if (!g.refresh_token || !g.folder_id) throw new Error("Google Drive is not connected");
+	const token = await accessToken(g, ep);
+	const top = (await driveChildren(ep, token, g.folder_id)).find((f) => f.name === name);
+	if (!top) throw new Error(`${name} is no longer on Google Drive`);
+	await fsp.rm(dest, { recursive: true, force: true });
+	const walk = async (id: string, dir: string, depth: number): Promise<void> => {
+		await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+		for (const f of await driveChildren(ep, token, id)) {
+			if (!SAFE_NAME.test(f.name)) continue;
+			if (f.mimeType === DRIVE_FOLDER) {
+				if (depth < 10) await walk(f.id, path.join(dir, f.name), depth + 1);
+				continue;
+			}
+			const res = await fetch(`${ep.api}/drive/v3/files/${encodeURIComponent(f.id)}?alt=media`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30 * 60_000) });
+			if (!res.ok || !res.body) throw new Error(`download of ${f.name} from Google Drive failed (${res.status})`);
+			await pipeline(Readable.fromWeb(res.body as import("node:stream/web").ReadableStream), createWriteStream(path.join(dir, f.name), { mode: 0o600 }));
+		}
+	};
+	await walk(top.id, dest, 0);
+}
+
+/** Checks a dump file is a readable pg_dump archive. */
+export const checkDump = (file: string) => run("pg_restore", ["--list", file]);
 
 /** A file to put in a backup folder: where it is now, and its path inside the folder ("files/sales/a.pdf"). */
 export interface BackupItem {

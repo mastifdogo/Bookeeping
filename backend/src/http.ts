@@ -63,6 +63,8 @@ import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
 import {
 	applyConfigChange,
 	backupsInstalled,
+	isBackupFolder,
+	listDriveBackups,
 	listShareDumps,
 	checkShare,
 	nextBackupTime,
@@ -76,6 +78,7 @@ import {
 	testShare,
 	writeConfig,
 } from "./backup.ts";
+import { RESTORE_CONFIRM, prepareRestore, readRestoreStatus } from "./restore.ts";
 import { publicSettings, saveSettings } from "./module-settings.ts";
 import { notifySettings } from "./module-host.ts";
 import {
@@ -792,6 +795,62 @@ async function requireBackups(c: Ctx): Promise<void> {
 	}
 }
 
+async function restoreInfo(c: Ctx) {
+	const status = await readRestoreStatus(c.app.backup.dir);
+	// A restore that never finished (the updater isn't installed, or the server restarted).
+	if (status.state === "running" && !c.app.backup.restoring && Date.now() - Date.parse(status.started_at ?? "") > 3 * 3600_000) {
+		Object.assign(status, { state: "error", phase: "", message: "The restore did not finish (see journalctl -u ledger-update on the server)." });
+	}
+	return status;
+}
+
+async function handleRestorable(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const config = await readConfig(c.app.backup.dir);
+	const backups: { source: "share" | "google"; name: string; size_bytes: number; modified_at: string }[] = [];
+	const problems: string[] = [];
+	if (config.share.enabled) {
+		const list = await listShareDumps(config.share, pathMod.join(c.app.backup.dir, "tmp"), 30);
+		backups.push(...list.filter((b) => isBackupFolder(b.name)).map((b) => ({ source: "share" as const, ...b })));
+	}
+	if (config.google.enabled) {
+		try {
+			backups.push(...(await listDriveBackups(config.google, c.app.backup.google, 30)).map((b) => ({ source: "google" as const, ...b })));
+		} catch (err) {
+			problems.push(`Google Drive: ${(err as Error).message}`);
+		}
+	}
+	writeJSON(c.res, 200, { backups, problems, confirm: RESTORE_CONFIRM });
+}
+
+async function handleRestore(c: Ctx): Promise<void> {
+	await requireBackups(c);
+	const body = (await readJSON(c, true)) as { source?: unknown; backup?: unknown; confirm?: unknown };
+	const err = new ValidationError();
+	if (body.source !== "share" && body.source !== "google") err.add("source", "must be share or google");
+	if (typeof body.backup !== "string" || !isBackupFolder(body.backup)) err.add("backup", "choose a backup");
+	if (body.confirm !== RESTORE_CONFIRM) err.add("confirm", `type ${RESTORE_CONFIRM} to confirm`);
+	err.throwIfAny();
+	if (!c.app.backup.databaseUrl) throw new ConflictError("DATABASE_URL is not known to the app");
+	if (c.app.backup.running) throw new ConflictError("a backup is running; try again when it has finished");
+	if (c.app.backup.restoring || (await restoreInfo(c)).state === "running") throw new ConflictError("a restore is already running");
+	const job = prepareRestore({
+		backupDir: c.app.backup.dir,
+		configDir: c.app.update.config,
+		databaseUrl: c.app.backup.databaseUrl,
+		csvDir: c.app.csvDir,
+		google: c.app.backup.google,
+		source: body.source as "share" | "google",
+		backup: body.backup as string,
+		requestedBy: c.user!.username,
+	}).finally(() => {
+		c.app.backup.restoring = null;
+	});
+	c.app.backup.restoring = job;
+	await new Promise((r) => setTimeout(r, 150));
+	writeJSON(c.res, 202, await backupsInfo(c));
+}
+
 async function backupsInfo(c: Ctx) {
 	const available = await backupsInstalled(c.app.backup.dir);
 	const config = await readConfig(c.app.backup.dir);
@@ -806,6 +865,7 @@ async function backupsInfo(c: Ctx) {
 		status,
 		next_run: nextBackupTime(config),
 		share_files: available && config.share.enabled ? await listShareDumps(config.share, pathMod.join(c.app.backup.dir, "tmp")) : [],
+		restore: await restoreInfo(c),
 	};
 }
 
@@ -1600,6 +1660,8 @@ const ROUTES: Route[] = [
 	route("GET", "/backups", "server", handleGetBackups),
 	route("PUT", "/backups/config", "server", handlePutBackupConfig),
 	route("POST", "/backups/run", "server", handleRunBackup),
+	route("GET", "/backups/restorable", "server", handleRestorable),
+	route("POST", "/backups/restore", "server", handleRestore),
 	route("POST", "/backups/share/test", "server", handleTestShare),
 	route("POST", "/backups/google/connect", "server", handleGoogleConnect),
 	route("POST", "/backups/google/poll", "server", handleGooglePoll),

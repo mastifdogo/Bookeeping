@@ -166,6 +166,7 @@ backend/src/reports.ts    Balance sheet and income statement
 backend/src/dashboard.ts  Dashboard summary, notifications and to-dos
 backend/src/reconcile.ts  Reconciling accounts against statements
 backend/src/backup.ts     `ledger backup run`: dumps to an SMB share and/or Google Drive
+backend/src/restore.ts    Settings → Backups → Restore: the app's part and root's (`ledger update run`)
 backend/src/module-settings.ts  Module settings declared in ledger-module.json
 backend/src/cli.ts        `ledger user add|role|passwd|disable|enable|list`
 backend/src/module-files.ts  Files modules hand each other (ctx.files)

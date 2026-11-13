@@ -31,7 +31,7 @@ export interface App {
 	/** AI and Gmail settings (integrationsDir), Gmail endpoints and a pending OAuth attempt. */
 	integrations: { dir: string; gmail: GmailEndpoints; pendingGmail: PendingAuth | null };
 	/** Backups: settings/status directory, database URL for pg_dump, Google endpoints. */
-	backup: { dir: string; databaseUrl: string; google: GoogleEndpoints; device: DeviceCode | null; running: Promise<unknown> | null };
+	backup: { dir: string; databaseUrl: string; google: GoogleEndpoints; device: DeviceCode | null; running: Promise<unknown> | null; restoring: Promise<unknown> | null };
 }
 
 export function newApp(
@@ -66,6 +66,6 @@ export function newApp(
 		update: cfg.update ?? updateDirs(),
 		modules: new ModuleHost(cfg.modulesDir ?? modulesDir()),
 		integrations: { dir: cfg.integrationsDir ?? integrationsDir(), gmail: cfg.gmail ?? gmailEndpoints(), pendingGmail: null },
-		backup: { dir: cfg.backupDir ?? backupStateDir(), databaseUrl: cfg.databaseUrl ?? "", google: cfg.google ?? googleEndpoints(), device: null, running: null },
+		backup: { dir: cfg.backupDir ?? backupStateDir(), databaseUrl: cfg.databaseUrl ?? "", google: cfg.google ?? googleEndpoints(), device: null, running: null, restoring: null },
 	};
 }

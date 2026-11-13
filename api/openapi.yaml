@@ -1098,6 +1098,65 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /backups/restorable:
+    get:
+      tags: [System]
+      operationId: listRestorableBackups
+      summary: Backups on the destinations that can be restored
+      responses:
+        '200':
+          description: Backups, newest first per destination
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [backups, problems, confirm]
+                properties:
+                  backups:
+                    type: array
+                    items:
+                      type: object
+                      required: [source, name, size_bytes, modified_at]
+                      properties:
+                        source: { type: string, enum: [share, google] }
+                        name: { type: string, description: The backup's folder }
+                        size_bytes: { type: integer, description: 0 when not known (Google Drive) }
+                        modified_at: { type: string, format: date-time }
+                  problems: { type: array, items: { type: string }, description: Destinations that could not be listed }
+                  confirm: { type: string, description: What the user must type to confirm a restore }
+        default: { $ref: '#/components/responses/Error' }
+
+  /backups/restore:
+    post:
+      tags: [System]
+      operationId: restoreBackup
+      summary: Replace all data with a backup's
+      description: >
+        Runs in the background: backs up the current data, fetches and checks
+        the chosen backup, then the server stops for a moment while its
+        databases and module files are replaced by the backup's. If anything
+        fails, nothing is changed. Progress is in `restore` of GET /backups.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source, backup, confirm]
+              properties:
+                source: { type: string, enum: [share, google] }
+                backup: { type: string }
+                confirm: { type: string }
+      responses:
+        '202':
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupInfo' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /backups/share/test:
     post:
       tags: [System]
@@ -2816,9 +2875,22 @@ components:
             keep_count: { type: integer, minimum: 1, maximum: 1000 }
     BackupInfo:
       type: object
-      required: [available, config, status, next_run, share_files]
+      required: [available, config, status, next_run, share_files, restore]
       properties:
         available: { type: boolean, description: Backups are set up on this server }
+        restore:
+          type: object
+          description: The restore in progress, or the last one
+          required: [state, phase, message, backup, source, started_at, finished_at, requested_by]
+          properties:
+            state: { type: string, enum: [idle, running, ok, error] }
+            phase: { type: string, enum: ['', backup, fetch, waiting, restore, swap] }
+            message: { type: string }
+            backup: { type: string }
+            source: { type: string, enum: ['', share, google] }
+            started_at: { type: string, format: date-time, nullable: true }
+            finished_at: { type: string, format: date-time, nullable: true }
+            requested_by: { type: string }
         config:
           type: object
           required: [schedule, share, google, include_csv]

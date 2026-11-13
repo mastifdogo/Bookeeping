@@ -8,7 +8,7 @@ import type { TestContext } from "node:test";
 export interface FakeGoogle {
 	oauth: string;
 	api: string;
-	files: { id: string; name: string; parents: string[]; size: number; folder?: boolean }[];
+	files: { id: string; name: string; parents: string[]; size: number; folder?: boolean; data?: Buffer }[];
 	/** Device-flow polls answered "pending" before approval. */
 	pendingPolls: number;
 	denied: boolean;
@@ -75,13 +75,19 @@ export async function fakeGoogle(t: TestContext): Promise<FakeGoogle> {
 			const s = sessions.get(url.pathname.slice(9));
 			if (!s) return json(res, 404, {});
 			const id = `file-${++n}`;
-			g.files.push({ id, name: s.name, parents: s.parents, size: raw.length });
+			g.files.push({ id, name: s.name, parents: s.parents, size: raw.length, data: raw });
 			return json(res, 200, { id });
 		}
 		if (req.method === "GET" && url.pathname === "/drive/v3/files") {
 			const folder = /'([^']+)' in parents/.exec(url.searchParams.get("q") ?? "")?.[1];
 			const files = g.files.filter((f) => f.parents.includes(folder!)).sort((a, b) => b.name.localeCompare(a.name));
-			return json(res, 200, { files: files.map((f) => ({ id: f.id, name: f.name })) });
+			return json(res, 200, { files: files.map((f) => ({ id: f.id, name: f.name, size: String(f.size), ...(f.folder ? { mimeType: "application/vnd.google-apps.folder" } : {}) })) });
+		}
+		if (req.method === "GET" && url.pathname.startsWith("/drive/v3/files/") && url.searchParams.get("alt") === "media") {
+			const f = g.files.find((x) => x.id === decodeURIComponent(url.pathname.slice(16)));
+			if (!f?.data) return json(res, 404, { error: { message: "not found" } });
+			res.writeHead(200, { "Content-Type": "application/octet-stream" });
+			return res.end(f.data);
 		}
 		if (req.method === "DELETE" && url.pathname.startsWith("/drive/v3/files/")) {
 			// Deleting a folder deletes what's in it.

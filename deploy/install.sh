@@ -119,6 +119,8 @@ if command -v systemctl >/dev/null 2>&1; then
 		systemctl start ledger-update.timer ledger-update.path 2>/dev/null || true
 		# Pick up the timer's new schedule (every 15 minutes) if it is running.
 		systemctl try-restart ledger-backup.timer 2>/dev/null || true
+		# Pick up new request files the path unit watches (restore-run-now).
+		systemctl try-restart ledger-update.path 2>/dev/null || true
 	else
 		echo "    (systemd not running; run systemctl daemon-reload later)"
 	fi

@@ -362,7 +362,29 @@ From Google Drive, download the dump and copy it into the container
 before restoring. From an SMB share, fetch it inside the container:
 `smbclient //nas/backups -U ledger -c 'cd ledger/ledger-2026-11-11_20-30-00-0600; get ledger.dump /root/ledger.dump'`.
 
-**Restore** (keeps the current database as `ledger_old`):
+**Restore in the app** (Ledger 0.13.3 and later): Settings → Backups →
+**Restore from a backup**. Choose a backup from the network share or Google
+Drive and type RESTORE. Ledger then:
+
+1. backs up the current data to the destinations (if that fails, it stops);
+2. fetches the chosen backup and checks its dumps;
+3. as root (`ledger update run`, started by `ledger-update.path`), restores
+   every dump into a new database beside the live one and applies any
+   migrations newer than the backup;
+4. stops Ledger, swaps the databases in, replaces the files modules keep
+   with the backup's, and starts Ledger. If it doesn't come up healthy, the
+   previous databases and files are put back.
+
+Everything in the databases comes from the backup: all organizations' books,
+users and passwords, module data and module settings. An organization
+created after the backup is removed. What lives outside the databases is
+not touched: backup settings, the update schedule, LLM API and Gmail
+connections (`/var/lib/ledger/`), installed modules, and CSV files on the
+share. A backup made by a newer Ledger than the one installed is refused.
+The outcome is shown on the Backups page and the dashboard;
+`journalctl -u ledger-update` has the details.
+
+**Restore by hand** (keeps the current database as `ledger_old`):
 
 ```sh
 DUMP=/app/csv_data/backups/ledger-2026-10-05_02-30-00-0500/ledger.dump    # pick one

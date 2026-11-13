@@ -92,6 +92,77 @@
 			shareTest = unwrap(await api().POST('/backups/share/test', { body: { ...form.share, password: form.share.password || null } }));
 		});
 
+	// Restore: the backups that can be restored are listed when the card is opened.
+	type Restorable = { source: 'share' | 'google'; name: string; size_bytes: number; modified_at: string };
+	let restorable = $state<Restorable[] | null>(null);
+	let restoreProblems = $state<string[]>([]);
+	let confirmWord = $state('RESTORE');
+	let chosen = $state('');
+	let typed = $state('');
+	let restoreError: unknown = $state(null);
+	let unreachable = $state(false);
+	const restoring = $derived(info.restore.state === 'running');
+	const when = (name: string) => {
+		const m = /^ledger-(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-\d{2}([+-]\d{2})(\d{2})$/.exec(name);
+		return m ? `${m[1]} ${m[2]}:${m[3]} (UTC${m[4]}:${m[5]})` : name;
+	};
+	async function loadRestorable() {
+		restoreError = null;
+		try {
+			const r = unwrap(await api().GET('/backups/restorable'));
+			restorable = r.backups;
+			restoreProblems = r.problems;
+			confirmWord = r.confirm;
+		} catch (e) {
+			restoreError = e;
+		}
+	}
+	async function restore() {
+		const [source, name] = chosen.split('|') as ['share' | 'google', string];
+		if (!name || typed !== confirmWord) return;
+		restoreError = null;
+		busy = true;
+		try {
+			info = unwrap(await api().POST('/backups/restore', { body: { source, backup: name, confirm: typed } }));
+			typed = '';
+			chosen = '';
+			pollRestore();
+		} catch (e) {
+			restoreError = e;
+		} finally {
+			busy = false;
+		}
+	}
+	// Ledger stops for a moment during the switch, so failed requests are expected.
+	let restoreTimer: ReturnType<typeof setInterval> | undefined;
+	function pollRestore() {
+		clearInterval(restoreTimer);
+		restoreTimer = setInterval(async () => {
+			try {
+				const r = await api().GET('/backups');
+				if (r.data) {
+					info = r.data;
+					unreachable = false;
+				} else if (r.response.status === 401) {
+					// The restored data doesn't have this session: sign in again.
+					clearInterval(restoreTimer);
+					location.href = '/login';
+					return;
+				} else unreachable = true;
+			} catch {
+				unreachable = true;
+			}
+			if (!unreachable && info.restore.state !== 'running') {
+				clearInterval(restoreTimer);
+				restorable = null;
+			}
+		}, 3000);
+	}
+	$effect(() => {
+		if (info.restore.state === 'running' && !restoreTimer) pollRestore();
+	});
+	onDestroy(() => clearInterval(restoreTimer));
+
 	// While a backup runs, refresh every few seconds.
 	let timer: ReturnType<typeof setInterval> | undefined;
 	function poll() {
@@ -365,15 +436,74 @@
 	</p>
 </form>
 
-<details class="card small">
-	<summary>Restoring a backup</summary>
-	<p>
-		Backups are PostgreSQL dumps (<code>pg_restore</code> format). To restore one, follow
+<section class="card restore">
+	<h2>Restore from a backup</h2>
+	<p class="muted small">
+		Replaces <strong>everything</strong> in Ledger with what a backup holds: all books (every organization), users, module data and
+		the files modules keep. Ledger backs up the current data first, then stops for a moment while it switches. Anything entered since
+		the chosen backup is no longer in Ledger afterwards (it is in the backup made just before the restore).
+	</p>
+	<p class="muted small">
+		Settings kept in the books come from the backup: each module's settings, organizations, users and their roles, sidebar layouts.
+		Settings kept on the server stay as they are now: these backup settings, the update schedule, LLM API and Gmail connections, and
+		which modules are installed.
+	</p>
+	<ErrorNotice error={restoreError} />
+	{#if restoring}
+		<div class="notice device">
+			<strong>Restoring {when(info.restore.backup)}…</strong>
+			{info.restore.message}
+			{#if unreachable}<br />Ledger is restarting; this page reconnects by itself.{/if}
+		</div>
+	{:else}
+		{#if info.restore.state === 'ok'}
+			<div class="notice ok">{info.restore.message} <span class="muted">({fmt(info.restore.finished_at)})</span></div>
+		{:else if info.restore.state === 'error'}
+			<div class="notice error">The restore from {when(info.restore.backup)} failed. {info.restore.message} <span class="muted">({fmt(info.restore.finished_at)})</span></div>
+		{/if}
+		{#if restorable === null}
+			<button type="button" onclick={loadRestorable} disabled={!info.available || running}>Choose a backup to restore…</button>
+		{:else}
+			{#each restoreProblems as p (p)}<p class="warn-text small">{p}</p>{/each}
+			{#if restorable.length === 0}
+				<p>No backups were found on the destinations that are turned on.</p>
+			{:else}
+				<div class="row">
+					<label>
+						Backup
+						<select bind:value={chosen}>
+							<option value="">— choose —</option>
+							{#each restorable as b (b.source + b.name)}
+								<option value={`${b.source}|${b.name}`}>
+									{when(b.name)} · {b.source === 'share' ? 'network share' : 'Google Drive'}{b.size_bytes ? ` · ${size(b.size_bytes)}` : ''}
+								</option>
+							{/each}
+						</select>
+					</label>
+					{#if chosen}
+						<label>
+							Type {confirmWord} to confirm
+							<input bind:value={typed} autocomplete="off" spellcheck="false" size="10" />
+						</label>
+						<button type="button" class="danger" onclick={restore} disabled={busy || running || typed !== confirmWord}>Restore this backup</button>
+					{/if}
+				</div>
+				{#if chosen}
+					<p class="small">
+						Users, passwords and sign-ins come from that backup too, so you may have to sign in again with the password you had
+						then. The backup must come from this version of Ledger or an older one.
+					</p>
+				{/if}
+			{/if}
+		{/if}
+	{/if}
+	<p class="muted small">
+		Restoring by hand on the server:
 		<a href="https://github.com/mastifdogo/Bookeeping/blob/main/docs/DEPLOYMENT.md#8-backups-and-restore" target="_blank" rel="noopener noreferrer"
 			>Backups and restore</a
-		> in the deployment guide. From Google Drive, download the file first and copy it into the container.
+		> in the deployment guide.
 	</p>
-</details>
+</section>
 
 <style>
 	section h2 {
@@ -469,5 +599,12 @@
 	}
 	h3 {
 		margin: 1rem 0 0.3rem;
+	}
+	.restore select {
+		width: auto;
+		max-width: 100%;
+	}
+	.warn-text {
+		color: var(--warn);
 	}
 </style>

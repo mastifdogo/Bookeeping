@@ -748,6 +748,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/backups/restorable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Backups on the destinations that can be restored */
+        get: operations["listRestorableBackups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backups/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace all data with a backup's
+         * @description Runs in the background: backs up the current data, fetches and checks the chosen backup, then the server stops for a moment while its databases and module files are replaced by the backup's. If anything fails, nothing is changed. Progress is in `restore` of GET /backups.
+         */
+        post: operations["restoreBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/backups/share/test": {
         parameters: {
             query?: never;
@@ -2117,6 +2154,22 @@ export interface components {
         BackupInfo: {
             /** @description Backups are set up on this server */
             available: boolean;
+            /** @description The restore in progress, or the last one */
+            restore: {
+                /** @enum {string} */
+                state: "idle" | "running" | "ok" | "error";
+                /** @enum {string} */
+                phase: "" | "backup" | "fetch" | "waiting" | "restore" | "swap";
+                message: string;
+                backup: string;
+                /** @enum {string} */
+                source: "" | "share" | "google";
+                /** Format: date-time */
+                started_at: string | null;
+                /** Format: date-time */
+                finished_at: string | null;
+                requested_by: string;
+            };
             config: {
                 schedule: components["schemas"]["BackupSchedule"];
                 /** @description Also save CSV copies beside each dump: the General Ledger and each module's tables */
@@ -3576,6 +3629,74 @@ export interface operations {
                 };
             };
             409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listRestorableBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backups, newest first per destination */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        backups: {
+                            /** @enum {string} */
+                            source: "share" | "google";
+                            /** @description The backup's folder */
+                            name: string;
+                            /** @description 0 when not known (Google Drive) */
+                            size_bytes: number;
+                            /** Format: date-time */
+                            modified_at: string;
+                        }[];
+                        /** @description Destinations that could not be listed */
+                        problems: string[];
+                        /** @description What the user must type to confirm a restore */
+                        confirm: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restoreBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    source: "share" | "google";
+                    backup: string;
+                    confirm: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

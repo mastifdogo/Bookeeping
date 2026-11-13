@@ -25,6 +25,8 @@ import { MODULES_RUN_NOW_FILE, modulesDir } from "./modules.ts";
 import { migrateInstalled, moduleOps, multiDbOps, syncModules, type ModuleOps } from "./module-installer.ts";
 import { withDatabase } from "./db.ts";
 import { ORGS_RUN_NOW_FILE } from "./orgs.ts";
+import { performRestore, restoreOps } from "./restore.ts";
+import { backupStateDir } from "./backup.ts";
 import { parseListenAddr } from "./config.ts";
 import { repoIdentity } from "./github.ts";
 import {
@@ -405,6 +407,21 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 	let modules: UpdaterOptions["modules"];
 	if (databaseUrl) {
 		const base = { restart: sys.restart, healthy: sys.healthy };
+		// A restore the app asked for (Settings → Backups) comes before anything else.
+		const csvDir = process.env.CSV_DIR || "/app/csv_data";
+		await performRestore({
+			backupDir: backupStateDir(),
+			configDir: dirs.config,
+			databaseUrl,
+			csvDir,
+			ops: restoreOps({
+				databaseUrl,
+				dataDir: csvDir,
+				migrateModules: (db) => migrateInstalled(modulesDir(), moduleOps(withDatabase(databaseUrl, db), base)),
+				service: { stop: () => run("systemctl", ["stop", "ledger.service"]), start: () => run("systemctl", ["start", "ledger.service"]), healthy: sys.healthy },
+			}),
+			notify: (n) => withClient(databaseUrl, (c) => postLedgerNotice(c, { key: "restore", ...n, link: "/settings/backups" })),
+		}).catch((err: Error) => log.error("restore", { err: err.message }));
 		await provisionOrganizations(databaseUrl, dirs, base).catch((err: Error) => log.error("create organizations' databases", { err: err.message }));
 		// Modules' migrations go to every organization's database.
 		const orgDbs = await readyOrgDatabases(databaseUrl).catch(() => [] as string[]);

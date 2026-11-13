@@ -13,7 +13,7 @@ import { ModuleHost } from "../src/module-host.ts";
 import { fakeGitHub } from "./fake-github.ts";
 import { today } from "../src/date.ts";
 import { postItem } from "../src/dashboard.ts";
-import { readBackupStatus, runBackup } from "../src/backup.ts";
+import { fetchDriveBackup, readBackupStatus, readConfig, runBackup } from "../src/backup.ts";
 import { fakeGoogle } from "./fake-google.ts";
 import { fakeAi, fakeGmail } from "./fake-services.ts";
 
@@ -1162,6 +1162,17 @@ test("backups: settings, a mounted share and Google Drive", async (t) => {
 	assert.ok(driveFolders.every((f) => f.parents[0] === "folder-1"));
 	for (const f of driveFolders) assert.deepEqual(g.files.filter((x) => x.parents.includes(f.id)).map((x) => x.name).sort(), ["general-ledger.csv", "ledger.dump"]);
 	assert.equal(g.files.length, 6);
+
+	// Both destinations offer their backups for a restore; one from Drive can be fetched back.
+	r = await call("GET", "/backups/restorable");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().backups.filter((b: any) => b.source === "google").map((b: any) => b.name), ["ledger-2026-11-03_05-00-00-0500", "ledger-2026-11-02_05-00-00-0500"]);
+	assert.ok(r.json().backups.some((b: any) => b.source === "share"));
+	const fetched = path.join(app.backup.dir, "restore-test");
+	await fetchDriveBackup((await readConfig(app.backup.dir)).google, app.backup.google, "ledger-2026-11-03_05-00-00-0500", fetched);
+	assert.deepEqual((await readdir(fetched)).sort(), ["general-ledger.csv", "ledger.dump"]);
+	assert.equal(await readFile(path.join(fetched, "ledger.dump"), "utf8"), "PGDMP fake dump");
+	await rm(fetched, { recursive: true });
 
 	// Drive access revoked: the share still works, so a warning, posted to the dashboard.
 	g.revokedGrant = true;
@@ -2428,4 +2439,182 @@ Initech,it@initech.example,abc,02/30/2026,maybe,
 	r = await call("POST", `/modules/crm/import/${again.id}/run`, { mapping: again.mapping });
 	expectStatus(r, 422);
 	assert.match(r.json().error.message, /row 3: Acme Inc\. already exists/);
+});
+
+test("restore from a backup: current data backed up, then everything replaced by the backup's", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const { execFileSync } = await import("node:child_process");
+	const pgm = (await import("pg")).default;
+	const url = new URL(app.backup.databaseUrl);
+	const mainDb = url.pathname.slice(1);
+	const admin = new pgm.Client({ connectionString: app.backup.databaseUrl });
+	await admin.connect();
+	admin.on("error", () => {}); // the swap closes every connection to the live database
+	t.after(() => admin.end().catch(() => {}));
+	// pg_dump must be able to dump this server.
+	try {
+		const client = Number(/(\d+)/.exec(execFileSync("pg_dump", ["--version"]).toString())![1]);
+		const server = Number((await admin.query(`SHOW server_version_num`)).rows[0].server_version_num.slice(0, -4));
+		if (client < server) return t.skip(`pg_dump ${client} can't dump PostgreSQL ${server}`);
+	} catch {
+		return t.skip("pg_dump is not installed");
+	}
+	const { performRestore, restoreOps, readRestoreStatus } = await import("../src/restore.ts");
+	await admin.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ledger_owner') THEN CREATE ROLE ledger_owner NOLOGIN; END IF; END $$`);
+	// As deploy/migrate-db.sh leaves a database: every migration recorded.
+	await admin.query(`CREATE TABLE IF NOT EXISTS public.schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+	const repoRoot = path.resolve(import.meta.dirname, "..", "..");
+	for (const f of (await readdir(path.join(repoRoot, "db", "migrations"))).filter((n) => /^\d.*\.sql$/.test(n))) await admin.query(`INSERT INTO public.schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING`, [f]);
+	t.after(async () => {
+		const admin = new pgm.Client({ connectionString: app.backup.databaseUrl.replace(`/${mainDb}`, "/postgres") });
+		await admin.connect();
+		t.after(() => admin.end());
+		for (const r of (await admin.query(`SELECT datname FROM pg_database WHERE datname LIKE $1 AND (datname LIKE '%_restoring' OR datname LIKE '%_before_restore')`, [`${mainDb}%`])).rows) {
+			await admin.query(`DROP DATABASE IF EXISTS "${r.datname}" WITH (FORCE)`).catch(() => {});
+		}
+	});
+
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-restore-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const prevRoots = process.env.BACKUP_SHARE_ROOTS;
+	process.env.BACKUP_SHARE_ROOTS = root;
+	t.after(() => (prevRoots === undefined ? delete process.env.BACKUP_SHARE_ROOTS : (process.env.BACKUP_SHARE_ROOTS = prevRoots)));
+	await mkdir(app.backup.dir, { mode: 0o700 });
+	await mkdir(app.update.config, { recursive: true }).catch(() => {});
+	const share = path.join(root, "backups");
+	expectStatus(await call("PUT", "/backups/config", { schedule: { enabled: false, days: [1], time: "02:30", timezone: "UTC" }, share: { enabled: true, mode: "folder", path: share, keep_days: 3650 }, google: { enabled: false, client_id: "", keep_count: 5 } }), 200);
+	await loadModules(t, app, { bills: `export default function (ctx) { ctx.route("POST", "/save", (req) => ctx.storage.put(req.body.path, req.body.b64)); ctx.route("GET", "/list", () => ctx.storage.list()); ctx.route("POST", "/remove", (req) => ctx.storage.remove(req.body.path)); }` });
+
+	// The books as they are when the backup is made: an account, a module's table and file, a second organization.
+	expectStatus(await call("POST", "/accounts", { code: "1000", name: "Bank", type: "asset", currency: "CAD" }), 201);
+	await admin.query(`CREATE SCHEMA mod_notes; CREATE TABLE mod_notes.items (id serial PRIMARY KEY, body text); INSERT INTO mod_notes.items (body) VALUES ('kept')`);
+	expectStatus(await call("POST", "/m/bills/save", { path: "scans/a.pdf", b64: Buffer.from("%PDF-a").toString("base64") }), 200);
+	let r = await call("POST", "/organizations", { name: "Personal", kind: "personal", chart: "CAD" });
+	expectStatus(r, 201);
+	const org2 = r.json();
+	const orgRow = (await admin.query(`SELECT db_name, status FROM organizations WHERE id = $1`, [org2.id])).rows[0];
+	assert.equal(orgRow.status, "ready");
+	const org2Db = new pgm.Client({ connectionString: app.backup.databaseUrl.replace(`/${mainDb}`, `/${orgRow.db_name}`) });
+	await org2Db.connect();
+	await org2Db.query(`CREATE TABLE IF NOT EXISTS public.schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+	await org2Db.query(`INSERT INTO public.schema_migrations (name) SELECT name FROM unnest($1::text[]) AS name ON CONFLICT DO NOTHING`, [(await admin.query(`SELECT name FROM public.schema_migrations`)).rows.map((x: any) => x.name)]);
+	const org2Accounts = Number((await org2Db.query(`SELECT count(*) AS n FROM accounts`)).rows[0].n);
+	await org2Db.end();
+	assert.ok(org2Accounts > 0);
+
+	const made = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", csvDir: app.csvDir, now: () => Date.parse("2026-11-01T02:30:00Z") });
+	assert.equal(made.status.state, "ok", made.status.message);
+	const backup = "ledger-2026-11-01_02-30-00+0000";
+	assert.ok((await readdir(path.join(share, backup))).includes(`${orgRow.db_name}.dump`));
+
+	// Afterwards: more accounts, the module's data and files changed, the second organization emptied, a third added.
+	expectStatus(await call("POST", "/accounts", { code: "2000", name: "Loan", type: "liability", currency: "CAD" }), 201);
+	await admin.query(`UPDATE mod_notes.items SET body = 'changed'; INSERT INTO mod_notes.items (body) VALUES ('new')`);
+	expectStatus(await call("POST", "/m/bills/remove", { path: "scans/a.pdf" }), 200);
+	expectStatus(await call("POST", "/m/bills/save", { path: "scans/later.pdf", b64: Buffer.from("%PDF-later").toString("base64") }), 200);
+	r = await call("POST", "/organizations", { name: "Third", kind: "business", chart: "CAD" });
+	expectStatus(r, 201);
+	const org3Db = (await admin.query(`SELECT db_name FROM organizations WHERE id = $1`, [r.json().id])).rows[0].db_name;
+
+	// What can be restored, and the confirmation.
+	r = await call("GET", "/backups/restorable");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().backups.map((b: any) => [b.source, b.name]), [["share", backup]]);
+	expectStatus(await call("POST", "/backups/restore", { source: "share", backup, confirm: "yes" }), 422);
+	expectStatus(await call("POST", "/backups/restore", { source: "share", backup: "../etc", confirm: "RESTORE" }), 422);
+
+	// A damaged backup is refused before anything changes (the current data is still backed up first).
+	const bad = "ledger-2026-10-01_02-30-00+0000";
+	await mkdir(path.join(share, bad));
+	await writeFile(path.join(share, bad, "ledger.dump"), "not a dump");
+	expectStatus(await call("POST", "/backups/restore", { source: "share", backup: bad, confirm: "RESTORE" }), 202);
+	await app.backup.restoring;
+	let st = await readRestoreStatus(app.backup.dir);
+	assert.equal(st.state, "error");
+	assert.match(st.message, /Nothing was changed: ledger\.dump in .* is damaged/);
+	await rm(path.join(share, bad), { recursive: true });
+
+	// The app's part: back up, fetch, check, ask root.
+	r = await call("POST", "/backups/restore", { source: "share", backup, confirm: "RESTORE" });
+	expectStatus(r, 202);
+	assert.equal(r.json().restore.state, "running");
+	expectStatus(await call("POST", "/backups/restore", { source: "share", backup, confirm: "RESTORE" }), 409);
+	await app.backup.restoring;
+	st = await readRestoreStatus(app.backup.dir);
+	assert.equal(st.phase, "waiting", st.message);
+	assert.equal(st.requested_by, "tester");
+	const saved = (await readdir(share)).filter((n) => n !== backup);
+	assert.ok(saved.length >= 1, "the current data was backed up first");
+	assert.ok((await readdir(path.join(share, saved.at(-1)!, "files", "bills", "scans"))).includes("later.pdf"));
+
+	// Root's part, with the real psql, pg_restore and migrate-db.sh.
+	const events: string[] = [];
+	const notices: string[] = [];
+	const ops = restoreOps({
+		databaseUrl: app.backup.databaseUrl,
+		psql: ["psql"],
+		env: { PGHOST: url.hostname, PGPORT: url.port || "5432", PGUSER: decodeURIComponent(url.username), PGPASSWORD: decodeURIComponent(url.password) },
+		migrateScript: path.join(repoRoot, "deploy", "migrate-db.sh"),
+		sqlDir: path.join(repoRoot, "db"),
+		ownerRole: "ledger_owner",
+		dataDir: app.csvDir,
+		migrateModules: async (db) => void events.push(`modules:${db}`),
+		service: { stop: async () => void events.push("stop"), start: async () => void events.push("start"), healthy: async () => true },
+	});
+	const done = await performRestore({ backupDir: app.backup.dir, configDir: app.update.config, databaseUrl: app.backup.databaseUrl, csvDir: app.csvDir, ownerRole: "ledger_owner", ops, notify: async (n) => void notices.push(n.title) });
+	assert.equal(done, true);
+	st = await readRestoreStatus(app.backup.dir);
+	assert.equal(st.state, "ok", st.message);
+	assert.match(st.message, /Restored from ledger-2026-11-01_02-30-00\+0000: 2 sets of books/);
+	assert.deepEqual(events, [`modules:${mainDb}_restoring`, `modules:${orgRow.db_name}_restoring`, "stop", "start"]);
+	assert.deepEqual(notices, ["Restored from a backup"]);
+	assert.equal(await performRestore({ backupDir: app.backup.dir, configDir: app.update.config, databaseUrl: app.backup.databaseUrl, csvDir: app.csvDir, ops }), false, "the request is used once");
+
+	// Everything is as it was at the backup. (The app's connections were closed by the swap; it reconnects.)
+	const check = new pgm.Client({ connectionString: app.backup.databaseUrl });
+	await check.connect();
+	check.on("error", () => {});
+	t.after(() => check.end().catch(() => {}));
+	assert.deepEqual((await check.query(`SELECT code FROM accounts ORDER BY code`)).rows.map((x: any) => x.code), ["1000"]);
+	assert.deepEqual((await check.query(`SELECT body FROM mod_notes.items`)).rows.map((x: any) => x.body), ["kept"]);
+	assert.deepEqual((await check.query(`SELECT name FROM organizations ORDER BY id`)).rows.length, 2);
+	// The module's schema belongs to its own role again, and its sequence still works.
+	assert.deepEqual((await check.query(`SELECT tableowner FROM pg_tables WHERE schemaname = 'mod_notes'`)).rows.map((x: any) => x.tableowner), ["mod_notes"]);
+	assert.equal((await check.query(`SELECT nspowner::regrole::text AS o FROM pg_namespace WHERE nspname = 'mod_notes'`)).rows[0].o, "mod_notes");
+	assert.equal((await check.query(`INSERT INTO mod_notes.items (body) VALUES ('after') RETURNING id`)).rows[0].id, 2);
+	assert.equal((await check.query(`SELECT tableowner FROM pg_tables WHERE tablename = 'accounts' AND schemaname = 'public'`)).rows[0].tableowner, "ledger_owner");
+	const dbs = (await check.query(`SELECT datname FROM pg_database WHERE datname LIKE $1 ORDER BY 1`, [`${mainDb}%`])).rows.map((x: any) => x.datname);
+	assert.deepEqual(dbs, [mainDb, orgRow.db_name].sort(), "no leftovers, and the organization added later is gone");
+	assert.ok(!dbs.includes(org3Db));
+	assert.equal((await check.query(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname LIKE 'ledger_restore_%'`)).rows[0].n, 0, "the temporary role is gone");
+	// Module files: only what the backup held.
+	assert.deepEqual(await readdir(path.join(app.csvDir, ".modules", "bills", "scans")), ["a.pdf"]);
+	assert.equal(await readFile(path.join(app.csvDir, ".modules", "bills", "scans", "a.pdf"), "utf8"), "%PDF-a");
+	assert.deepEqual((await readdir(app.csvDir)).filter((n) => n.includes("before-restore")), []);
+	await assert.rejects(stat(path.join(app.backup.dir, "restore", backup)), "the fetched copy is removed");
+	// The app carries on with the restored data (the session was in the backup).
+	r = await call("GET", "/accounts");
+	if (r.status !== 200) r = await call("GET", "/accounts"); // first query after the swap may hit a closed connection
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().data.map((a: any) => a.code), ["1000"]);
+	assert.equal((await call("GET", "/backups")).json().restore.state, "ok");
+
+	// A backup from a newer Ledger is refused, and nothing changes.
+	await check.query(`INSERT INTO public.schema_migrations (name) VALUES ('999_from_the_future.sql')`);
+	const newer = await runBackup({ dir: app.backup.dir, databaseUrl: app.backup.databaseUrl, trigger: "manual", csvDir: app.csvDir, now: () => Date.parse("2026-11-02T02:30:00Z") });
+	assert.equal(newer.status.state, "ok", newer.status.message);
+	await check.query(`DELETE FROM public.schema_migrations WHERE name = '999_from_the_future.sql'`);
+	expectStatus(await call("POST", "/accounts", { code: "3000", name: "Equity", type: "equity", currency: "CAD" }), 201);
+	expectStatus(await call("POST", "/backups/restore", { source: "share", backup: "ledger-2026-11-02_02-30-00+0000", confirm: "RESTORE" }), 202);
+	await app.backup.restoring;
+	events.length = 0;
+	await performRestore({ backupDir: app.backup.dir, configDir: app.update.config, databaseUrl: app.backup.databaseUrl, csvDir: app.csvDir, ownerRole: "ledger_owner", ops });
+	st = await readRestoreStatus(app.backup.dir);
+	assert.equal(st.state, "error");
+	assert.match(st.message, /Nothing was changed: this backup was made by a newer version of Ledger \(it has 999_from_the_future\.sql\)/);
+	assert.deepEqual(events, [], "Ledger was never stopped");
+	assert.deepEqual((await check.query(`SELECT code FROM accounts ORDER BY code`)).rows.map((x: any) => x.code), ["1000", "3000"]);
+	assert.deepEqual((await check.query(`SELECT datname FROM pg_database WHERE datname LIKE $1 ORDER BY 1`, [`${mainDb}%`])).rows.map((x: any) => x.datname), [mainDb, orgRow.db_name].sort());
 });
