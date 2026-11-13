@@ -46,7 +46,7 @@
 <div class="toolbar">
 	<h1 style="margin:0">Journal</h1>
 	<span class="spacer"></span>
-	<a class="button" href="/journal/expense">+ New expense</a>
+	<a class="button" href="/journal/new?type=expense">+ New expense</a>
 	<a class="button" href="/journal/new">+ New entry</a>
 </div>
 

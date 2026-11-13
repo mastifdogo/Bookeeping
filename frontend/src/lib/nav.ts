@@ -125,14 +125,6 @@ const CORE: Omit<NavItem, 'hidden' | 'iconFill' | 'iconUrl'>[] = [
 		kind: 'core'
 	},
 	{
-		id: 'core:new-expense',
-		href: '/journal/expense',
-		label: 'New expense',
-		exact: true,
-		icon: 'M5 3h14v18l-2.5-1.5L14 21l-2-1.5L10 21l-2.5-1.5L5 21zM9 8h6M9 12h6',
-		kind: 'core'
-	},
-	{
 		id: 'core:accounts',
 		href: '/accounts',
 		label: 'Accounts',

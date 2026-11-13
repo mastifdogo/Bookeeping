@@ -2,6 +2,8 @@
 	import { goto } from '$app/navigation';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import AccountSelect from '#lib/components/AccountSelect.svelte';
+	import ExpenseForm from '#lib/components/ExpenseForm.svelte';
+	import { page } from '$app/state';
 	import { ApiError, CURRENCIES, api, today, unwrap, type Currency } from '#lib/api/client.ts';
 	import { formatCents, parseAmount } from '#lib/money.ts';
 	import type { PageProps } from './$types';
@@ -11,6 +13,11 @@
 	type Line = { key: number; account_code: string; debit: string; credit: string; memo: string };
 	let nextKey = 0;
 	const blankLine = (): Line => ({ key: nextKey++, account_code: '', debit: '', credit: '', memo: '' });
+
+	// What is being entered: a full journal entry, or a quick expense.
+	type Kind = 'entry' | 'expense';
+	let kind = $state<Kind>(page.url.searchParams.get('type') === 'expense' ? 'expense' : 'entry');
+	let vendors = $derived(data.entities.filter((e) => e.is_vendor));
 
 	let entryDate = $state(today());
 	let description = $state('');
@@ -116,7 +123,17 @@
 	}
 </script>
 
-<h1>New journal entry</h1>
+<div class="toolbar">
+	<h1 style="margin:0">New {kind === 'expense' ? 'expense' : 'journal entry'}</h1>
+	<div class="segmented" role="radiogroup" aria-label="What to enter">
+		<label class:on={kind === 'entry'}><input type="radio" name="kind" value="entry" bind:group={kind} /> Journal entry</label>
+		<label class:on={kind === 'expense'}><input type="radio" name="kind" value="expense" bind:group={kind} /> Expense</label>
+	</div>
+</div>
+
+{#if kind === 'expense'}
+	<ExpenseForm accounts={data.accounts} {vendors} />
+{:else}
 
 {#if data.accounts.length < 2}
 	<div class="notice error">You need at least two active accounts. <a href="/accounts">Create accounts</a>.</div>
@@ -139,7 +156,7 @@
 			</label>
 		{/if}
 	</div>
-	<p class="muted small">Paying a bill or a receipt? <a href="/journal/expense">New expense</a> is quicker.</p>
+	<p class="muted small">Paying a bill or a receipt? Choose <strong>Expense</strong> above for a quicker form.</p>
 
 	<div class="table-wrap">
 		<table class="lines">
@@ -188,8 +205,40 @@
 		Posted entries cannot be edited; corrections are made with a reversing entry.
 	</p>
 </form>
+{/if}
 
 <style>
+	.segmented {
+		display: inline-flex;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		overflow: hidden;
+	}
+	.segmented label {
+		display: flex;
+		flex-direction: row;
+		align-items: center;
+		padding: 0.35rem 0.8rem;
+		cursor: pointer;
+		color: var(--text);
+		border-right: 1px solid var(--border);
+	}
+	.segmented label:last-child {
+		border-right: none;
+	}
+	.segmented label.on {
+		background: var(--accent);
+		color: var(--accent-text);
+	}
+	.segmented input {
+		position: absolute;
+		opacity: 0;
+		pointer-events: none;
+	}
+	.segmented label:has(input:focus-visible) {
+		outline: 2px solid var(--accent);
+		outline-offset: -2px;
+	}
 	/* Phones: stack each line as a small card instead of a wide table row. */
 	@media (max-width: 720px) {
 		.lines thead {

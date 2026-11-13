@@ -3,13 +3,13 @@
 	// which expense account, and optionally the vendor. Posts the two-line
 	// entry (debit the expense, credit what it was paid from).
 	import { goto, invalidateAll } from '$app/navigation';
-	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
-	import AccountSelect from '#lib/components/AccountSelect.svelte';
-	import { api, kindLabel, today, unwrap } from '#lib/api/client.ts';
+	import ErrorNotice from './ErrorNotice.svelte';
+	import AccountSelect from './AccountSelect.svelte';
+	import { api, kindLabel, today, unwrap, type Account, type Entity } from '#lib/api/client.ts';
 	import { parseAmount } from '#lib/money.ts';
-	import type { PageProps } from './$types';
 
-	let { data }: PageProps = $props();
+	// The active accounts, and the entities that are vendors.
+	let data: { accounts: Account[]; vendors: Entity[] } = $props();
 
 	let entryDate = $state(today());
 	let amount = $state('');
@@ -87,9 +87,6 @@
 	}
 </script>
 
-<p class="small"><a href="/journal">← Journal</a></p>
-<h1>New expense</h1>
-
 {#if done}<div class="notice ok">{done}</div>{/if}
 
 <form class="card" onsubmit={submit}>
@@ -132,7 +129,7 @@
 	</p>
 	<p class="muted small" style="margin-bottom:0">
 		Posts one entry: the expense account is debited, the account it was paid from is credited. Accounts tagged chequing, savings or
-		credit card are listed first. For split or unusual entries use <a href="/journal/new">New entry</a>.
+		credit card are listed first. For split or unusual entries switch to Journal entry above.
 	</p>
 </form>
 
