@@ -45,7 +45,7 @@ jobs:
       SUITE: ${{ inputs.suite || 'trixie' }}
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         ports: ['5432:5432']
@@ -97,6 +97,18 @@ jobs:
           sudo dpkg -i --force-depends "$work/debian-archive-keyring.deb" "$work/mmdebstrap.deb"
           command -v zstd >/dev/null
           mmdebstrap --version
+
+      - name: PostgreSQL 18 client tools
+        # The tests dump and restore the service's PostgreSQL 18 databases, which
+        # needs pg_dump and pg_restore of that version (the runner has 16).
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          sudo sh deploy/pgdg.sh
+          sudo apt-get update -q -o Dir::Etc::sourcelist="sources.list.d/pgdg.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+          sudo apt-get install -y -q postgresql-client-18
+          echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version
 
       - name: Build release tarball
         run: make release VERSION="$VERSION"

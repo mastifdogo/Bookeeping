@@ -402,9 +402,9 @@ ct_sh "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 && apt-get update -q &
 
 # --- Ledger --------------------------------------------------------------------
 push_release
-# PostgreSQL 16 from the PostgreSQL project's repository (Debian 12's own is 15).
-log "installing PostgreSQL 16 (this takes a minute)"
-ct_sh "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 && sh $CT_RELEASE_DIR/deploy/pgdg.sh && apt-get update -q && apt-get install -y -q postgresql-16 && apt-get clean"
+# PostgreSQL 18 from the PostgreSQL project's repository (Debian 12's own is 15).
+log "installing PostgreSQL 18 (this takes a minute)"
+ct_sh "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 && sh $CT_RELEASE_DIR/deploy/pgdg.sh && apt-get update -q && apt-get install -y -q postgresql-18 && apt-get clean"
 log "installing Ledger"
 ct env CSV_DIR="$CT_CSV_DIR" LEDGER_UID="$LEDGER_UID" sh "$CT_RELEASE_DIR/deploy/install.sh"
 

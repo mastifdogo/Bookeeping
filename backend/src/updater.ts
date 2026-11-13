@@ -467,7 +467,7 @@ export async function maybeUpgradePostgres(o: PgUpgradeOptions): Promise<"none" 
 	await writeFileAtomic(file, JSON.stringify(rec, null, 2) + "\n", 0o644).catch((e: Error) => log.warn("could not record the PostgreSQL upgrade", { err: e.message }));
 	log[ok ? "info" : "error"]("postgresql upgrade", { ok, message });
 	await o
-		.notify?.(ok ? { title: "Database upgraded to PostgreSQL 16", body: message, level: "success" } : { title: "The database upgrade to PostgreSQL 16 did not go through", body: `${message} Ledger keeps running on the previous version; it will try again after the next Ledger update, or run \`ledger update pg-upgrade\` on the server.`, level: "danger" })
+		.notify?.(ok ? { title: "Database upgraded to PostgreSQL 18", body: message, level: "success" } : { title: "The database upgrade to PostgreSQL 18 did not go through", body: `${message} Ledger keeps running on the previous version; it will try again after the next Ledger update, or run \`ledger update pg-upgrade\` on the server.`, level: "danger" })
 		.catch((e: Error) => log.warn("could not post the PostgreSQL upgrade to the dashboard", { err: e.message }));
 	return ok ? "done" : "failed";
 }
@@ -475,7 +475,7 @@ export async function maybeUpgradePostgres(o: PgUpgradeOptions): Promise<"none" 
 export const UPDATE_USAGE = `usage:
   ledger update run          check for and install a release if requested or due
                              (run by ledger-update.service as root)
-  ledger update pg-upgrade   move the database to PostgreSQL 16 now (as root)`;
+  ledger update pg-upgrade   move the database to PostgreSQL 18 now (as root)`;
 
 export async function runUpdateCommand(args: string[], currentVersion: string, dirs: UpdateDirs): Promise<void> {
 	if (args.length !== 1 || (args[0] !== "run" && args[0] !== "pg-upgrade")) throw new Error(UPDATE_USAGE);

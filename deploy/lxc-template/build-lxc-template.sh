@@ -106,12 +106,12 @@ packages=(
 	systemd-sysv dbus iproute2 iputils-ping openssh-server ca-certificates
 	curl less nano procps tzdata smbclient
 )
-# PostgreSQL 16. Where the distribution's own is older (Debian 12 has 15,
+# PostgreSQL 18. Where the distribution's own is older (Debian 12 has 15,
 # Ubuntu 22.04 has 14) it comes from the PostgreSQL project's repository,
 # installed inside the image below; elsewhere from the distribution.
-PG_VERSION=16
-# Debian 13's own is 17: Ledger stays on 16 everywhere, so that also comes from the project's repository.
-case "$SUITE" in bookworm | trixie | jammy) PG_FROM_PGDG=1 ;; *) PG_FROM_PGDG=0; packages+=(postgresql) ;; esac
+PG_VERSION=18
+# Debian 13's own is 17: Ledger uses 18 everywhere on this branch, so that also comes from the project's repository.
+PG_FROM_PGDG=1 # no distribution ships 18 yet
 # Sources name the distribution's keyring explicitly (signed-by), so the
 # build works on any host: apt on an Ubuntu build machine does not trust
 # Debian's archive keys by default, and vice versa. The keyring package is

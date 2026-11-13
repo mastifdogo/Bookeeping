@@ -370,7 +370,7 @@ test("the PostgreSQL upgrade: after a backup, once per Ledger version, recorded 
 	assert.equal(await maybeUpgradePostgres(make(10, { code: 0, out: "" }, true)), "failed");
 	assert.deepEqual(calls, ["--check", "backup"]);
 	assert.match((await record()).message, /not upgraded: the database backup failed/);
-	assert.deepEqual(notices, ["The database upgrade to PostgreSQL 16 did not go through"]);
+	assert.deepEqual(notices, ["The database upgrade to PostgreSQL 18 did not go through"]);
 	calls.length = 0;
 	assert.equal(await maybeUpgradePostgres(make(10, { code: 0, out: "" })), "skipped");
 	assert.deepEqual(calls, ["--check"]);
@@ -379,10 +379,10 @@ test("the PostgreSQL upgrade: after a backup, once per Ledger version, recorded 
 	assert.equal((await record()).message, "not enough free disk space");
 	calls.length = 0;
 	notices.length = 0;
-	assert.equal(await maybeUpgradePostgres({ ...make(10, { code: 0, out: "pg-upgrade: done: Ledger now runs on PostgreSQL 16.\n" }), currentVersion: "0.17.1", force: true }), "done");
+	assert.equal(await maybeUpgradePostgres({ ...make(10, { code: 0, out: "pg-upgrade: done: Ledger now runs on PostgreSQL 18.\n" }), currentVersion: "0.17.1", force: true }), "done");
 	assert.deepEqual(calls, ["--check", "backup", "upgrade"]);
 	assert.deepEqual([(await record()).ok, (await record()).ledger_version], [true, "0.17.1"]);
-	assert.deepEqual(notices, ["Database upgraded to PostgreSQL 16"]);
+	assert.deepEqual(notices, ["Database upgraded to PostgreSQL 18"]);
 
 	// Turned off in ledger.env.
 	process.env.LEDGER_PG_UPGRADE = "off";

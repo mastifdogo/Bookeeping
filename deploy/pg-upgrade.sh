@@ -1,5 +1,5 @@
 #!/bin/sh
-# Moves Ledger's PostgreSQL cluster to PostgreSQL 16 (from the version the
+# Moves Ledger's PostgreSQL cluster to PostgreSQL 18 (from the version the
 # distribution shipped, 15 on Debian 12). Run as root; started by
 # `ledger update run` once after an update, or by hand:
 #
@@ -7,10 +7,10 @@
 #   sh /usr/local/share/ledger/pg-upgrade.sh --check   exit 10 if an upgrade is needed, 0 if not
 #
 # What it does:
-#   1. installs PostgreSQL 16 from apt.postgresql.org (pgdg.sh)
+#   1. installs PostgreSQL 18 from apt.postgresql.org (pgdg.sh)
 #   2. saves every database and role to /var/lib/ledger/pg-upgrade/ (pg_dumpall)
 #   3. stops Ledger and runs Debian's pg_upgradecluster, which copies the
-#      cluster into a new PostgreSQL 16 one on the same port and leaves the
+#      cluster into a new PostgreSQL 18 one on the same port and leaves the
 #      old cluster in place, stopped
 #   4. starts Ledger and checks it answers; if it doesn't, the old cluster is
 #      put back and the new one removed
@@ -18,11 +18,11 @@
 # The old cluster is kept (stopped) so nothing is lost if something turns up
 # later. Once satisfied, free its space with:  pg_dropcluster <old version> main
 #
-# Environment: PG_TARGET=16, ENV_FILE=/etc/ledger/ledger.env,
+# Environment: PG_TARGET=18, ENV_FILE=/etc/ledger/ledger.env,
 # SAVE_DIR=/var/lib/ledger/pg-upgrade, LEDGER_SERVICE=ledger.service
 set -eu
 
-TARGET=${PG_TARGET:-16}
+TARGET=${PG_TARGET:-18}
 ENV_FILE=${ENV_FILE:-/etc/ledger/ledger.env}
 SAVE_DIR=${SAVE_DIR:-/var/lib/ledger/pg-upgrade}
 SERVICE=${LEDGER_SERVICE:-ledger.service}

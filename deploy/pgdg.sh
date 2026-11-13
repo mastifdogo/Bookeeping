@@ -3,7 +3,7 @@
 # which carries PostgreSQL versions newer than the distribution's own. Safe to
 # re-run. Run as root; needs curl and ca-certificates.
 #
-#   sh pgdg.sh && apt-get update && apt-get install -y postgresql-16
+#   sh pgdg.sh && apt-get update && apt-get install -y postgresql-18
 set -eu
 
 KEY=/usr/share/keyrings/postgresql-pgdg.asc
