@@ -98,13 +98,23 @@ function toRec(r: Row): Reconciliation {
 	return { ...rest, id: Number(r.id), cleared_count: Number(r.cleared_count), document_id: r.document_id === null ? null : Number(r.document_id), document_url: r.document_id === null ? null : `/api/v1/documents/${r.document_id}/file` };
 }
 
-async function checkDocument(db: Queryable, id: bigint | null | undefined): Promise<void> {
+/**
+ * A statement goes with one account: reconciling an account against it
+ * records that account on the document, and a statement that already
+ * belongs to another account is refused.
+ */
+async function checkDocument(db: Queryable, id: bigint | null | undefined, accountId: bigint): Promise<void> {
 	if (id === null || id === undefined) return;
-	if (!(await queryRow(db, `SELECT 1 FROM documents WHERE id = $1`, [id]))) {
-		const v = new ValidationError();
-		v.add("document_id", "no such document");
-		v.throwIfAny();
-	}
+	const doc = await queryRow<{ account_id: bigint | null; code: string | null; name: string | null }>(
+		db,
+		`SELECT d.account_id, a.code, a.name FROM documents d LEFT JOIN accounts a ON a.id = d.account_id WHERE d.id = $1`,
+		[id],
+	);
+	const v = new ValidationError();
+	if (!doc) v.add("document_id", "no such document");
+	else if (doc.account_id !== null && doc.account_id !== accountId) v.add("document_id", `that statement belongs to ${doc.code} ${doc.name}; change its account under Documents if that is wrong`);
+	v.throwIfAny();
+	if (doc!.account_id === null) await db.query(`UPDATE documents SET account_id = $2, updated_at = now() WHERE id = $1`, [id, accountId]);
 }
 
 /** Debit-positive amounts times this give the natural sign. */
@@ -216,7 +226,7 @@ export async function createReconciliation(
 			v.add("statement_date", `must not be before the last reconciled statement (${last.statement_date})`);
 			v.throwIfAny();
 		}
-		await checkDocument(tx, input.document_id);
+		await checkDocument(tx, input.document_id, acc!.id);
 		const row = await queryRow<{ id: bigint }>(
 			tx,
 			`INSERT INTO reconciliations (account_id, statement_date, statement_balance_cents, created_by, document_id) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
@@ -254,7 +264,7 @@ export async function updateReconciliation(app: App, id: bigint, input: { statem
 			[id, input.statement_date ?? null, input.statement_balance_cents ?? null],
 		);
 		if (input.document_id !== undefined) {
-			await checkDocument(tx, input.document_id);
+			await checkDocument(tx, input.document_id, r.account_id);
 			// Another statement: what was read from the old one no longer applies.
 			await tx.query(`UPDATE reconciliations SET document_id = $2, reading = CASE WHEN document_id IS DISTINCT FROM $2 THEN NULL ELSE reading END WHERE id = $1`, [id, input.document_id]);
 		}

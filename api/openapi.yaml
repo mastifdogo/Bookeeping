@@ -897,6 +897,7 @@ paths:
         - { name: origin, in: query, schema: { type: string, enum: [imported, created] } }
         - { name: year, in: query, schema: { type: integer } }
         - { name: entity_id, in: query, schema: { type: integer } }
+        - { name: account_code, in: query, schema: { type: string }, description: 'Documents of this account; "none" for those without one' }
         - { name: q, in: query, schema: { type: string }, description: 'Words in the title, file name, note or entity name' }
         - { name: limit, in: query, schema: { type: integer } }
         - { name: offset, in: query, schema: { type: integer } }
@@ -941,6 +942,7 @@ paths:
                 title: { type: string }
                 doc_date: { type: string, format: date }
                 entity_id: { type: integer }
+                account_code: { type: string, description: 'The bank, card or loan account a statement belongs to' }
                 note: { type: string }
       responses:
         '201':
@@ -982,6 +984,7 @@ paths:
                 title: { type: string }
                 doc_date: { type: string, format: date, nullable: true }
                 entity_id: { type: integer, nullable: true }
+                account_code: { type: string, nullable: true }
                 note: { type: string }
       responses:
         '200':
@@ -3620,7 +3623,7 @@ components:
       enum: [receipt, statement, invoice, other]
     Document:
       type: object
-      required: [id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, entity_name, note, added_by, created_at, updated_at, url, marks]
+      required: [id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url, marks]
       properties:
         id: { type: integer }
         kind: { $ref: '#/components/schemas/DocumentKind' }
@@ -3635,6 +3638,8 @@ components:
         doc_date: { type: string, format: date, nullable: true }
         entity_id: { type: integer, nullable: true }
         entity_name: { type: string, nullable: true }
+        account_code: { type: string, nullable: true, description: 'The bank, card or loan account it belongs to (a statement''s account)' }
+        account_name: { type: string, nullable: true }
         note: { type: string }
         added_by: { type: string, nullable: true }
         created_at: { type: string, format: date-time }

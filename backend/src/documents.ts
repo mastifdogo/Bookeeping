@@ -54,6 +54,9 @@ export interface DocumentInfo {
 	doc_date: string | null;
 	entity_id: number | null;
 	entity_name: string | null;
+	/** The bank, card or loan account it belongs to (a statement's account), if set. */
+	account_code: string | null;
+	account_name: string | null;
 	note: string;
 	added_by: string | null;
 	created_at: Date;
@@ -72,6 +75,7 @@ export interface DocumentAdd {
 	title?: string;
 	doc_date?: string | null;
 	entity_id?: number | null;
+	account_code?: string | null;
 	note?: string;
 }
 
@@ -81,6 +85,8 @@ export interface DocumentFilter {
 	source?: string | null;
 	year?: number | null;
 	entity_id?: number | null;
+	/** Documents of this account; "none" for those without one. */
+	account_code?: string | null;
 	/** Words in the title, file name, note or entity name. */
 	q?: string | null;
 	/** Only documents this module hasn't marked yet. */
@@ -91,12 +97,13 @@ export interface DocumentFilter {
 
 const SELECT = `
 	SELECT d.id, d.kind, d.origin, d.source, d.title, d.filename, d.path, d.content_type, d.size_bytes, d.sha256,
-	       to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date, d.entity_id, e.name AS entity_name, d.note, u.username AS added_by,
+	       to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date, d.entity_id, e.name AS entity_name, a.code AS account_code, a.name AS account_name, d.note, u.username AS added_by,
 	       d.created_at, d.updated_at,
 	       coalesce((SELECT jsonb_agg(jsonb_build_object('module', m.module, 'status', m.status, 'note', m.note) ORDER BY m.module)
 	                   FROM document_marks m WHERE m.document_id = d.id), '[]'::jsonb) AS marks
 	  FROM documents d
 	  LEFT JOIN entities e ON e.id = d.entity_id
+	  LEFT JOIN accounts a ON a.id = d.account_id
 	  LEFT JOIN users u ON u.id = d.created_by`;
 
 type Row = Omit<DocumentInfo, "id" | "entity_id" | "url"> & { id: bigint; entity_id: bigint | null };
@@ -128,7 +135,12 @@ const yearOf = (docDate: string | null, added: Date) => (docDate ? docDate.slice
 const relPath = (id: bigint | number, kind: DocumentKind, year: string, filename: string, ext: string) => `${FOLDERS[kind]}/${year}/${id}-${slug(filename)}${ext}`;
 
 function checkFields(o: Record<string, unknown>, err: ValidationError) {
-	const out: { kind?: DocumentKind; origin?: DocumentOrigin; title?: string; doc_date?: string | null; entity_id?: number | null; note?: string } = {};
+	const out: { kind?: DocumentKind; origin?: DocumentOrigin; title?: string; doc_date?: string | null; entity_id?: number | null; account_code?: string | null; note?: string } = {};
+	if (o.account_code !== undefined) {
+		if (o.account_code === null || o.account_code === "") out.account_code = null;
+		else if (typeof o.account_code !== "string" || o.account_code.length > 40) err.add("account_code", "must be an account's code");
+		else out.account_code = o.account_code.trim();
+	}
 	if (o.kind !== undefined) {
 		if (!DOCUMENT_KINDS.includes(o.kind as DocumentKind)) err.add("kind", `must be one of ${DOCUMENT_KINDS.join(", ")}`);
 		else out.kind = o.kind as DocumentKind;
@@ -159,6 +171,15 @@ function checkFields(o: Record<string, unknown>, err: ValidationError) {
 	return out;
 }
 
+/** The account's id for a code: undefined when no code was given, null to clear. */
+async function accountIdOf(app: App, code: string | null | undefined, err: ValidationError): Promise<bigint | null | undefined> {
+	if (code === undefined) return undefined;
+	if (code === null) return null;
+	const a = await queryRow<{ id: bigint }>(app.db, `SELECT id FROM accounts WHERE code = $1`, [code]);
+	if (!a) err.add("account_code", `account ${JSON.stringify(code)} does not exist`);
+	return a?.id;
+}
+
 async function checkEntity(app: App, id: number | null | undefined, err: ValidationError) {
 	if (id === null || id === undefined) return;
 	if (!(await queryRow(app.db, `SELECT 1 FROM entities WHERE id = $1`, [id]))) err.add("entity_id", "no such entity");
@@ -182,16 +203,18 @@ export async function listDocuments(app: App, f: DocumentFilter = {}): Promise<{
 	if (f.source) add(`d.source = ?`, f.source);
 	if (f.year) add(`extract(year FROM coalesce(d.doc_date, (d.created_at AT TIME ZONE 'UTC')::date)) = ?`, f.year);
 	if (f.entity_id) add(`d.entity_id = ?`, f.entity_id);
+	if (f.account_code === "none") where.push(`d.account_id IS NULL`);
+	else if (f.account_code) add(`a.code = ?`, f.account_code);
 	if (f.unmarkedBy) add(`NOT EXISTS (SELECT 1 FROM document_marks m WHERE m.document_id = d.id AND m.module = ?)`, f.unmarkedBy);
 	for (const word of (f.q ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 8)) {
-		add(`(d.title || ' ' || d.filename || ' ' || d.note || ' ' || coalesce(e.name, '')) ILIKE ?`, `%${word.replace(/[\\%_]/g, "\\$&")}%`);
+		add(`(d.title || ' ' || d.filename || ' ' || d.note || ' ' || coalesce(e.name, '') || ' ' || coalesce(a.code || ' ' || a.name, '')) ILIKE ?`, `%${word.replace(/[\\%_]/g, "\\$&")}%`);
 	}
 	const cond = where.length ? ` WHERE ${where.join(" AND ")}` : "";
 	const limit = Math.min(Math.max(Math.trunc(f.limit ?? 100), 1), 500);
 	const offset = Math.max(Math.trunc(f.offset ?? 0), 0);
 	const [rows, count] = await Promise.all([
 		queryRows<Row>(app.db, SELECT + cond + ` ORDER BY coalesce(d.doc_date, (d.created_at AT TIME ZONE 'UTC')::date) DESC, d.id DESC LIMIT ${limit} OFFSET ${offset}`, args),
-		queryRow<{ n: number }>(app.db, `SELECT count(*)::int AS n FROM documents d LEFT JOIN entities e ON e.id = d.entity_id` + cond, args),
+		queryRow<{ n: number }>(app.db, `SELECT count(*)::int AS n FROM documents d LEFT JOIN entities e ON e.id = d.entity_id LEFT JOIN accounts a ON a.id = d.account_id` + cond, args),
 	]);
 	return { data: rows.map(toInfo), total: count?.n ?? 0 };
 }
@@ -225,7 +248,7 @@ function announce(app: App, doc: DocumentInfo) {
  */
 export async function addDocument(app: App, input: DocumentAdd, by: { source: string; userId: number | null }): Promise<DocumentInfo> {
 	const err = new ValidationError();
-	const f = checkFields({ kind: input.kind, origin: input.origin, title: input.title, doc_date: input.doc_date, entity_id: input.entity_id, note: input.note }, err);
+	const f = checkFields({ kind: input.kind, origin: input.origin, title: input.title, doc_date: input.doc_date, entity_id: input.entity_id, account_code: input.account_code, note: input.note }, err);
 	if (input.kind === undefined) err.add("kind", `must be one of ${DOCUMENT_KINDS.join(", ")}`);
 	const filename = typeof input.filename === "string" ? path.basename(input.filename.replace(/\\/g, "/")).trim() : "";
 	if (filename.length < 1 || filename.length > 255 || /[\r\n\0]/.test(filename)) err.add("filename", "must be a file name of 1-255 characters");
@@ -235,6 +258,7 @@ export async function addDocument(app: App, input: DocumentAdd, by: { source: st
 	const type = Buffer.isBuffer(data) ? TYPES.find((t) => t.is(data)) : undefined;
 	if (Buffer.isBuffer(data) && data.length > 0 && !type) err.add("data", "must be a PDF, or a PNG or JPEG picture");
 	await checkEntity(app, f.entity_id, err);
+	const accountId = await accountIdOf(app, f.account_code, err);
 	err.throwIfAny();
 
 	const sha256 = createHash("sha256").update(data).digest("hex");
@@ -246,9 +270,9 @@ export async function addDocument(app: App, input: DocumentAdd, by: { source: st
 	// The row comes first (its id names the file); a file that can't be written takes the row back out.
 	const row = await queryRow<{ id: bigint; created_at: Date }>(
 		app.db,
-		`INSERT INTO documents (kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, note, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id, created_at`,
-		[f.kind, f.origin ?? "imported", by.source, title, filename, `pending/${randomBytes(12).toString("hex")}`, type!.type, data.length, sha256, f.doc_date ?? null, f.entity_id ?? null, f.note ?? "", by.userId],
+		`INSERT INTO documents (kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, note, created_by, account_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id, created_at`,
+		[f.kind, f.origin ?? "imported", by.source, title, filename, `pending/${randomBytes(12).toString("hex")}`, type!.type, data.length, sha256, f.doc_date ?? null, f.entity_id ?? null, f.note ?? "", by.userId, accountId ?? null],
 	);
 	const rel = relPath(row!.id, f.kind!, yearOf(f.doc_date ?? null, row!.created_at), filename, type!.ext);
 	const full = path.join(root, rel);
@@ -273,9 +297,10 @@ export async function updateDocument(app: App, id: unknown, change: unknown): Pr
 	const cur = await getDocument(app, id);
 	const err = new ValidationError();
 	const o = (change && typeof change === "object" && !Array.isArray(change) ? change : {}) as Record<string, unknown>;
-	for (const k of Object.keys(o)) if (!["kind", "title", "doc_date", "entity_id", "note"].includes(k)) err.add(k, "unknown field");
+	for (const k of Object.keys(o)) if (!["kind", "title", "doc_date", "entity_id", "account_code", "note"].includes(k)) err.add(k, "unknown field");
 	const f = checkFields(o, err);
 	await checkEntity(app, f.entity_id, err);
+	const accountId = await accountIdOf(app, f.account_code, err);
 	err.throwIfAny();
 	const kind = f.kind ?? cur.kind;
 	const docDate = f.doc_date !== undefined ? f.doc_date : cur.doc_date;
@@ -289,6 +314,7 @@ export async function updateDocument(app: App, id: unknown, change: unknown): Pr
 		});
 		await pruneEmpty(root, path.dirname(path.join(root, cur.path)));
 	}
+	if (accountId !== undefined) await app.db.query(`UPDATE documents SET account_id = $2 WHERE id = $1`, [cur.id, accountId]);
 	await app.db.query(`UPDATE documents SET kind = $2, title = $3, doc_date = $4, entity_id = $5, note = $6, path = $7, updated_at = now() WHERE id = $1`, [
 		cur.id,
 		kind,
@@ -340,7 +366,7 @@ export function documentsFor(app: App, self: string, actorOf: (u: unknown) => nu
 	};
 	return {
 		kinds: DOCUMENT_KINDS,
-		/** Documents, newest first: { kind, origin, source, year, entity_id, q, unmarked, limit, offset } → { data, total }. */
+		/** Documents, newest first: { kind, origin, source, year, entity_id, account_code, q, unmarked, limit, offset } → { data, total }. */
 		list: (f: Omit<DocumentFilter, "unmarkedBy"> & { unmarked?: boolean } = {}) => {
 			const { unmarked, ...rest } = f ?? {};
 			return listDocuments(app, { ...rest, unmarkedBy: unmarked ? self : null });
@@ -350,13 +376,14 @@ export function documentsFor(app: App, self: string, actorOf: (u: unknown) => nu
 		/** Its bytes (a Buffer). */
 		read: (id: number | string) => readDocument(app, id),
 		/**
-		 * Adds a PDF (or PNG/JPEG): { kind, filename, data, origin?, title?, doc_date?, entity_id?, note? }.
+		 * Adds a PDF (or PNG/JPEG): { kind, filename, data, origin?, title?, doc_date?, entity_id?, account_code?, note? }.
+		 * account_code is the bank, card or loan account a statement belongs to.
 		 * origin is "created" for a PDF this module made (the default) and "imported" for one it brought in.
 		 * Pass the user of the request when a person asked for it.
 		 */
 		add: (d: Omit<DocumentAdd, "data"> & { data: Buffer | Uint8Array | string }, user?: unknown) =>
 			addDocument(app, { ...d, origin: d?.origin ?? "created", data: bytes(d?.data) }, { source: self, userId: actorOf(user) }),
-		/** Changes kind, title, doc_date, entity_id or note. */
+		/** Changes kind, title, doc_date, entity_id, account_code or note. */
 		update: (id: number | string, change: object) => updateDocument(app, id, change),
 		/** Deletes a document this module added (others belong to the people who keep them). */
 		async remove(id: number | string): Promise<void> {

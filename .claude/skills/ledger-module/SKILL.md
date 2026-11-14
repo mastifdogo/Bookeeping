@@ -99,7 +99,9 @@ Decide, and state briefly to the user:
   reads them lists the ones it hasn't handled
   (`list({ kind, unmarked: true })`), reads the bytes, and `mark`s each when
   done; a module that makes a PDF people should keep (an invoice, a report)
-  `add`s it there with `origin: "created"`. No upload box of the module's
+  `add`s it there with `origin: "created"`. A statement carries its bank
+  or card account (`account_code`, Ledger 0.19.1): set it when the module
+  knows it, filter by it, never guess it. No upload box of the module's
   own for these, and no private-only copy in `ctx.storage`.
 - **No provider in particular**: the admin can put any LLM provider behind
   `ctx.llm` (Ledger 0.18.2: Anthropic, OpenAI, Gemini, OpenRouter, Mistral,

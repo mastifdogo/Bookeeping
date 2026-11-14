@@ -29,12 +29,13 @@
 	);
 	let all = $derived(data.docs.folders.reduce((n, f) => n + f.count, 0));
 
-	function show(change: { kind?: Kind | null; year?: number | null; origin?: string | null; q?: string }) {
+	function show(change: { kind?: Kind | null; year?: number | null; origin?: string | null; account?: string; q?: string }) {
 		const f = { ...data.filter, ...change };
 		const p = new URLSearchParams();
 		if (f.kind) p.set('kind', f.kind);
 		if (f.year) p.set('year', String(f.year));
 		if (f.origin) p.set('origin', f.origin);
+		if (f.account) p.set('account', f.account);
 		if (f.q) p.set('q', f.q);
 		goto(`?${p}`, { reset: false });
 	}
@@ -63,7 +64,7 @@
 	// Importing: several files at once, with the same kind, date and entity.
 	let importing = $state(false);
 	let files = $state<File[]>([]);
-	let up = $state({ kind: 'receipt' as Kind, doc_date: '', entity_id: '', note: '' });
+	let up = $state({ kind: 'receipt' as Kind, doc_date: '', entity_id: '', account_code: '', note: '' });
 	let over = $state(false);
 	let failed = $state<{ name: string; why: string }[]>([]);
 	function pick(list: FileList | null | undefined) {
@@ -73,7 +74,7 @@
 		importing = !importing;
 		files = [];
 		failed = [];
-		up = { kind: data.filter.kind ?? 'receipt', doc_date: '', entity_id: '', note: '' };
+		up = { kind: data.filter.kind ?? 'receipt', doc_date: '', entity_id: '', account_code: data.filter.account === 'none' ? '' : data.filter.account, note: '' };
 	}
 	const doImport = (ev: SubmitEvent) => {
 		ev.preventDefault();
@@ -81,7 +82,7 @@
 			failed = [];
 			let done = 0;
 			for (const file of files) {
-				const body = { file, kind: up.kind, doc_date: up.doc_date, entity_id: up.entity_id, note: up.note };
+				const body = { file, kind: up.kind, doc_date: up.doc_date, entity_id: up.entity_id, account_code: up.account_code, note: up.note };
 				const res = await api().POST('/documents', {
 					// The generated type wants a string for the file; the form sends the file itself.
 					body: body as never,
@@ -104,18 +105,18 @@
 		});
 	};
 
-	type Edit = { kind: Kind; title: string; doc_date: string; entity_id: string; note: string };
+	type Edit = { kind: Kind; title: string; doc_date: string; entity_id: string; account_code: string; note: string };
 	let editing = $state<number | null>(null);
-	let form = $state<Edit>({ kind: 'receipt', title: '', doc_date: '', entity_id: '', note: '' });
+	let form = $state<Edit>({ kind: 'receipt', title: '', doc_date: '', entity_id: '', account_code: '', note: '' });
 	function edit(d: Document) {
 		error = null;
 		editing = d.id;
-		form = { kind: d.kind, title: d.title, doc_date: d.doc_date ?? '', entity_id: d.entity_id === null ? '' : String(d.entity_id), note: d.note };
+		form = { kind: d.kind, title: d.title, doc_date: d.doc_date ?? '', entity_id: d.entity_id === null ? '' : String(d.entity_id), account_code: d.account_code ?? '', note: d.note };
 	}
 	const save = (ev: SubmitEvent) => {
 		ev.preventDefault();
 		return act(async () => {
-			const body = { kind: form.kind, title: form.title, doc_date: form.doc_date || null, entity_id: form.entity_id ? Number(form.entity_id) : null, note: form.note };
+			const body = { kind: form.kind, title: form.title, doc_date: form.doc_date || null, entity_id: form.entity_id ? Number(form.entity_id) : null, account_code: form.account_code || null, note: form.note };
 			const d = unwrap(await api().PATCH('/documents/{documentId}', { params: { path: { documentId: editing! } }, body }));
 			editing = null;
 			return `Saved ${d.title}.`;
@@ -188,9 +189,16 @@
 					{#each data.entities as e (e.id)}<option value={String(e.id)}>{e.name}</option>{/each}
 				</select>
 			</label>
+			<label style="flex:1; min-width:12rem">
+				Account {up.kind === 'statement' ? '' : '(for statements)'}
+				<select bind:value={up.account_code}>
+					<option value="">(none)</option>
+					{#each data.accounts as a (a.code)}<option value={a.code}>{a.code} {a.name}</option>{/each}
+				</select>
+			</label>
 			<label style="flex:2; min-width:12rem">Note <input bind:value={up.note} maxlength="2000" /></label>
 		</div>
-		<p class="muted small" style="margin:0">Date, entity and note are optional and apply to every file chosen; change them per document afterwards.</p>
+		<p class="muted small" style="margin:0">Date, entity, account and note are optional and apply to every file chosen; change them per document afterwards.</p>
 		<p style="margin-bottom:0"><button class="primary" disabled={busy || files.length === 0}>Import {files.length || ''}</button></p>
 	</form>
 {/if}
@@ -218,6 +226,11 @@
 					</label>
 				{/each}
 			</div>
+			<select aria-label="Account" value={data.filter.account} onchange={(e) => show({ account: e.currentTarget.value })}>
+				<option value="">All accounts</option>
+				{#each data.accounts as a (a.code)}<option value={a.code}>{a.code} {a.name}</option>{/each}
+				<option value="none">No account</option>
+			</select>
 			<form
 				onsubmit={(e) => {
 					e.preventDefault();
@@ -235,12 +248,12 @@
 				<div class="empty">{all === 0 ? 'No documents yet.' : 'None match.'}</div>
 			{:else}
 				<table>
-					<thead><tr><th>Document</th><th>Kind</th><th>Date</th><th>From or for</th><th>Added by</th><th class="num">Size</th><th></th></tr></thead>
+					<thead><tr><th>Document</th><th>Kind</th><th>Date</th><th>Account</th><th>From or for</th><th>Added by</th><th class="num">Size</th><th></th></tr></thead>
 					<tbody>
 						{#each data.docs.data as d (d.id)}
 							{#if editing === d.id}
 								<tr>
-									<td colspan="7">
+									<td colspan="8">
 										<form onsubmit={save}>
 											<div class="row">
 												<label style="flex:2; min-width:12rem">Title <input bind:value={form.title} required maxlength="200" /></label>
@@ -253,6 +266,13 @@
 													<select bind:value={form.entity_id}>
 														<option value="">(nobody in particular)</option>
 														{#each data.entities as e (e.id)}<option value={String(e.id)}>{e.name}</option>{/each}
+													</select>
+												</label>
+												<label style="flex:1; min-width:12rem">
+													Account
+													<select bind:value={form.account_code}>
+														<option value="">(none)</option>
+														{#each data.accounts as a (a.code)}<option value={a.code}>{a.code} {a.name}</option>{/each}
 													</select>
 												</label>
 												<label style="flex:2; min-width:12rem">Note <input bind:value={form.note} maxlength="2000" /></label>
@@ -278,6 +298,7 @@
 									</td>
 									<td>{kindName(d.kind)}</td>
 									<td>{d.doc_date ?? ''}</td>
+									<td>{#if d.account_code}<span class="mono">{d.account_code}</span> {d.account_name}{/if}</td>
 									<td>{d.entity_name ?? ''}</td>
 									<td>{from(d)}</td>
 									<td class="num">{size(d.size_bytes)}</td>

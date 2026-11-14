@@ -1565,6 +1565,8 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 			const seen = [];
 			ctx.documents.onAdded((d) => seen.push(d.title));
 			ctx.route("GET", "/seen", () => seen);
+			ctx.route("GET", "/of/:code", async (req) => (await ctx.documents.list({ account_code: req.params.code })).data.map((d) => [d.title, d.account_code]));
+			ctx.route("POST", "/account/:id", (req) => ctx.documents.update(req.params.id, { account_code: req.body.account_code }));
 			ctx.route("GET", "/todo", async () => (await ctx.documents.list({ kind: "receipt", unmarked: true })).data.map((d) => d.title));
 			ctx.route("POST", "/read/:id", async (req) => {
 				const d = await ctx.documents.get(req.params.id);
@@ -1597,7 +1599,10 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 	expectStatus(await upload("x.pdf", pdf("x"), { kind: "memo" }), 422);
 	expectStatus(await upload("x.pdf", pdf("x"), { kind: "receipt", doc_date: "14 March" }), 422);
 	expectStatus(await upload("x.pdf", pdf("x"), { kind: "receipt", entity_id: "99999" }), 422);
-	const stmt = (await upload("statement.pdf", pdf("bank"), { kind: "statement", doc_date: "2025-12-31", title: "Chequing December" })).json();
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	expectStatus(await upload("x.pdf", pdf("x"), { kind: "statement", account_code: "9999" }), 422);
+	const stmt = (await upload("statement.pdf", pdf("bank"), { kind: "statement", doc_date: "2025-12-31", title: "Chequing December", account_code: "1000" })).json();
+	assert.deepEqual([stmt.account_code, stmt.account_name], ["1000", "Chequing"]);
 	assert.equal(stmt.path, `statements/2025/${stmt.id}-statement.pdf`);
 
 	// The file is served for the browser to show, sandboxed.
@@ -1627,6 +1632,14 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 	expectStatus(await call("DELETE", `/m/reader/doc/${hydro.id}`), 403); // not the module's own
 	expectStatus(await call("POST", "/m/reader/read/999999"), 404);
 
+	// Statements go with their account, for people and modules alike.
+	assert.deepEqual((await call("GET", "/m/reader/of/1000")).json(), [["Chequing December", "1000"]]);
+	assert.deepEqual((await call("GET", "/m/reader/of/none")).json().map((x: any) => x[0]), ["Invoice 31", "Hydro March"]);
+	r = await call("POST", `/m/reader/account/${inv.id}`, { account_code: "1000" });
+	assert.equal(r.json().account_code, "1000");
+	assert.equal((await call("POST", `/m/reader/account/${inv.id}`, { account_code: null })).json().account_code, null);
+	expectStatus(await call("POST", `/m/reader/account/${inv.id}`, { account_code: "nope" }), 422);
+
 	// Finding them.
 	const titles = async (q: string) => (await call("GET", `/documents?${q}`)).json().data.map((d: any) => d.title);
 	assert.deepEqual(await titles(""), ["Invoice 31", "Hydro March", "Chequing December"]);
@@ -1635,6 +1648,8 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 	assert.deepEqual(await titles("year=2025"), ["Chequing December"]);
 	assert.deepEqual(await titles("q=hydro+card"), ["Hydro March"]);
 	assert.deepEqual(await titles(`entity_id=${vendor.id}`), ["Hydro March"]);
+	assert.deepEqual(await titles("account_code=1000"), ["Chequing December"]);
+	assert.deepEqual(await titles("q=chequing"), ["Chequing December"]);
 	expectStatus(await call("GET", "/documents?kind=memo"), 422);
 	assert.deepEqual((await call("GET", "/documents")).json().folders.map((f: any) => [f.kind, f.year, f.count]), [["invoice", 2026, 1], ["receipt", 2026, 1], ["statement", 2025, 1]]);
 
@@ -1747,6 +1762,18 @@ test("Reconcile against a statement PDF the AI reads", async (t) => {
 	assert.deepEqual(cleared, ["Deposit", "Cheque 101", "Paper", "Toner, same amount", "Bank fee"]);
 	assert.deepEqual(d.reading.unmatched.map((i: number) => d.reading.lines[i].description), ["TRANSFER IN"]);
 
+	// Reconciling against a statement files it under that account, where modules and the Documents page find it.
+	let docs = (await call("GET", "/documents?account_code=1000")).json().data;
+	assert.deepEqual(docs.map((x: any) => [x.title, x.account_code, x.account_name]), [["march", "1000", "Chequing"]]);
+	// A statement of one account can't be used to reconcile another, and the AI isn't asked.
+	const asked = ai.requests.length;
+	r = await call("POST", "/reconciliations/from-statement", { account_code: "2100", document_id: march.id });
+	expectStatus(r, 422);
+	assert.match(r.json().error.message, /belongs to 1000 Chequing/);
+	expectStatus(await call("POST", "/reconciliations", { account_code: "2100", statement_date: "2026-03-31", statement_balance_cents: 0, document_id: march.id }), 422);
+	assert.equal(ai.requests.length, asked);
+	assert.equal((await call("GET", "/reconciliations?account_code=2100")).json().data.length, 0);
+
 	// Another statement on the session: what was read from the old one is dropped.
 	const other = await uploadPdf("other.pdf", "something else");
 	r = await call("PATCH", `/reconciliations/${d.reconciliation.id}`, { document_id: other.id });
@@ -1771,13 +1798,15 @@ test("Reconcile against a statement PDF the AI reads", async (t) => {
 
 	// A document that isn't a statement starts nothing.
 	ai.json = { period_start: null, end_date: null, opening_balance: null, closing_balance: null, lines: [] };
-	r = await call("POST", "/reconciliations/from-statement", { account_code: "4000", document_id: other.id });
+	const memo = await uploadPdf("memo.pdf", "not a statement");
+	r = await call("POST", "/reconciliations/from-statement", { account_code: "4000", document_id: memo.id });
 	expectStatus(r, 422);
 	assert.match(r.json().error.message, /is it a statement/);
 	// A manual start can carry the statement too.
-	r = await call("POST", "/reconciliations", { account_code: "4000", statement_date: "2026-03-31", statement_balance_cents: 0, document_id: other.id });
+	r = await call("POST", "/reconciliations", { account_code: "4000", statement_date: "2026-03-31", statement_balance_cents: 0, document_id: memo.id });
 	expectStatus(r, 201);
-	assert.equal(r.json().reconciliation.document_id, other.id);
+	assert.equal(r.json().reconciliation.document_id, memo.id);
+	assert.equal((await call("GET", `/documents/${memo.id}`)).json().account_code, "4000");
 });
 
 test("A mailbox over IMAP and SMTP (Proton Mail Bridge) shared with modules", async (t) => {

@@ -293,9 +293,9 @@ keeping its own upload box or a private copy in `ctx.storage`.
 ```js
 // Documents this module hasn't dealt with yet, newest first
 const { data, total } = await ctx.documents.list({ kind: "receipt", unmarked: true });
-// other filters: origin, source, year, entity_id, q (words), limit (≤ 500), offset
+// other filters: origin, source, year, entity_id, account_code ("none": without one), q (words), limit (≤ 500), offset
 // each: { id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256,
-//         doc_date, entity_id, entity_name, note, added_by, created_at, updated_at, url, marks }
+//         doc_date, entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url, marks }
 
 const doc = await ctx.documents.get(id);        // details (404 if none)
 const pdf = await ctx.documents.read(id);       // Buffer
@@ -312,6 +312,12 @@ await ctx.documents.remove(made.id);            // only documents this module ad
 ctx.documents.url(id);                          // for <a href> and <iframe> in the module's page
 ctx.documents.onAdded((doc) => { /* a person or another module added one */ });
 ```
+
+A bank or card statement belongs to its account (Ledger 0.19.1): pass
+`account_code` to `add` or `update` when the module knows it, and ask for one
+account's statements with `list({ kind: "statement", account_code })`.
+Reconciling an account against a statement sets it too, and a statement of
+one account can't be used to reconcile another.
 
 Only PDFs and PNG or JPEG pictures are accepted (told from the file's
 content), up to 50 MB, and the same file can't be added twice: `add` answers

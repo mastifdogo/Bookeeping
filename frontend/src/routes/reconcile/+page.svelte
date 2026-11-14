@@ -122,7 +122,7 @@
 		</label>
 		<div class="field" style="flex:1; min-width:16rem">
 			<span>Statement</span>
-			<StatementPicker bind:value={statementId} statements={data.statements} disabled={busy} onerror={(e) => (error = e)} />
+			<StatementPicker bind:value={statementId} statements={data.statements} {accountCode} disabled={busy} onerror={(e) => (error = e)} />
 		</div>
 	</div>
 	<div class="toolbar" style="margin:0.75rem 0 0; align-items:flex-end">

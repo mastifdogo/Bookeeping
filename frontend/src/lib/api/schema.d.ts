@@ -2719,6 +2719,9 @@ export interface components {
             doc_date: string | null;
             entity_id: number | null;
             entity_name: string | null;
+            /** @description The bank, card or loan account it belongs to (a statement's account) */
+            account_code: string | null;
+            account_name: string | null;
             note: string;
             added_by: string | null;
             /** Format: date-time */
@@ -3872,6 +3875,8 @@ export interface operations {
                 origin?: "imported" | "created";
                 year?: number;
                 entity_id?: number;
+                /** @description Documents of this account; "none" for those without one */
+                account_code?: string;
                 /** @description Words in the title, file name, note or entity name */
                 q?: string;
                 limit?: number;
@@ -3922,6 +3927,8 @@ export interface operations {
                     /** Format: date */
                     doc_date?: string;
                     entity_id?: number;
+                    /** @description The bank, card or loan account a statement belongs to */
+                    account_code?: string;
                     note?: string;
                 };
             };
@@ -4002,6 +4009,7 @@ export interface operations {
                     /** Format: date */
                     doc_date?: string | null;
                     entity_id?: number | null;
+                    account_code?: string | null;
                     note?: string;
                 };
             };

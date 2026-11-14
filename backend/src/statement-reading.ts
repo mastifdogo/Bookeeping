@@ -172,6 +172,11 @@ export async function preReconcile(app: App, id: bigint): Promise<Reconciliation
 
 /** Starts a reconciliation from a statement: the AI reads its closing date and balance, then the matches are ticked. */
 export async function reconcileFromStatement(app: App, input: { account_code: string; document_id: bigint }, account: { name: string; type: string; currency: string }, userId: number | null): Promise<ReconciliationDetail> {
+	// Checked before the AI is asked: a statement that belongs to another account isn't read for this one.
+	const doc = await getDocument(app, input.document_id);
+	if (doc.account_code !== null && doc.account_code !== input.account_code) {
+		throw new HttpError(422, `that statement belongs to ${doc.account_code} ${doc.account_name}; change its account under Documents if that is wrong`, "validation_failed");
+	}
 	const reading = await readStatement(app, input.document_id, account);
 	if (reading.end_date === null || reading.closing_balance_cents === null) {
 		throw new LlmError("the AI couldn't find the statement's closing date and balance; enter them yourself and press Start, then use \"Read statement\" for the lines", 422);

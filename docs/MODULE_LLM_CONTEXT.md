@@ -375,21 +375,23 @@ for them, and don't keep the only copy in `ctx.storage`. People manage them
 on Ledger's Documents page; files are on the data share and in backups.
 
 ```js
-const { data, total } = await ctx.documents.list({ kind?: "receipt" | "statement" | "invoice" | "other", origin?: "imported" | "created", source?, year?, entity_id?, q?, unmarked?: true, limit?: 100, offset? });
+const { data, total } = await ctx.documents.list({ kind?: "receipt" | "statement" | "invoice" | "other", origin?: "imported" | "created", source?, year?, entity_id?, account_code?, q?, unmarked?: true, limit?: 100, offset? });
 // doc: { id, kind, origin, source ("user" | module id), title, filename, path, content_type, size_bytes, sha256,
-//        doc_date ("YYYY-MM-DD" | null), entity_id, entity_name, note, added_by, created_at, updated_at, url, marks: [{ module, status, note }] }
+//        doc_date ("YYYY-MM-DD" | null), entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url, marks: [{ module, status, note }] }
 const doc = await ctx.documents.get(id);     // 404 if none
 const buf = await ctx.documents.read(id);    // Buffer; 404 if the file is missing
 await ctx.documents.mark(id, "done" | "skipped", note?);   // per module; list({ unmarked: true }) then leaves it out
 await ctx.documents.unmark(id);
-const made = await ctx.documents.add({ kind, filename, data: Buffer, origin?: "created" (default) | "imported", title?, doc_date?, entity_id?, note? }, req.user);
-await ctx.documents.update(id, { kind?, title?, doc_date?, entity_id?, note? });
+const made = await ctx.documents.add({ kind, filename, data: Buffer, origin?: "created" (default) | "imported", title?, doc_date?, entity_id?, account_code?, note? }, req.user);
+await ctx.documents.update(id, { kind?, title?, doc_date?, entity_id?, account_code?, note? });
 await ctx.documents.remove(id);              // only documents this module added (else 403)
 ctx.documents.url(id);                       // href / iframe src for a logged-in user
 ctx.documents.onAdded((doc) => { … });       // a person or another module added one (not this module's own)
 ```
 
-PDF, PNG and JPEG only (checked by content), ≤ 50 MB. The same file twice
+`account_code` (Ledger ≥ 0.19.1) is the bank, card or loan account a
+statement belongs to: set it when adding a statement, filter by it
+(`"none"` = not set yet), and never guess it. PDF, PNG and JPEG only (checked by content), ≤ 50 MB. The same file twice
 answers 409. Runs in the request's organization; in background jobs use
 `ctx.orgs.forEach`. In `onAdded` only queue work; a person approves what
 comes of it.

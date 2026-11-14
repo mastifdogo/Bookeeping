@@ -201,7 +201,7 @@
 	{#if open}
 		<div class="card attach">
 			<span class="muted small">Statement</span>
-			<StatementPicker bind:value={pickId} statements={data.statements} disabled={busy} onerror={(e) => (error = e)} />
+			<StatementPicker bind:value={pickId} statements={data.statements} accountCode={rec.account_code} disabled={busy} onerror={(e) => (error = e)} />
 			<button disabled={busy || pickId === null} onclick={() => attach(pickId)}>Show beside the transactions</button>
 		</div>
 	{/if}

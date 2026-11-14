@@ -360,7 +360,9 @@ done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)
 **Documents** (sidebar) keeps the PDFs behind the books: receipts,
 statements and invoices you import (several at once, by choosing or dropping
 files), and PDFs made in Ledger, such as an invoice a module draws up. Each
-has a kind, and optionally the date on it, a customer or vendor and a note.
+has a kind, and optionally the date on it, a customer or vendor, the bank or
+card account it belongs to (a statement's account, also set when you
+reconcile against it) and a note.
 They are filed as ordinary files on the data share, in folders by kind and
 year (`receipts/2026/…`), listed with folders, a search box and an
 "Imported / Made in Ledger" filter, and carried in every backup. The same
