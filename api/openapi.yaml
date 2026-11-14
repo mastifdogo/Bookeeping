@@ -836,6 +836,132 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /documents:
+    get:
+      tags: [Documents]
+      operationId: listDocuments
+      summary: PDFs of receipts, statements and invoices (imported or made in Ledger), newest first, and the folders they are filed in
+      parameters:
+        - { name: kind, in: query, schema: { $ref: '#/components/schemas/DocumentKind' } }
+        - { name: origin, in: query, schema: { type: string, enum: [imported, created] } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: entity_id, in: query, schema: { type: integer } }
+        - { name: q, in: query, schema: { type: string }, description: 'Words in the title, file name, note or entity name' }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, folders, max_bytes]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Document' } }
+                  total: { type: integer }
+                  max_bytes: { type: integer }
+                  folders:
+                    type: array
+                    items:
+                      type: object
+                      required: [kind, year, count, size_bytes]
+                      properties:
+                        kind: { $ref: '#/components/schemas/DocumentKind' }
+                        year: { type: integer }
+                        count: { type: integer }
+                        size_bytes: { type: number }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Documents]
+      operationId: uploadDocument
+      summary: Import a PDF (or a PNG or JPEG picture)
+      description: The same file can't be imported twice (409).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, kind]
+              properties:
+                file: { type: string, format: binary }
+                kind: { $ref: '#/components/schemas/DocumentKind' }
+                title: { type: string }
+                doc_date: { type: string, format: date }
+                entity_id: { type: integer }
+                note: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /documents/{documentId}:
+    parameters:
+      - { name: documentId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Documents]
+      operationId: getDocument
+      summary: One document's details
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Documents]
+      operationId: updateDocument
+      summary: Change a document's details; its file moves when the kind or year changes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                kind: { $ref: '#/components/schemas/DocumentKind' }
+                title: { type: string }
+                doc_date: { type: string, format: date, nullable: true }
+                entity_id: { type: integer, nullable: true }
+                note: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Documents]
+      operationId: deleteDocument
+      summary: Delete a document and its file
+      responses:
+        '204': { description: Deleted }
+        default: { $ref: '#/components/responses/Error' }
+
+  /documents/{documentId}/file:
+    parameters:
+      - { name: documentId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Documents]
+      operationId: getDocumentFile
+      summary: The file itself (add ?download=1 to save it)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/pdf: { schema: { type: string, format: binary } }
+        default: { $ref: '#/components/responses/Error' }
+
   /files:
     get:
       tags: [Files]
@@ -3402,6 +3528,40 @@ components:
                   error: { type: string }
                   duration_ms: { type: integer }
                   created_at: { type: string, format: date-time }
+    DocumentKind:
+      type: string
+      enum: [receipt, statement, invoice, other]
+    Document:
+      type: object
+      required: [id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, entity_name, note, added_by, created_at, updated_at, url, marks]
+      properties:
+        id: { type: integer }
+        kind: { $ref: '#/components/schemas/DocumentKind' }
+        origin: { type: string, enum: [imported, created], description: Brought in from outside, or made in Ledger }
+        source: { type: string, description: '"user", or the id of the module that added it' }
+        title: { type: string }
+        filename: { type: string }
+        path: { type: string, description: 'Its place in the documents folder, e.g. receipts/2026/12-hydro-march.pdf' }
+        content_type: { type: string }
+        size_bytes: { type: integer }
+        sha256: { type: string }
+        doc_date: { type: string, format: date, nullable: true }
+        entity_id: { type: integer, nullable: true }
+        entity_name: { type: string, nullable: true }
+        note: { type: string }
+        added_by: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        url: { type: string }
+        marks:
+          type: array
+          items:
+            type: object
+            required: [module, status, note]
+            properties:
+              module: { type: string }
+              status: { type: string, enum: [done, skipped] }
+              note: { type: string }
     MailSecurity:
       type: string
       enum: [starttls, tls, none]

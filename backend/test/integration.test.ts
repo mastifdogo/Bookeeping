@@ -1544,6 +1544,115 @@ test("LLM API settings from before 0.18.2: openai meant any compatible server", 
 	assert.deepEqual((await call("GET", "/integrations/llm")).json().config.connections.map((c: any) => c.provider), ["compatible", "openai"]);
 });
 
+test("Documents: PDFs of receipts, statements and invoices, shared with modules", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	const cookie = `${SESSION_COOKIE}=${ta.token}`;
+	const pdf = (text: string) => Buffer.from(`%PDF-1.4\n${text}\n%%EOF\n`);
+	const upload = (filename: string, data: Buffer, fields: Record<string, string>) => {
+		const boundary = "----docs" + Math.random().toString(16).slice(2);
+		const body = Buffer.concat([
+			...Object.entries(fields).map(([k, v]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)),
+			Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/pdf\r\n\r\n`),
+			data,
+			Buffer.from(`\r\n--${boundary}--\r\n`),
+		]);
+		return request("POST", "/api/v1/documents", { rawBody: body, cookie, headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` } });
+	};
+	await loadModules(t, app, {
+		reader: `export default function (ctx) {
+			const seen = [];
+			ctx.documents.onAdded((d) => seen.push(d.title));
+			ctx.route("GET", "/seen", () => seen);
+			ctx.route("GET", "/todo", async () => (await ctx.documents.list({ kind: "receipt", unmarked: true })).data.map((d) => d.title));
+			ctx.route("POST", "/read/:id", async (req) => {
+				const d = await ctx.documents.get(req.params.id);
+				const bytes = await ctx.documents.read(d.id);
+				await ctx.documents.mark(d.id, "done", "posted as entry 7");
+				return { title: d.title, text: bytes.toString("latin1"), url: ctx.documents.url(d.id) };
+			});
+			ctx.route("POST", "/make", (req) => ctx.documents.add({ kind: "invoice", filename: "INV-0031.pdf", data: Buffer.from("%PDF-1.4\\ninvoice 31\\n"), title: "Invoice 31", doc_date: "2026-04-02" }, req.user));
+			ctx.route("DELETE", "/doc/:id", (req) => ctx.documents.remove(req.params.id));
+		}`,
+	});
+	const vendor = (await call("POST", "/entities", { name: "Hydro One", is_vendor: true })).json();
+
+	let r = await call("GET", "/documents");
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().data, r.json().total, r.json().folders], [[], 0, []]);
+
+	// Importing: the file is checked by its content, filed by kind and year, and indexed.
+	r = await upload("Hydro March.PDF", pdf("hydro"), { kind: "receipt", doc_date: "2026-03-14", entity_id: String(vendor.id), note: "paid by card" });
+	expectStatus(r, 201);
+	const hydro = r.json();
+	assert.deepEqual(
+		[hydro.kind, hydro.origin, hydro.source, hydro.title, hydro.path, hydro.content_type, hydro.entity_name, hydro.added_by, hydro.url],
+		["receipt", "imported", "user", "Hydro March", `receipts/2026/${hydro.id}-hydro-march.pdf`, "application/pdf", "Hydro One", "tester", `/api/v1/documents/${hydro.id}/file`],
+	);
+	const root = path.join(app.csvDir, ".modules", "_documents");
+	assert.equal((await readFile(path.join(root, hydro.path))).toString(), pdf("hydro").toString());
+	expectStatus(await upload("again.pdf", pdf("hydro"), { kind: "receipt" }), 409); // the same file twice
+	expectStatus(await upload("page.html", Buffer.from("<html><script>alert(1)</script>"), { kind: "receipt" }), 422); // not a PDF or picture
+	expectStatus(await upload("x.pdf", pdf("x"), { kind: "memo" }), 422);
+	expectStatus(await upload("x.pdf", pdf("x"), { kind: "receipt", doc_date: "14 March" }), 422);
+	expectStatus(await upload("x.pdf", pdf("x"), { kind: "receipt", entity_id: "99999" }), 422);
+	const stmt = (await upload("statement.pdf", pdf("bank"), { kind: "statement", doc_date: "2025-12-31", title: "Chequing December" })).json();
+	assert.equal(stmt.path, `statements/2025/${stmt.id}-statement.pdf`);
+
+	// The file is served for the browser to show, sandboxed.
+	const file = await request("GET", hydro.url, { cookie });
+	expectStatus(file, 200);
+	assert.equal(file.headers["content-type"], "application/pdf");
+	assert.match(String(file.headers["content-disposition"]), /^inline; filename\*=UTF-8''Hydro%20March\.pdf$/);
+	assert.match(String(file.headers["content-security-policy"]), /sandbox/);
+	assert.equal(file.text, pdf("hydro").toString());
+	expectStatus(await request("GET", hydro.url), 401);
+
+	// Modules hear about new documents, read them and note what they did.
+	assert.deepEqual((await call("GET", "/m/reader/seen")).json(), ["Hydro March", "Chequing December"]);
+	assert.deepEqual((await call("GET", "/m/reader/todo")).json(), ["Hydro March"]);
+	r = await call("POST", `/m/reader/read/${hydro.id}`);
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { title: "Hydro March", text: pdf("hydro").toString(), url: hydro.url });
+	assert.deepEqual((await call("GET", "/m/reader/todo")).json(), []);
+	assert.deepEqual((await call("GET", `/documents/${hydro.id}`)).json().marks, [{ module: "reader", status: "done", note: "posted as entry 7" }]);
+	// A PDF made in Ledger is filed the same way, marked as created by the module.
+	r = await call("POST", "/m/reader/make");
+	expectStatus(r, 200);
+	const inv = r.json();
+	assert.deepEqual([inv.origin, inv.source, inv.path, inv.added_by], ["created", "reader", `invoices/2026/${inv.id}-inv-0031.pdf`, "tester"]);
+	assert.deepEqual((await call("GET", "/m/reader/seen")).json().length, 2, "a module isn't told about its own documents");
+	expectStatus(await call("DELETE", `/m/reader/doc/${hydro.id}`), 403); // not the module's own
+	expectStatus(await call("POST", "/m/reader/read/999999"), 404);
+
+	// Finding them.
+	const titles = async (q: string) => (await call("GET", `/documents?${q}`)).json().data.map((d: any) => d.title);
+	assert.deepEqual(await titles(""), ["Invoice 31", "Hydro March", "Chequing December"]);
+	assert.deepEqual(await titles("kind=receipt"), ["Hydro March"]);
+	assert.deepEqual(await titles("origin=created"), ["Invoice 31"]);
+	assert.deepEqual(await titles("year=2025"), ["Chequing December"]);
+	assert.deepEqual(await titles("q=hydro+card"), ["Hydro March"]);
+	assert.deepEqual(await titles(`entity_id=${vendor.id}`), ["Hydro March"]);
+	expectStatus(await call("GET", "/documents?kind=memo"), 422);
+	assert.deepEqual((await call("GET", "/documents")).json().folders.map((f: any) => [f.kind, f.year, f.count]), [["invoice", 2026, 1], ["receipt", 2026, 1], ["statement", 2025, 1]]);
+
+	// Changing the kind or the date moves the file, so the folders stay true.
+	r = await call("PATCH", `/documents/${hydro.id}`, { kind: "invoice", doc_date: "2025-11-30", title: "Hydro bill", entity_id: null });
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().path, r.json().title, r.json().entity_id], [`invoices/2025/${hydro.id}-hydro-march.pdf`, "Hydro bill", null]);
+	assert.equal((await readFile(path.join(root, r.json().path))).toString(), pdf("hydro").toString());
+	assert.deepEqual(await readdir(path.join(root, "receipts")).catch(() => "gone"), "gone", "the empty folder was removed");
+	expectStatus(await call("PATCH", `/documents/${hydro.id}`, { path: "../../etc" }), 422);
+
+	expectStatus(await call("DELETE", `/documents/${stmt.id}`), 204);
+	assert.deepEqual(await readdir(path.join(root, "statements")).catch(() => "gone"), "gone");
+	expectStatus(await call("GET", `/documents/${stmt.id}`), 404);
+	// A file that went missing (a restore from an uploaded dump) says so.
+	await rm(path.join(root, `invoices/2026/${inv.id}-inv-0031.pdf`));
+	expectStatus(await request("GET", inv.url, { cookie }), 404);
+});
+
 test("A mailbox over IMAP and SMTP (Proton Mail Bridge) shared with modules", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;

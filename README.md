@@ -175,6 +175,7 @@ backend/src/module-files.ts  Files modules hand each other (ctx.files)
 backend/src/search.ts     The search bar (accounts, entries, module providers)
 backend/src/llm.ts        Settings → LLM API and ctx.llm (a table of providers, three wire protocols)
 backend/src/gmail.ts      Settings → Mail → Gmail (OAuth with PKCE) and ctx.gmail
+backend/src/documents.ts  Documents: PDFs of receipts, statements and invoices on the data share, and ctx.documents
 backend/src/mail.ts       Settings → Mail (IMAP/SMTP, e.g. Proton Mail Bridge) and ctx.mail
 backend/src/mail-client.ts  IMAP and SMTP clients; mime.ts reads messages
 backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
@@ -352,6 +353,18 @@ the largest expenses this month. Below that are **notifications** and
 **to-dos** posted by modules (and by Ledger itself, e.g. when an update is
 installed or fails). Dismiss a notification with ✕; tick a to-do to mark it
 done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)).
+
+### Documents
+
+**Documents** (sidebar) keeps the PDFs behind the books: receipts,
+statements and invoices you import (several at once, by choosing or dropping
+files), and PDFs made in Ledger, such as an invoice a module draws up. Each
+has a kind, and optionally the date on it, a customer or vendor and a note.
+They are filed as ordinary files on the data share, in folders by kind and
+year (`receipts/2026/…`), listed with folders, a search box and an
+"Imported / Made in Ledger" filter, and carried in every backup. The same
+file can't be imported twice. Modules read them and add their own through
+`ctx.documents`, and the page shows what each module did with a document.
 
 ### Reconciliation
 

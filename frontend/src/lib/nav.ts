@@ -133,6 +133,14 @@ const CORE: Omit<NavItem, 'hidden' | 'iconFill' | 'iconUrl'>[] = [
 		kind: 'core'
 	},
 	{
+		id: 'core:documents',
+		href: '/documents',
+		label: 'Documents',
+		exact: false,
+		icon: 'M6 3h8l4 4v14H6zM14 3v4h4M9 13h6M9 17h6',
+		kind: 'core'
+	},
+	{
 		id: 'core:entities',
 		href: '/entities',
 		label: 'Entities',

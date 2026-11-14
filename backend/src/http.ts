@@ -129,6 +129,7 @@ import { promises as fsp } from "node:fs";
 import pathMod from "node:path";
 import { createReadStream } from "node:fs";
 import { INLINE_TYPES, openStored } from "./module-storage.ts";
+import { addDocument, deleteDocument, documentFolders, DOCUMENT_KINDS, DOCUMENT_ORIGINS, getDocument, listDocuments, MAX_DOCUMENT_BYTES, openDocument, updateDocument, type DocumentKind, type DocumentOrigin } from "./documents.ts";
 import { MAX_MODULES, normalizeRepo, readDesired, readModuleResults, requestModuleSync, writeDesired, compatible, type DesiredModule } from "./modules.ts";
 import { fetchManifest, githubApi, latestModuleRelease, repoIdentity } from "./github.ts";
 
@@ -1426,6 +1427,101 @@ async function handleUploadFile(c: Ctx): Promise<void> {
 	writeJSON(c.res, 201, await saveUploadedCsv(c.app, part.filename, part.data));
 }
 
+// Documents: PDFs of receipts, statements and invoices, shared with modules (ctx.documents).
+
+async function handleListDocuments(c: Ctx): Promise<void> {
+	const pick = <T extends string>(name: string, among: readonly T[]): T | null => {
+		const v = c.query.get(name);
+		if (v === null || v === "") return null;
+		if (!among.includes(v as T)) throw new HttpError(422, `${name} must be one of ${among.join(", ")}`, "validation_failed");
+		return v as T;
+	};
+	const int = (name: string) => {
+		const v = c.query.get(name);
+		if (v === null || v === "") return undefined;
+		if (!/^\d{1,9}$/.test(v)) throw new HttpError(422, `${name} must be a whole number`, "validation_failed");
+		return Number(v);
+	};
+	const [list, folders] = await Promise.all([
+		listDocuments(c.app, { kind: pick<DocumentKind>("kind", DOCUMENT_KINDS), origin: pick<DocumentOrigin>("origin", DOCUMENT_ORIGINS), year: int("year"), entity_id: int("entity_id"), q: c.query.get("q"), limit: int("limit"), offset: int("offset") }),
+		documentFolders(c.app),
+	]);
+	writeJSON(c.res, 200, { ...list, folders, max_bytes: MAX_DOCUMENT_BYTES });
+}
+
+/** multipart/form-data: "file", "kind", and optionally "title", "doc_date", "entity_id", "note". */
+async function handleUploadDocument(c: Ctx): Promise<void> {
+	const boundary = formDataBoundary(c.req.headers["content-type"]);
+	if (!boundary) throw new HttpError(400, 'expected a multipart/form-data body with a "file" field', "bad_request");
+	let body: Buffer;
+	try {
+		body = await readBody(c.req, MAX_DOCUMENT_BYTES + MULTIPART_OVERHEAD);
+	} catch (err) {
+		if (err instanceof BodyTooLargeError) {
+			c.res.setHeader("Connection", "close");
+			throw new HttpError(413, `documents are at most ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB`, "payload_too_large");
+		}
+		throw err;
+	}
+	let parts;
+	try {
+		parts = parseMultipart(body, boundary);
+	} catch (err) {
+		if (err instanceof MultipartError) throw new HttpError(400, "invalid multipart body: " + err.message, "bad_request");
+		throw err;
+	}
+	const file = parts.find((p) => p.name === "file");
+	if (!file) throw new HttpError(400, 'missing "file" field', "bad_request");
+	const field = (name: string) => {
+		const p = parts.find((x) => x.name === name);
+		return p ? p.data.toString("utf8") : undefined;
+	};
+	const doc = await addDocument(
+		c.app,
+		{
+			kind: field("kind") as DocumentKind,
+			filename: file.filename ?? "document",
+			data: file.data,
+			origin: "imported",
+			title: field("title") || undefined,
+			doc_date: field("doc_date") || undefined,
+			entity_id: field("entity_id") ? Number(field("entity_id")) : undefined,
+			note: field("note"),
+		},
+		{ source: "user", userId: c.user!.id },
+	);
+	writeJSON(c.res, 201, doc);
+}
+
+async function handleGetDocument(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await getDocument(c.app, c.params.documentId));
+}
+
+async function handleUpdateDocument(c: Ctx): Promise<void> {
+	const body = await decodeBody(c, true, (v) => plainJson(v));
+	writeJSON(c.res, 200, await updateDocument(c.app, c.params.documentId, body));
+}
+
+async function handleDeleteDocument(c: Ctx): Promise<void> {
+	await deleteDocument(c.app, c.params.documentId);
+	c.res.writeHead(204).end();
+}
+
+/** The file itself, shown in the browser (PDFs and pictures only ever get here). */
+async function handleDocumentFile(c: Ctx): Promise<void> {
+	const f = await openDocument(c.app, c.params.documentId);
+	if (!f) throw new HttpError(404, "the document's file is missing from the data share", "not_found");
+	const name = f.doc.filename.replace(/\.[A-Za-z0-9]{1,5}$/, "") + pathMod.extname(f.doc.path);
+	c.res.writeHead(200, {
+		"Content-Type": f.doc.content_type,
+		"Content-Length": f.doc.size_bytes,
+		"Content-Disposition": `${c.query.get("download") ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`,
+		"Content-Security-Policy": "sandbox; frame-ancestors 'self'",
+		"Cache-Control": "private, no-cache",
+	});
+	createReadStream(f.full).pipe(c.res);
+}
+
 // A module's "Import from CSV" (ctx.imports): upload, preview (the module's dry run), import.
 
 function moduleImporter(c: Ctx) {
@@ -1968,6 +2064,12 @@ const ROUTES: Route[] = [
 	route("GET", "/reports/income-statement", true, handleIncomeStatement),
 
 	route("POST", "/exports/general-ledger", true, handleExportGeneralLedger),
+	route("GET", "/documents", true, handleListDocuments),
+	route("POST", "/documents", true, handleUploadDocument),
+	route("GET", "/documents/:documentId", true, handleGetDocument),
+	route("PATCH", "/documents/:documentId", true, handleUpdateDocument),
+	route("DELETE", "/documents/:documentId", true, handleDeleteDocument),
+	route("GET", "/documents/:documentId/file", true, handleDocumentFile),
 	route("GET", "/files", true, handleListFiles),
 	route("POST", "/files", true, handleUploadFile),
 	route("GET", "/files/:filename", true, handleDownloadFile),

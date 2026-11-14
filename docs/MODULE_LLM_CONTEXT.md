@@ -112,6 +112,7 @@ export default async function register(ctx) {
 | `dashboard.*` | Notifications and to-dos on Ledger's dashboard, below. |
 | `settings.*` | `get()`, `set(values)`, `onChange(fn)` for the manifest's settings, below. |
 | `llm.*` | The shared AI provider (Ledger ≥ 0.10.0): `status()`, `complete()`, `json()`, below. |
+| `documents.*` | The organization's PDFs: imported receipts, statements and invoices, and PDFs made in Ledger (Ledger ≥ 0.19.0): `list()`, `get()`, `read()`, `add()`, `update()`, `remove()`, `mark()`, `unmark()`, `url()`, `onAdded()`, below. |
 | `mail.*` | The shared mailbox of any kind, IMAP/SMTP (Proton Mail Bridge, …) or Gmail (Ledger ≥ 0.18.3): `status()`, `search()`, `message()`, `attachment()`, `raw()`, `send()`, below. Prefer it to `gmail.*`. |
 | `gmail.*` | The shared Gmail account (Ledger ≥ 0.10.0): `status()`, `search()`, `message()`, `attachment()`, `raw()`, `send()`, below. |
 | `search.provide(fn)` | Adds results to Ledger's search bar (Ledger ≥ 0.10.0), below. |
@@ -366,6 +367,33 @@ POST from the UI, passing `req.user`); users can edit or reject it.
 Background jobs and `onReceive` handlers may call the AI and store
 suggestions, but never act on them. No "auto-approve" setting.
 
+### ctx.documents (Ledger ≥ 0.19.0)
+
+**Receipts, statements and invoices as PDFs come from here, and PDFs a
+module makes for people to keep go here.** Don't build a separate upload box
+for them, and don't keep the only copy in `ctx.storage`. People manage them
+on Ledger's Documents page; files are on the data share and in backups.
+
+```js
+const { data, total } = await ctx.documents.list({ kind?: "receipt" | "statement" | "invoice" | "other", origin?: "imported" | "created", source?, year?, entity_id?, q?, unmarked?: true, limit?: 100, offset? });
+// doc: { id, kind, origin, source ("user" | module id), title, filename, path, content_type, size_bytes, sha256,
+//        doc_date ("YYYY-MM-DD" | null), entity_id, entity_name, note, added_by, created_at, updated_at, url, marks: [{ module, status, note }] }
+const doc = await ctx.documents.get(id);     // 404 if none
+const buf = await ctx.documents.read(id);    // Buffer; 404 if the file is missing
+await ctx.documents.mark(id, "done" | "skipped", note?);   // per module; list({ unmarked: true }) then leaves it out
+await ctx.documents.unmark(id);
+const made = await ctx.documents.add({ kind, filename, data: Buffer, origin?: "created" (default) | "imported", title?, doc_date?, entity_id?, note? }, req.user);
+await ctx.documents.update(id, { kind?, title?, doc_date?, entity_id?, note? });
+await ctx.documents.remove(id);              // only documents this module added (else 403)
+ctx.documents.url(id);                       // href / iframe src for a logged-in user
+ctx.documents.onAdded((doc) => { … });       // a person or another module added one (not this module's own)
+```
+
+PDF, PNG and JPEG only (checked by content), ≤ 50 MB. The same file twice
+answers 409. Runs in the request's organization; in background jobs use
+`ctx.orgs.forEach`. In `onAdded` only queue work; a person approves what
+comes of it.
+
 ### ctx.mail (Ledger ≥ 0.18.3)
 
 **Use this for mail, not `ctx.gmail`, and never your own IMAP, SMTP or
@@ -591,7 +619,7 @@ database.
 
 ## 8. Checklist for your answer
 
-- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.18.3"` for `ctx.mail`; `">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`; `">=0.13.2"` for `ctx.storage` or `ctx.imports`), with a drawn `nav.icon` that fits the module
+- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.19.0"` for `ctx.documents`; `">=0.18.3"` for `ctx.mail`; `">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`; `">=0.13.2"` for `ctx.storage` or `ctx.imports`), with a drawn `nav.icon` that fits the module
 - [ ] background jobs that touch the books run through `ctx.orgs.forEach` so every organization gets them
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → LLM API / Gmail

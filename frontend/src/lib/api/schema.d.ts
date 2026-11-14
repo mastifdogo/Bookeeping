@@ -544,6 +544,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** PDFs of receipts, statements and invoices (imported or made in Ledger), newest first, and the folders they are filed in */
+        get: operations["listDocuments"];
+        put?: never;
+        /**
+         * Import a PDF (or a PNG or JPEG picture)
+         * @description The same file can't be imported twice (409).
+         */
+        post: operations["uploadDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        /** One document's details */
+        get: operations["getDocument"];
+        put?: never;
+        post?: never;
+        /** Delete a document and its file */
+        delete: operations["deleteDocument"];
+        options?: never;
+        head?: never;
+        /** Change a document's details; its file moves when the kind or year changes */
+        patch: operations["updateDocument"];
+        trace?: never;
+    };
+    "/documents/{documentId}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        /** The file itself (add ?download=1 to save it) */
+        get: operations["getDocumentFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/files": {
         parameters: {
             query?: never;
@@ -2561,6 +2622,43 @@ export interface components {
             };
         };
         /** @enum {string} */
+        DocumentKind: "receipt" | "statement" | "invoice" | "other";
+        Document: {
+            id: number;
+            kind: components["schemas"]["DocumentKind"];
+            /**
+             * @description Brought in from outside
+             * @enum {string}
+             */
+            origin: "imported" | "created";
+            /** @description "user", or the id of the module that added it */
+            source: string;
+            title: string;
+            filename: string;
+            /** @description Its place in the documents folder, e.g. receipts/2026/12-hydro-march.pdf */
+            path: string;
+            content_type: string;
+            size_bytes: number;
+            sha256: string;
+            /** Format: date */
+            doc_date: string | null;
+            entity_id: number | null;
+            entity_name: string | null;
+            note: string;
+            added_by: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            url: string;
+            marks: {
+                module: string;
+                /** @enum {string} */
+                status: "done" | "skipped";
+                note: string;
+            }[];
+        };
+        /** @enum {string} */
         MailSecurity: "starttls" | "tls" | "none";
         MailCheck: {
             ok: boolean;
@@ -3631,6 +3729,184 @@ export interface operations {
                 };
             };
             422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listDocuments: {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["DocumentKind"];
+                origin?: "imported" | "created";
+                year?: number;
+                entity_id?: number;
+                /** @description Words in the title, file name, note or entity name */
+                q?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Document"][];
+                        total: number;
+                        max_bytes: number;
+                        folders: {
+                            kind: components["schemas"]["DocumentKind"];
+                            year: number;
+                            count: number;
+                            size_bytes: number;
+                        }[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    uploadDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    kind: components["schemas"]["DocumentKind"];
+                    title?: string;
+                    /** Format: date */
+                    doc_date?: string;
+                    entity_id?: number;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    kind?: components["schemas"]["DocumentKind"];
+                    title?: string;
+                    /** Format: date */
+                    doc_date?: string | null;
+                    entity_id?: number | null;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getDocumentFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
             default: components["responses"]["Error"];
         };
     };

@@ -94,6 +94,13 @@ Decide, and state briefly to the user:
   yet. Pictures (receipts, photos) go in `images: [{ media_type, data }]`
   (Ledger 0.11.2): they reach the connection set up for images, which may be
   a different model than the one for text; check `status().images.configured`.
+- **Documents**: PDFs of receipts, statements and invoices live in
+  Ledger's Documents store (`ctx.documents`, Ledger 0.19.0). A module that
+  reads them lists the ones it hasn't handled
+  (`list({ kind, unmarked: true })`), reads the bytes, and `mark`s each when
+  done; a module that makes a PDF people should keep (an invoice, a report)
+  `add`s it there with `origin: "created"`. No upload box of the module's
+  own for these, and no private-only copy in `ctx.storage`.
 - **No provider in particular**: the admin can put any LLM provider behind
   `ctx.llm` (Ledger 0.18.2: Anthropic, OpenAI, Gemini, OpenRouter, Mistral,
   Groq, Ollama, any OpenAI-compatible server). Never branch on

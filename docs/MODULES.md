@@ -276,6 +276,51 @@ no connection for that kind of request is set up, 403 when the module isn't allo
 provider fails, 422 when the model declines. The messages say where to fix
 it. `maxTokens` is capped by the admin's limit.
 
+## Documents (`ctx.documents`)
+
+The organization's PDFs in one place (Ledger 0.19.0): receipts, statements
+and invoices that people import on the **Documents** page or that a module
+brings in, and PDFs made in Ledger (an invoice a module draws up, a report).
+Each has a kind (`receipt`, `statement`, `invoice`, `other`), an origin
+(`imported` or `created`), an optional date, customer or vendor
+(`entity_id`) and note. The files are ordinary files on the data share,
+filed as `<kind>s/<year>/<id>-<name>.pdf`, and every backup carries them.
+
+**A module that reads receipts, statements or invoices takes them from here,
+and a module that makes a PDF people should keep puts it here**, instead of
+keeping its own upload box or a private copy in `ctx.storage`.
+
+```js
+// Documents this module hasn't dealt with yet, newest first
+const { data, total } = await ctx.documents.list({ kind: "receipt", unmarked: true });
+// other filters: origin, source, year, entity_id, q (words), limit (≤ 500), offset
+// each: { id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256,
+//         doc_date, entity_id, entity_name, note, added_by, created_at, updated_at, url, marks }
+
+const doc = await ctx.documents.get(id);        // details (404 if none)
+const pdf = await ctx.documents.read(id);       // Buffer
+await ctx.documents.mark(id, "done", "posted as entry 412");  // or "skipped"; unmark(id) takes it back
+
+// A PDF this module made (origin "created" by default; pass "imported" for one it fetched, e.g. from mail)
+const made = await ctx.documents.add(
+	{ kind: "invoice", filename: "INV-0031.pdf", data: pdfBuffer, title: "Invoice 31", doc_date: "2026-04-02", entity_id: customer.id },
+	req.user,
+);
+await ctx.documents.update(made.id, { note: "sent 3 April" });  // kind, title, doc_date, entity_id, note
+await ctx.documents.remove(made.id);            // only documents this module added
+
+ctx.documents.url(id);                          // for <a href> and <iframe> in the module's page
+ctx.documents.onAdded((doc) => { /* a person or another module added one */ });
+```
+
+Only PDFs and PNG or JPEG pictures are accepted (told from the file's
+content), up to 50 MB, and the same file can't be added twice: `add` answers
+409 and names the document that already holds it. `mark` is per module, so
+several modules can each work through the same documents. In `onAdded`,
+only note or queue the document: what the module makes of it is a suggestion
+a person approves, like everything else. A document's file can be missing
+after a restore from an uploaded dump (`read` answers 404): handle it.
+
 ## Mail (`ctx.mail`)
 
 The server's shared mailbox, whatever kind it is (Ledger 0.18.3): the

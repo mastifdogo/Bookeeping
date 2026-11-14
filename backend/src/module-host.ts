@@ -23,6 +23,7 @@ import type { SearchProvider } from "./search.ts";
 import { connectionReady, llmComplete, pickConnection, PROVIDER_INFO, readLlmConfig, type LlmRequest } from "./llm.ts";
 import { gmailFor } from "./gmail.ts";
 import { mailFor } from "./mail.ts";
+import { documentsFor, type DocumentInfo } from "./documents.ts";
 import { filesFor, type FileSummary } from "./module-files.ts";
 import { storageFor } from "./module-storage.ts";
 import { callImport, checkImportSpec, type ImportRow, type ImportSpec } from "./module-import.ts";
@@ -74,6 +75,7 @@ export interface LoadedModule {
 	error: string | null;
 	/** ctx.files.onReceive listeners. */
 	fileListeners: ((file: FileSummary) => unknown)[];
+	documentListeners: ((doc: DocumentInfo) => unknown)[];
 	/** ctx.search.provide functions. */
 	searchProviders: SearchProvider[];
 	/** ctx.settings.onChange listeners. */
@@ -247,6 +249,12 @@ function makeContext(app: App, m: LoadedModule) {
 		 * remove, url.
 		 */
 		storage: storageFor(app, id),
+		/**
+		 * The organization's documents: PDFs of receipts, statements and
+		 * invoices people imported, and PDFs made in Ledger. list, get, read,
+		 * add, update, remove, mark, unmark, url, onAdded.
+		 */
+		documents: documentsFor(app, id, actorOf, m.documentListeners),
 		files: {
 			...filesFor(app, id, actorOf),
 			/** Called with the file's summary right after another module sends this one a file. */
@@ -393,6 +401,7 @@ export class ModuleHost {
 			settingsListeners: [],
 			searchProviders: [],
 			fileListeners: [],
+			documentListeners: [],
 			importer: null,
 		};
 		this.modules.set(m.manifest.id, m);
