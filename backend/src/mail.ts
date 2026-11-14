@@ -4,7 +4,7 @@
 // on the machine it runs on), and good for any other mailbox with a password.
 //
 // ctx.mail is the same for every kind of mailbox: it reads and sends through
-// this account when one is set up, and through Gmail (Settings → Gmail)
+// this account when one is set up, and through Gmail (Settings → Mail → Gmail)
 // otherwise. Each module needs an admin's permission to read mail and,
 // separately, to send it.
 
@@ -253,7 +253,7 @@ function gmailQuery(f: ImapSearch): string {
 		.join(" ");
 }
 
-/** What a module can do with mail: everything is checked against Settings → Mail (or Settings → Gmail). */
+/** What a module can do with mail: everything is checked against Settings → Mail. */
 export function mailFor(app: App, moduleId: string) {
 	const gmail = gmailFor(app, moduleId);
 	/** The mailbox in use: this account when it is set up, else Gmail. */

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
-	import { api, unwrap, type MailInfo } from '#lib/api/client.ts';
+	import GmailSettings from '#lib/components/GmailSettings.svelte';
+	import { api, unwrap, type GmailInfo, type MailInfo } from '#lib/api/client.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -49,6 +50,17 @@
 		allowRead = [...c.allow_read];
 		allowSend = [...c.allow_send];
 	}
+
+	let gmail = $state<GmailInfo>(undefined!);
+	$effect.pre(() => {
+		gmail = data.gmail;
+	});
+	// Two kinds of mailbox share this tab; start on the one in use.
+	let kind = $state<'imap' | 'gmail'>('imap');
+	$effect.pre(() => {
+		kind = data.kind === 'gmail' || data.kind === 'imap' ? data.kind : !data.info.config.connected && data.gmail.config.connected ? 'gmail' : 'imap';
+	});
+	const inUse = $derived(info.config.connected || info.config.can_send ? `${info.config.account || info.config.username} (IMAP and SMTP)` : gmail.config.connected ? `${gmail.config.account} (Gmail)` : '');
 
 	let busy = $state(false);
 	let error: unknown = $state(null);
@@ -103,16 +115,32 @@
 	const toggle = (list: string[], id: string, on: boolean) => (on ? [...list, id].sort() : list.filter((x) => x !== id));
 </script>
 
+<p class="muted" style="margin-top:0">
+	One mailbox for Ledger's modules: reading bills and receipts, sending invoices. Connect it over IMAP and SMTP (this is
+	how Proton Mail is reached, through Proton Mail Bridge) or connect a Gmail account. While an IMAP mailbox is set up,
+	modules use it instead of Gmail.
+	{#if inUse}Modules now use <strong>{inUse}</strong>.{:else}No mailbox is set up yet.{/if}
+</p>
+<div class="switch" role="tablist" aria-label="Kind of mailbox">
+	<button type="button" role="tab" aria-selected={kind === 'imap'} class:on={kind === 'imap'} onclick={() => (kind = 'imap')}>
+		Proton Mail Bridge or IMAP{#if info.config.connected}<span class="badge ok">set up</span>{/if}
+	</button>
+	<button type="button" role="tab" aria-selected={kind === 'gmail'} class:on={kind === 'gmail'} onclick={() => (kind = 'gmail')}>
+		Gmail{#if gmail.config.connected}<span class="badge ok">connected</span>{/if}
+	</button>
+</div>
+
+{#if kind === 'gmail'}
+	<GmailSettings initial={data.gmail} onchange={(i) => (gmail = i)} />
+{:else}
 {#if !info.available}
 	<div class="notice error">Mail settings aren't set up on this server (no <code>/var/lib/ledger/integrations</code>). Update Ledger, or run <code>deploy/install.sh</code>.</div>
 {/if}
 <ErrorNotice {error} />
 {#if notice}<div class="notice ok">{notice}</div>{/if}
 
-<p class="muted" style="margin-top:0">
-	Connect a mailbox for Ledger's modules over IMAP and SMTP: reading bills and receipts, sending invoices. This is how
-	Proton Mail is reached, through Proton Mail Bridge running on this server; any other mailbox with a password works too.
-	While a mailbox is set up here, modules use it instead of the Gmail account. The password stays on the server.
+<p class="muted small" style="margin-top:0">
+	Proton Mail Bridge must run on this server; any other mailbox with a password works too. The password stays on the server.
 </p>
 
 <form class="card" onsubmit={save}>
@@ -212,8 +240,31 @@
 		{/if}
 	</section>
 {/if}
+{/if}
 
 <style>
+	.switch {
+		display: inline-flex;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		overflow: hidden;
+		margin-bottom: 1rem;
+	}
+	.switch button {
+		border: none;
+		border-radius: 0;
+		background: var(--surface);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+	.switch button + button {
+		border-left: 1px solid var(--border);
+	}
+	.switch button.on {
+		background: var(--accent);
+		color: var(--accent-text);
+	}
 	h2 {
 		margin: 0;
 	}

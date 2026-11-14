@@ -34,7 +34,8 @@
 	const ADMIN_PAGES: Hit[] = [
 		{ title: 'Users and roles', subtitle: 'Settings', href: '/settings/users' },
 		{ title: 'LLM API', subtitle: 'Settings: AI connections for modules', href: '/settings/llm' },
-		{ title: 'Gmail', subtitle: 'Settings', href: '/settings/gmail' },
+		{ title: 'Mail', subtitle: 'Settings: Proton Mail Bridge, IMAP or Gmail', href: '/settings/mail' },
+		{ title: 'Gmail', subtitle: 'Settings: Mail', href: '/settings/mail?kind=gmail' },
 		{ title: 'Backups', subtitle: 'Settings', href: '/settings/backups' },
 		{ title: 'Modules', subtitle: 'Settings', href: '/settings/modules' },
 		{ title: 'Updates', subtitle: 'Settings', href: '/settings/updates' }

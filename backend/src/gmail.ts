@@ -1,4 +1,4 @@
-// Gmail, connected once under Settings → Gmail with Google OAuth and shared
+// Gmail, connected once under Settings → Mail → Gmail with Google OAuth and shared
 // with modules (ctx.gmail). Each module needs an admin's permission to read
 // mail and, separately, to send it.
 //
@@ -64,7 +64,7 @@ export function publicGmailConfig(c: GmailConfig) {
 	};
 }
 
-/** Settings → Gmail: the OAuth client and which modules may use it. */
+/** Settings → Mail → Gmail: the OAuth client and which modules may use it. */
 export function applyGmailChange(c: GmailConfig, v: unknown): GmailConfig {
 	const err = new ValidationError();
 	const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
@@ -194,14 +194,14 @@ export async function revoke(c: GmailConfig, ep: GoogleEndpoints): Promise<void>
 const tokens = new Map<string, { token: string; expires: number }>();
 
 async function accessToken(c: GmailConfig, ep: GoogleEndpoints): Promise<string> {
-	if (!c.refresh_token) throw new GmailError("Gmail isn't connected; an admin can connect it under Settings → Gmail", 409);
+	if (!c.refresh_token) throw new GmailError("Gmail isn't connected; an admin can connect it under Settings → Mail → Gmail", 409);
 	const hit = tokens.get(c.refresh_token);
 	if (hit && hit.expires > Date.now() + 60_000) return hit.token;
 	const r = await postForm(`${ep.oauth}/token`, { client_id: c.client_id, client_secret: c.client_secret, refresh_token: c.refresh_token, grant_type: "refresh_token" });
 	if (r.status !== 200 || typeof r.body.access_token !== "string") {
 		throw new GmailError(
 			r.body?.error === "invalid_grant"
-				? "Google access was revoked or expired; an admin can connect Gmail again under Settings → Gmail (publish the OAuth app to stop weekly expiry)"
+				? "Google access was revoked or expired; an admin can connect Gmail again under Settings → Mail → Gmail (publish the OAuth app to stop weekly expiry)"
 				: `couldn't sign in to Google: ${googleWhy(r.body, r.status)}`,
 			409,
 		);
@@ -277,15 +277,15 @@ async function mapLimit<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): 
 	return out;
 }
 
-/** What a module can do: everything is checked against Settings → Gmail. */
+/** What a module can do: everything is checked against Settings → Mail → Gmail. */
 export function gmailFor(app: App, moduleId: string) {
 	const ctx = async (need: "read" | "send") => {
 		const c = await readGmailConfig(app.integrations.dir);
 		const scope = need === "read" ? SCOPE_READ : SCOPE_SEND;
-		if (!c.refresh_token) throw new GmailError("Gmail isn't connected; an admin can connect it under Settings → Gmail", 409);
-		if (!c.scopes.includes(scope)) throw new GmailError(`Gmail was connected without permission to ${need} mail; an admin can reconnect it under Settings → Gmail`, 409);
+		if (!c.refresh_token) throw new GmailError("Gmail isn't connected; an admin can connect it under Settings → Mail → Gmail", 409);
+		if (!c.scopes.includes(scope)) throw new GmailError(`Gmail was connected without permission to ${need} mail; an admin can reconnect it under Settings → Mail → Gmail`, 409);
 		if (!(need === "read" ? c.allow_read : c.allow_send).includes(moduleId)) {
-			throw new GmailError(`this module isn't allowed to ${need} mail; an admin can allow it under Settings → Gmail`, 403);
+			throw new GmailError(`this module isn't allowed to ${need} mail; an admin can allow it under Settings → Mail → Gmail`, 403);
 		}
 		return { token: await accessToken(c, app.integrations.gmail), ep: app.integrations.gmail };
 	};

@@ -1,4 +1,5 @@
-import { api, unwrapLoad } from '#lib/api/client.ts';
+import { redirect } from '@sveltejs/kit';
 import type { PageLoad } from './$types';
 
-export const load: PageLoad = async ({ fetch }) => ({ info: unwrapLoad(await api(fetch).GET('/integrations/gmail')) });
+// Gmail lives on the Mail tab now; old links land there.
+export const load: PageLoad = () => redirect(307, '/settings/mail?kind=gmail');

@@ -89,7 +89,7 @@ Decide, and state briefly to the user:
   use `ctx.gmail` only for Gmail-only features; never
   your own OAuth/IMAP), and records worth finding through
   `ctx.search.provide`. These need Ledger 0.10.0, and the admin must allow
-  the module under Settings → LLM API / Mail (or Gmail): say so in the README and show
+  the module under Settings → LLM API / Mail: say so in the README and show
   `ctx.llm.status()` / `ctx.mail.status()` in the UI when it isn't allowed
   yet. Pictures (receipts, photos) go in `images: [{ media_type, data }]`
   (Ledger 0.11.2): they reach the connection set up for images, which may be

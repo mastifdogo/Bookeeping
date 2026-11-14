@@ -391,7 +391,7 @@ mail read. Errors: 409 not set up, 403 not allowed, 404, 422, 502.
 ### ctx.gmail (Ledger ≥ 0.10.0)
 
 **Never implement OAuth, IMAP or an Apps Script bridge for Gmail.** The admin
-connects one account under Settings → Gmail and allows each module to read
+connects one account under Settings → Mail → Gmail and allows each module to read
 and/or send.
 
 ```js

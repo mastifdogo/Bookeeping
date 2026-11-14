@@ -209,7 +209,7 @@ function makeContext(app: App, m: LoadedModule) {
 				return llmComplete(app, id, r);
 			},
 		},
-		/** Gmail, connected under Settings → Gmail (an admin must allow reading and sending per module). */
+		/** Gmail, connected under Settings → Mail → Gmail (an admin must allow reading and sending per module). */
 		gmail: gmailFor(app, id),
 		/**
 		 * The shared mailbox, whatever kind it is: the IMAP/SMTP account under

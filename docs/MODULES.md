@@ -142,7 +142,7 @@ rest of Ledger runs normally.
 | `dashboard.*` | Notifications and to-dos on Ledger's dashboard (Ledger 0.8.0 and later); see below. |
 | `settings.*` | Values of the settings the manifest declares (Ledger 0.9.0 and later); see below. |
 | `llm.*` | The LLM connections set up under Settings → LLM API (Ledger 0.10.0 and later); see below. |
-| `gmail.*` | The Gmail account connected under Settings → Gmail (Ledger 0.10.0 and later); see below. |
+| `gmail.*` | The Gmail account connected under Settings → Mail → Gmail (Ledger 0.10.0 and later); see below. |
 | `search.provide(fn)` | Adds your results to Ledger's search bar (Ledger 0.10.0 and later); see below. |
 | `HttpError` | `throw new ctx.HttpError(404, "no such invoice")` answers with that status and message. |
 | `response(status, body)` | Return this from a handler to choose the status, e.g. `201`. |
@@ -281,7 +281,7 @@ it. `maxTokens` is capped by the admin's limit.
 The server's shared mailbox, whatever kind it is (Ledger 0.18.3): the
 IMAP/SMTP account an admin set up under **Settings → Mail** (Proton Mail
 through Proton Mail Bridge, or any other mailbox) when there is one, else the
-Gmail account under **Settings → Gmail**. **New modules use `ctx.mail`**, so
+Gmail account under **Settings → Mail → Gmail**. **New modules use `ctx.mail`**, so
 they work with either; `ctx.gmail` below stays for Gmail's own search syntax,
 labels and threads. An admin allows each module to read and, separately, to
 send.
@@ -308,7 +308,7 @@ can renumber a folder). Reading never marks mail as read. Errors are
 
 ## Gmail (`ctx.gmail`)
 
-An admin connects one Gmail account under **Settings → Gmail** (Google
+An admin connects one Gmail account under **Settings → Mail → Gmail** (Google
 OAuth, read and optionally send) and allows modules separately to **read**
 and to **send**.
 

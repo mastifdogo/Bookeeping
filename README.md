@@ -174,7 +174,7 @@ backend/src/cli.ts        `ledger user add|role|passwd|disable|enable|list`
 backend/src/module-files.ts  Files modules hand each other (ctx.files)
 backend/src/search.ts     The search bar (accounts, entries, module providers)
 backend/src/llm.ts        Settings → LLM API and ctx.llm (a table of providers, three wire protocols)
-backend/src/gmail.ts      Settings → Gmail (OAuth with PKCE) and ctx.gmail
+backend/src/gmail.ts      Settings → Mail → Gmail (OAuth with PKCE) and ctx.gmail
 backend/src/mail.ts       Settings → Mail (IMAP/SMTP, e.g. Proton Mail Bridge) and ctx.mail
 backend/src/mail-client.ts  IMAP and SMTP clients; mime.ts reads messages
 backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
@@ -339,7 +339,7 @@ other OpenAI-compatible server; "Find models" lists what the provider
 offers), e.g. one for text and a vision model for
 images and documents, **Settings → Mail** connects a mailbox over IMAP and SMTP (Proton Mail
 through Proton Mail Bridge, or any other; see docs/DEPLOYMENT.md), and
-**Settings → Gmail** connects one Gmail account
+**Settings → Mail → Gmail** connects one Gmail account
 (Google OAuth: read, and optionally send). Modules use them through
 `ctx.llm` and `ctx.gmail` without ever seeing the keys, and only if an admin
 allows each module there. Usage is logged per module and connection.
