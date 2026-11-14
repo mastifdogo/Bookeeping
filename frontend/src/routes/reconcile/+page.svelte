@@ -3,6 +3,7 @@
 	import Amount from '#lib/components/Amount.svelte';
 	import AccountSelect from '#lib/components/AccountSelect.svelte';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
+	import StatementPicker from '#lib/components/StatementPicker.svelte';
 	import { api, today, unwrap, type Account, type Reconciliation } from '#lib/api/client.ts';
 	import { naturalBalance, parseSignedAmount } from '#lib/money.ts';
 	import type { PageProps } from './$types';
@@ -28,6 +29,8 @@
 	let accountCode = $state('');
 	let statementDate = $state(today());
 	let balance = $state('');
+	let statementId = $state<number | null>(null);
+	let reading = $state(false);
 	let busy = $state(false);
 	let error: unknown = $state(null);
 	let form: HTMLFormElement | undefined = $state();
@@ -42,9 +45,31 @@
 		form?.querySelector<HTMLInputElement>('input[name=balance]')?.focus();
 	}
 
+	// The AI reads the statement's closing date and balance, starts the reconciliation and ticks what matches.
+	async function readAndStart() {
+		error = null;
+		if (!accountCode || statementId === null) {
+			error = new Error('Choose the account and the statement first.');
+			return;
+		}
+		busy = reading = true;
+		try {
+			const d = unwrap(await api().POST('/reconciliations/from-statement', { body: { account_code: accountCode, document_id: statementId } }));
+			await goto(`/reconcile/${d.reconciliation.id}`);
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = reading = false;
+		}
+	}
+
 	async function start(e: SubmitEvent) {
 		e.preventDefault();
 		error = null;
+		if (!statementDate || balance.trim() === '') {
+			error = new Error('Enter the statement date and ending balance, or choose a statement and have the AI read it.');
+			return;
+		}
 		const cents = parseSignedAmount(balance);
 		if (cents === null) {
 			error = new Error('The statement balance must be an amount such as 1234.56 (or -12.50 if overdrawn).');
@@ -53,7 +78,7 @@
 		busy = true;
 		try {
 			const d = unwrap(
-				await api().POST('/reconciliations', { body: { account_code: accountCode, statement_date: statementDate, statement_balance_cents: cents } })
+				await api().POST('/reconciliations', { body: { account_code: accountCode, statement_date: statementDate, statement_balance_cents: cents, document_id: statementId } })
 			);
 			await goto(`/reconcile/${d.reconciliation.id}`);
 		} catch (err) {
@@ -82,8 +107,9 @@
 
 <h1>Reconcile</h1>
 <p class="muted" style="margin-top:0">
-	Match an account against a bank or card statement: enter the statement's closing date and balance, then tick each
-	transaction that appears on it. When the difference is 0.00, finish.
+	Match an account against a bank or card statement. Choose the statement's PDF and the AI reads its closing date,
+	balance and lines, then ticks the transactions that match, with the statement shown beside them for you to check. Or
+	enter the date and balance yourself and tick each transaction. When the difference is 0.00, finish.
 </p>
 
 <form class="card" bind:this={form} onsubmit={start}>
@@ -94,15 +120,26 @@
 			Account
 			<AccountSelect bind:value={accountCode} accounts={data.accounts} label="Account" placeholder="Choose an account" required defaults={{ type: 'asset' }} />
 		</label>
-		<label>Statement date <input type="date" bind:value={statementDate} required /></label>
+		<div class="field" style="flex:1; min-width:16rem">
+			<span>Statement</span>
+			<StatementPicker bind:value={statementId} statements={data.statements} disabled={busy} onerror={(e) => (error = e)} />
+		</div>
+	</div>
+	<div class="toolbar" style="margin:0.75rem 0 0; align-items:flex-end">
+		<button type="button" class="primary" disabled={busy || !accountCode || statementId === null} onclick={readAndStart}>
+			{reading ? 'Reading the statement…' : 'Read statement and pre-reconcile'}
+		</button>
+		<span class="muted small" style="align-self:center">or enter them yourself:</span>
+		<label>Statement date <input type="date" bind:value={statementDate} /></label>
 		<label>
 			Statement ending balance
-			<input name="balance" bind:value={balance} inputmode="decimal" placeholder="0.00" required size="12" />
+			<input name="balance" bind:value={balance} inputmode="decimal" placeholder="0.00" size="12" />
 		</label>
-		<button class="primary" disabled={busy || !accountCode}>Start</button>
+		<button disabled={busy || !accountCode}>Start</button>
 	</div>
 	<p class="muted small" style="margin-bottom:0">
-		For a credit card or loan, enter the amount owed as a positive number.
+		For a credit card or loan, enter the amount owed as a positive number. Reading a statement uses the LLM connection for
+		images and documents (Settings → LLM API); what it ticks is a first pass that you check before finishing.
 	</p>
 </form>
 
@@ -196,5 +233,12 @@
 	}
 	select {
 		width: auto;
+	}
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		font-size: 0.85rem;
+		color: var(--muted);
 	}
 </style>

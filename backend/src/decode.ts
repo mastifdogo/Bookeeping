@@ -196,15 +196,35 @@ function int64List(o: Record<string, unknown>, key: string, path: string): bigin
 	return v.map((x, i) => int64({ x }, "x", `${path}${key}[${i}]`)!).filter((x) => x !== undefined);
 }
 
-export function decodeReconciliationCreate(v: unknown): { account_code: string; statement_date: string; statement_balance_cents: bigint | undefined } {
-	const o = object(v, "ReconciliationCreate", ["account_code", "statement_date", "statement_balance_cents"]);
+export function decodeReconciliationCreate(v: unknown): { account_code: string; statement_date: string; statement_balance_cents: bigint | undefined; document_id?: bigint | null } {
+	const o = object(v, "ReconciliationCreate", ["account_code", "statement_date", "statement_balance_cents", "document_id"]);
 	const p = "ReconciliationCreate.";
-	return { account_code: str(o, "account_code", p) ?? "", statement_date: date(o, "statement_date") ?? "", statement_balance_cents: int64(o, "statement_balance_cents", p) };
+	return {
+		account_code: str(o, "account_code", p) ?? "",
+		statement_date: date(o, "statement_date") ?? "",
+		statement_balance_cents: int64(o, "statement_balance_cents", p),
+		document_id: o.document_id === null ? null : int64(o, "document_id", p),
+	};
 }
 
-export function decodeReconciliationUpdate(v: unknown): { statement_date?: string; statement_balance_cents?: bigint } {
-	const o = object(v, "ReconciliationUpdate", ["statement_date", "statement_balance_cents"]);
-	const out: { statement_date?: string; statement_balance_cents?: bigint } = {};
+/** { account_code, document_id }: start a reconciliation from a statement the AI reads. */
+export function decodeReconciliationFromStatement(v: unknown): { account_code: string; document_id: bigint } {
+	const o = object(v, "ReconciliationFromStatement", ["account_code", "document_id"]);
+	const p = "ReconciliationFromStatement.";
+	const id = int64(o, "document_id", p);
+	const code = str(o, "account_code", p) ?? "";
+	if (id === undefined || code === "") throw new DecodeError("ReconciliationFromStatement needs account_code and document_id");
+	return { account_code: code, document_id: id };
+}
+
+export function decodeReconciliationUpdate(v: unknown): { statement_date?: string; statement_balance_cents?: bigint; document_id?: bigint | null } {
+	const o = object(v, "ReconciliationUpdate", ["statement_date", "statement_balance_cents", "document_id"]);
+	const out: { statement_date?: string; statement_balance_cents?: bigint; document_id?: bigint | null } = {};
+	if (o.document_id === null) out.document_id = null;
+	else {
+		const doc = int64(o, "document_id", "ReconciliationUpdate.");
+		if (doc !== undefined) out.document_id = doc;
+	}
 	const d = date(o, "statement_date");
 	const b = int64(o, "statement_balance_cents", "ReconciliationUpdate.");
 	if (d !== undefined) out.statement_date = d;

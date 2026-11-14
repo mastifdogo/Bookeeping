@@ -23,6 +23,35 @@ export interface Reconciliation {
 	finished_by: string | null;
 	finished_at: Date | null;
 	cleared_count: number;
+	/** The statement it is checked against (a document), if one is attached. */
+	document_id: number | null;
+	document_title: string | null;
+	document_url: string | null;
+	document_type: string | null;
+}
+
+/** One line of a statement as the AI read it; amounts in the account's natural sign. */
+export interface StatementLine {
+	date: string;
+	description: string;
+	amount_cents: number;
+}
+
+/** What the AI read from the statement and how it lines up with the books. */
+export interface StatementReading {
+	read_at: string;
+	model: string;
+	period_start: string | null;
+	end_date: string | null;
+	opening_balance_cents: number | null;
+	closing_balance_cents: number | null;
+	/** Whether opening balance plus the lines gives the closing balance (null: a balance wasn't found). */
+	adds_up: boolean | null;
+	lines: StatementLine[];
+	/** Journal lines ticked because a statement line matched: [transaction id, index into lines]. */
+	matched: [number, number][];
+	/** Indexes of statement lines with no journal line to match. */
+	unmatched: number[];
 }
 
 export interface ReconciliationLine {
@@ -48,23 +77,34 @@ export interface ReconciliationDetail {
 	/** Statement balance minus cleared balance; 0 means it can be finished. */
 	difference_cents: bigint;
 	lines: ReconciliationLine[];
+	reading: StatementReading | null;
 }
 
 const SELECT = `
 	SELECT r.id, a.code AS account_code, a.name AS account_name, a.type::text AS account_type, a.currency::text AS currency,
 	       r.statement_date, r.statement_balance_cents, r.status, cu.username AS created_by, r.created_at,
-	       fu.username AS finished_by, r.finished_at, r.account_id,
+	       fu.username AS finished_by, r.finished_at, r.account_id, r.document_id, d.title AS document_title, d.content_type AS document_type,
 	       (SELECT count(*) FROM reconciliation_lines l WHERE l.reconciliation_id = r.id) AS cleared_count
 	  FROM reconciliations r
 	  JOIN accounts a ON a.id = r.account_id
 	  LEFT JOIN users cu ON cu.id = r.created_by
-	  LEFT JOIN users fu ON fu.id = r.finished_by`;
+	  LEFT JOIN users fu ON fu.id = r.finished_by
+	  LEFT JOIN documents d ON d.id = r.document_id`;
 
-type Row = Omit<Reconciliation, "id" | "cleared_count"> & { id: bigint; cleared_count: bigint; account_id: bigint };
+type Row = Omit<Reconciliation, "id" | "cleared_count" | "document_id" | "document_url"> & { id: bigint; cleared_count: bigint; account_id: bigint; document_id: bigint | null };
 
 function toRec(r: Row): Reconciliation {
 	const { account_id: _, ...rest } = r;
-	return { ...rest, id: Number(r.id), cleared_count: Number(r.cleared_count) };
+	return { ...rest, id: Number(r.id), cleared_count: Number(r.cleared_count), document_id: r.document_id === null ? null : Number(r.document_id), document_url: r.document_id === null ? null : `/api/v1/documents/${r.document_id}/file` };
+}
+
+async function checkDocument(db: Queryable, id: bigint | null | undefined): Promise<void> {
+	if (id === null || id === undefined) return;
+	if (!(await queryRow(db, `SELECT 1 FROM documents WHERE id = $1`, [id]))) {
+		const v = new ValidationError();
+		v.add("document_id", "no such document");
+		v.throwIfAny();
+	}
 }
 
 /** Debit-positive amounts times this give the natural sign. */
@@ -149,12 +189,13 @@ export async function getReconciliation(app: App, id: bigint, db: Queryable = ap
 		cleared_balance_cents: cleared,
 		difference_cents: r.statement_balance_cents - cleared,
 		lines: out,
+		reading: (await queryRow<{ reading: StatementReading | null }>(db, `SELECT reading FROM reconciliations WHERE id = $1`, [id]))?.reading ?? null,
 	};
 }
 
 export async function createReconciliation(
 	app: App,
-	input: { account_code: string; statement_date: string; statement_balance_cents: bigint | undefined },
+	input: { account_code: string; statement_date: string; statement_balance_cents: bigint | undefined; document_id?: bigint | null },
 	userId: number | null,
 ): Promise<ReconciliationDetail> {
 	const v = new ValidationError();
@@ -175,10 +216,11 @@ export async function createReconciliation(
 			v.add("statement_date", `must not be before the last reconciled statement (${last.statement_date})`);
 			v.throwIfAny();
 		}
+		await checkDocument(tx, input.document_id);
 		const row = await queryRow<{ id: bigint }>(
 			tx,
-			`INSERT INTO reconciliations (account_id, statement_date, statement_balance_cents, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
-			[acc!.id, input.statement_date, input.statement_balance_cents, userId],
+			`INSERT INTO reconciliations (account_id, statement_date, statement_balance_cents, created_by, document_id) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+			[acc!.id, input.statement_date, input.statement_balance_cents, userId, input.document_id ?? null],
 		);
 		return getReconciliation(app, row!.id, tx);
 	});
@@ -190,7 +232,7 @@ async function openForUpdate(tx: Queryable, id: bigint): Promise<Row> {
 	return r;
 }
 
-export async function updateReconciliation(app: App, id: bigint, input: { statement_date?: string; statement_balance_cents?: bigint }): Promise<ReconciliationDetail> {
+export async function updateReconciliation(app: App, id: bigint, input: { statement_date?: string; statement_balance_cents?: bigint; document_id?: bigint | null }): Promise<ReconciliationDetail> {
 	return withTx(app.db, {}, async (tx) => {
 		const r = await openForUpdate(tx, id);
 		if (input.statement_date !== undefined) {
@@ -211,6 +253,11 @@ export async function updateReconciliation(app: App, id: bigint, input: { statem
 			`UPDATE reconciliations SET statement_date = COALESCE($2, statement_date), statement_balance_cents = COALESCE($3, statement_balance_cents) WHERE id = $1`,
 			[id, input.statement_date ?? null, input.statement_balance_cents ?? null],
 		);
+		if (input.document_id !== undefined) {
+			await checkDocument(tx, input.document_id);
+			// Another statement: what was read from the old one no longer applies.
+			await tx.query(`UPDATE reconciliations SET document_id = $2, reading = CASE WHEN document_id IS DISTINCT FROM $2 THEN NULL ELSE reading END WHERE id = $1`, [id, input.document_id]);
+		}
 		return getReconciliation(app, id, tx);
 	});
 }
@@ -291,4 +338,9 @@ export async function deleteReconciliation(app: App, id: bigint): Promise<void> 
 		await openForUpdate(tx, id);
 		await tx.query(`DELETE FROM reconciliations WHERE id = $1`, [id]);
 	});
+}
+
+/** Records what the AI read from the statement (ticking the matches is changeCleared's job). */
+export async function saveReading(app: App, id: bigint, reading: StatementReading): Promise<void> {
+	await app.db.query(`UPDATE reconciliations SET reading = $2::jsonb WHERE id = $1 AND status = 'open'`, [id, JSON.stringify(reading)]);
 }

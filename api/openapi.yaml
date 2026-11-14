@@ -613,6 +613,7 @@ paths:
                 account_code: { $ref: '#/components/schemas/AccountCode' }
                 statement_date: { type: string, format: date }
                 statement_balance_cents: { $ref: '#/components/schemas/SignedCents' }
+                document_id: { type: integer, nullable: true, description: The statement (a document) to show beside the lines }
       responses:
         '201':
           description: Started
@@ -654,6 +655,7 @@ paths:
               properties:
                 statement_date: { type: string, format: date }
                 statement_balance_cents: { $ref: '#/components/schemas/SignedCents' }
+                document_id: { type: integer, nullable: true, description: 'Attach a statement, or null to take it off; what the AI read from another one is dropped' }
       responses:
         '200':
           description: Updated
@@ -703,6 +705,55 @@ paths:
               schema: { $ref: '#/components/schemas/ReconciliationDetail' }
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /reconciliations/from-statement:
+    post:
+      tags: [Reconciliation]
+      operationId: reconcileFromStatement
+      summary: Start a reconciliation from a statement the AI reads
+      description: |
+        The LLM connection for images and documents (Settings → LLM API)
+        reads the statement's closing date, balances and lines. The
+        reconciliation starts with that date and balance, and journal lines
+        that match a statement line (same amount, close in date) are ticked
+        as a first pass. Nothing is finished: a person checks and finishes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [account_code, document_id]
+              properties:
+                account_code: { $ref: '#/components/schemas/AccountCode' }
+                document_id: { type: integer }
+      responses:
+        '201':
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationDetail' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /reconciliations/{reconciliationId}/pre-reconcile:
+    post:
+      tags: [Reconciliation]
+      operationId: preReconcile
+      summary: Have the AI read the attached statement (again) and tick the journal lines that match
+      description: Lines already ticked stay ticked; the statement date and balance stay as entered.
+      parameters:
+        - { $ref: '#/components/parameters/ReconciliationId' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationDetail' }
+        '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
   /reconciliations/{reconciliationId}/finish:
@@ -3018,7 +3069,7 @@ components:
         ledger_version: { type: string }
     Reconciliation:
       type: object
-      required: [id, account_code, account_name, account_type, currency, statement_date, statement_balance_cents, status, created_by, created_at, finished_by, finished_at, cleared_count]
+      required: [id, account_code, account_name, account_type, currency, statement_date, statement_balance_cents, status, created_by, created_at, finished_by, finished_at, cleared_count, document_id, document_title, document_url, document_type]
       properties:
         id: { type: integer, format: int64 }
         account_code: { $ref: '#/components/schemas/AccountCode' }
@@ -3033,6 +3084,10 @@ components:
         finished_by: { type: string, nullable: true }
         finished_at: { type: string, format: date-time, nullable: true }
         cleared_count: { type: integer }
+        document_id: { type: integer, nullable: true, description: The statement it is checked against }
+        document_title: { type: string, nullable: true }
+        document_url: { type: string, nullable: true }
+        document_type: { type: string, nullable: true }
     ReconciliationLine:
       type: object
       required: [transaction_id, journal_entry_id, entry_date, description, reference, memo, debit_cents, credit_cents, amount_cents, cleared]
@@ -3051,7 +3106,7 @@ components:
         cleared: { type: boolean }
     ReconciliationDetail:
       type: object
-      required: [reconciliation, opening_balance_cents, cleared_balance_cents, difference_cents, lines]
+      required: [reconciliation, opening_balance_cents, cleared_balance_cents, difference_cents, lines, reading]
       properties:
         reconciliation: { $ref: '#/components/schemas/Reconciliation' }
         opening_balance_cents:
@@ -3065,6 +3120,38 @@ components:
           type: array
           description: Uncleared lines dated on or before the statement, plus the lines cleared on this statement
           items: { $ref: '#/components/schemas/ReconciliationLine' }
+        reading:
+          allOf: [{ $ref: '#/components/schemas/StatementReading' }]
+          nullable: true
+          description: What the AI read from the attached statement, if it was asked to
+    StatementReading:
+      type: object
+      required: [read_at, model, period_start, end_date, opening_balance_cents, closing_balance_cents, adds_up, lines, matched, unmatched]
+      properties:
+        read_at: { type: string, format: date-time }
+        model: { type: string }
+        period_start: { type: string, format: date, nullable: true }
+        end_date: { type: string, format: date, nullable: true }
+        opening_balance_cents: { type: integer, nullable: true }
+        closing_balance_cents: { type: integer, nullable: true }
+        adds_up: { type: boolean, nullable: true, description: Opening balance plus the lines gives the closing balance }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [date, description, amount_cents]
+            properties:
+              date: { type: string, format: date }
+              description: { type: string }
+              amount_cents: { type: integer, description: In the account's natural sign }
+        matched:
+          type: array
+          description: 'Journal lines ticked for a statement line: [transaction id, index into lines]'
+          items: { type: array, items: { type: integer }, minItems: 2, maxItems: 2 }
+        unmatched:
+          type: array
+          description: Indexes of statement lines with no journal line to match
+          items: { type: integer }
     SidebarPrefs:
       type: object
       required: [items]

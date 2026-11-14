@@ -429,6 +429,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reconciliations/from-statement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a reconciliation from a statement the AI reads
+         * @description The LLM connection for images and documents (Settings → LLM API)
+         *     reads the statement's closing date, balances and lines. The
+         *     reconciliation starts with that date and balance, and journal lines
+         *     that match a statement line (same amount, close in date) are ticked
+         *     as a first pass. Nothing is finished: a person checks and finishes.
+         */
+        post: operations["reconcileFromStatement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reconciliations/{reconciliationId}/pre-reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Have the AI read the attached statement (again) and tick the journal lines that match
+         * @description Lines already ticked stay ticked; the statement date and balance stay as entered.
+         */
+        post: operations["preReconcile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reconciliations/{reconciliationId}/finish": {
         parameters: {
             query?: never;
@@ -2165,6 +2209,11 @@ export interface components {
             /** Format: date-time */
             finished_at: string | null;
             cleared_count: number;
+            /** @description The statement it is checked against */
+            document_id: number | null;
+            document_title: string | null;
+            document_url: string | null;
+            document_type: string | null;
         };
         ReconciliationLine: {
             /** Format: int64 */
@@ -2191,6 +2240,32 @@ export interface components {
             difference_cents: components["schemas"]["SignedCents"];
             /** @description Uncleared lines dated on or before the statement, plus the lines cleared on this statement */
             lines: components["schemas"]["ReconciliationLine"][];
+            /** @description What the AI read from the attached statement, if it was asked to */
+            reading: components["schemas"]["StatementReading"] | null;
+        };
+        StatementReading: {
+            /** Format: date-time */
+            read_at: string;
+            model: string;
+            /** Format: date */
+            period_start: string | null;
+            /** Format: date */
+            end_date: string | null;
+            opening_balance_cents: number | null;
+            closing_balance_cents: number | null;
+            /** @description Opening balance plus the lines gives the closing balance */
+            adds_up: boolean | null;
+            lines: {
+                /** Format: date */
+                date: string;
+                description: string;
+                /** @description In the account's natural sign */
+                amount_cents: number;
+            }[];
+            /** @description Journal lines ticked for a statement line: [transaction id, index into lines] */
+            matched: number[][];
+            /** @description Indexes of statement lines with no journal line to match */
+            unmatched: number[];
         };
         SidebarPrefs: {
             items: {
@@ -3450,6 +3525,8 @@ export interface operations {
                     /** Format: date */
                     statement_date: string;
                     statement_balance_cents: components["schemas"]["SignedCents"];
+                    /** @description The statement (a document) to show beside the lines */
+                    document_id?: number | null;
                 };
             };
         };
@@ -3529,6 +3606,8 @@ export interface operations {
                     /** Format: date */
                     statement_date?: string;
                     statement_balance_cents?: components["schemas"]["SignedCents"];
+                    /** @description Attach a statement, or null to take it off; what the AI read from another one is dropped */
+                    document_id?: number | null;
                 };
             };
         };
@@ -3576,6 +3655,60 @@ export interface operations {
             };
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    reconcileFromStatement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    account_code: components["schemas"]["AccountCode"];
+                    document_id: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Started */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDetail"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    preReconcile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reconciliationId: components["parameters"]["ReconciliationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDetail"];
+                };
+            };
+            409: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

@@ -28,6 +28,8 @@ async function listen(t: TestContext, handler: (req: IncomingMessage, res: Serve
 export interface FakeAi {
 	base: string;
 	requests: { path: string; headers: IncomingMessage["headers"]; body: any }[];
+	/** When set, what the AI answers to a request for JSON. */
+	json?: unknown;
 }
 
 /** Answers "OK" to plain prompts and {"answer": <last prompt>} when asked for JSON. */
@@ -39,7 +41,7 @@ export async function fakeAi(t: TestContext): Promise<FakeAi> {
 		const last = body.messages?.at(-1)?.content;
 		const prompt = typeof last === "string" ? last : (last?.find?.((b: any) => b.type === "text")?.text ?? "");
 		const wantsJson = !!(body.output_config?.format || body.format || body.response_format);
-		const answer = wantsJson ? JSON.stringify({ answer: prompt }) : "OK";
+		const answer = wantsJson ? JSON.stringify(ai.json ?? { answer: prompt }) : "OK";
 		if (req.url === "/v1/messages") {
 			if (req.headers["x-api-key"] !== "sk-test") return json(res, 401, { error: { message: "invalid x-api-key" } });
 			return json(res, 200, { model: body.model, stop_reason: "end_turn", content: [{ type: "text", text: answer }], usage: { input_tokens: 12, output_tokens: 3 } });

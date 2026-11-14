@@ -1605,7 +1605,8 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 	expectStatus(file, 200);
 	assert.equal(file.headers["content-type"], "application/pdf");
 	assert.match(String(file.headers["content-disposition"]), /^inline; filename\*=UTF-8''Hydro%20March\.pdf$/);
-	assert.match(String(file.headers["content-security-policy"]), /sandbox/);
+	assert.equal(file.headers["content-security-policy"], "frame-ancestors 'self'"); // a PDF viewer doesn't run sandboxed; only PDFs and pictures get in
+	assert.equal(file.headers["x-content-type-options"], "nosniff");
 	assert.equal(file.text, pdf("hydro").toString());
 	expectStatus(await request("GET", hydro.url), 401);
 
@@ -1651,6 +1652,132 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 	// A file that went missing (a restore from an uploaded dump) says so.
 	await rm(path.join(root, `invoices/2026/${inv.id}-inv-0031.pdf`));
 	expectStatus(await request("GET", inv.url, { cookie }), 404);
+});
+
+test("Reconcile against a statement PDF the AI reads", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	const cookie = `${SESSION_COOKIE}=${ta.token}`;
+	const ai = await fakeAi(t);
+	await mkdir(app.integrations.dir, { mode: 0o700 });
+	const claude = { id: "main", name: "Claude", provider: "anthropic", api_key: "sk-test", base_url: ai.base, uses: ["text", "images"] };
+	const uploadPdf = async (name: string, text: string) => {
+		const boundary = "----stmt" + Math.random().toString(16).slice(2);
+		const body = Buffer.concat([
+			Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="kind"\r\n\r\nstatement\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\n\r\n`),
+			Buffer.from(`%PDF-1.4\n${text}\n`),
+			Buffer.from(`\r\n--${boundary}--\r\n`),
+		]);
+		const r = await request("POST", "/api/v1/documents", { rawBody: body, cookie, headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` } });
+		expectStatus(r, 201);
+		return r.json();
+	};
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "2100", "Visa", "liability", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	const post = async (date: string, what: string, ...lines: Line[]) => expectStatus(await call("POST", "/journal-entries", entry(date, what, ...lines)), 201);
+	await post("2026-03-02", "Deposit", dr("1000", 50000), cr("4000", 50000));
+	await post("2026-03-05", "Cheque 101", dr("6100", 4510), cr("1000", 4510));
+	await post("2026-03-20", "Paper", dr("6100", 12000), cr("1000", 12000));
+	await post("2026-03-20", "Toner, same amount", dr("6100", 12000), cr("1000", 12000));
+	await post("2026-03-28", "Deposit not on the statement yet", dr("1000", 7500), cr("4000", 7500));
+	const march = await uploadPdf("march.pdf", "chequing march");
+
+	// Without an LLM connection it says where to set one up, and nothing is started.
+	let r = await call("POST", "/reconciliations/from-statement", { account_code: "1000", document_id: march.id });
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /Settings → LLM API/);
+	// A provider that only gets the text of PDFs can't read a statement.
+	await call("PUT", "/integrations/llm", { connections: [{ id: "local", name: "Local", provider: "ollama", model: "m", base_url: ai.base, uses: ["text", "images"] }] });
+	r = await call("POST", "/reconciliations/from-statement", { account_code: "1000", document_id: march.id });
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /Local\) can't read PDFs/);
+	expectStatus(await call("PUT", "/integrations/llm", { connections: [claude] }), 200);
+	assert.equal((await call("GET", "/reconciliations")).json().data.length, 0);
+
+	// The AI reads the statement; its closing date and balance start the reconciliation and matching lines are ticked.
+	ai.json = {
+		period_start: "2026-03-01",
+		end_date: "2026-03-31",
+		opening_balance: "0.00",
+		closing_balance: "1,324.95",
+		lines: [
+			{ date: "2026-03-03", description: "DEPOSIT", amount: "500.00" },
+			{ date: "2026-03-12", description: "CHQ 101", amount: "-45.10" },
+			{ date: "2026-03-20", description: "STAPLES", amount: "-120.00" },
+			{ date: "2026-03-31", description: "MONTHLY FEE", amount: "-9.95" },
+			{ date: "2026-03-31", description: "TRANSFER IN", amount: "1000.00" },
+			{ date: "soon", description: "unreadable", amount: "1.00" },
+		],
+	};
+	r = await call("POST", "/reconciliations/from-statement", { account_code: "1000", document_id: march.id });
+	expectStatus(r, 201);
+	let d = r.json();
+	const sent = ai.requests.at(-1)!;
+	assert.equal(sent.body.messages.at(-1).content[0].type, "document");
+	assert.match(sent.body.messages.at(-1).content.at(-1).text, /"Chequing" \(a bank account, CAD\)/);
+	assert.deepEqual(
+		[d.reconciliation.statement_date, d.reconciliation.statement_balance_cents, d.reconciliation.document_id, d.reconciliation.document_url, d.reconciliation.document_title],
+		["2026-03-31", 132495, march.id, march.url, "march"],
+	);
+	assert.deepEqual([d.reading.lines.length, d.reading.adds_up, d.reading.opening_balance_cents, d.reading.closing_balance_cents], [5, true, 0, 132495]);
+	const byWhat = Object.fromEntries(d.lines.map((l: any) => [l.description, l]));
+	assert.deepEqual(
+		Object.fromEntries(d.lines.map((l: any) => [l.description, l.cleared])),
+		{ Deposit: true, "Cheque 101": true, Paper: true, "Toner, same amount": false, "Deposit not on the statement yet": false },
+	);
+	// Each statement line pairs with one journal line; the fee and the transfer aren't in the books.
+	assert.deepEqual(d.reading.matched, [[byWhat.Deposit.transaction_id, 0], [byWhat["Cheque 101"].transaction_id, 1], [byWhat.Paper.transaction_id, 2]]);
+	assert.deepEqual(d.reading.unmatched.map((i: number) => d.reading.lines[i].description), ["MONTHLY FEE", "TRANSFER IN"]);
+	assert.equal(d.difference_cents, 132495 - (50000 - 4510 - 12000));
+	// Nothing is finished by the AI: a person still has to.
+	assert.equal(d.reconciliation.status, "open");
+	expectStatus(await call("POST", `/reconciliations/${d.reconciliation.id}/finish`), 409);
+
+	// The books catch up (the fee is entered); reading again ticks only what is new and keeps the person's own ticks.
+	await post("2026-03-31", "Bank fee", dr("6100", 995), cr("1000", 995));
+	const toner = byWhat["Toner, same amount"].transaction_id;
+	await call("POST", `/reconciliations/${d.reconciliation.id}/cleared`, { clear: [toner], unclear: [byWhat.Paper.transaction_id] });
+	r = await call("POST", `/reconciliations/${d.reconciliation.id}/pre-reconcile`);
+	expectStatus(r, 200);
+	d = r.json();
+	const cleared = d.lines.filter((l: any) => l.cleared).map((l: any) => l.description);
+	assert.deepEqual(cleared, ["Deposit", "Cheque 101", "Paper", "Toner, same amount", "Bank fee"]);
+	assert.deepEqual(d.reading.unmatched.map((i: number) => d.reading.lines[i].description), ["TRANSFER IN"]);
+
+	// Another statement on the session: what was read from the old one is dropped.
+	const other = await uploadPdf("other.pdf", "something else");
+	r = await call("PATCH", `/reconciliations/${d.reconciliation.id}`, { document_id: other.id });
+	assert.deepEqual([r.json().reconciliation.document_id, r.json().reading], [other.id, null]);
+	r = await call("PATCH", `/reconciliations/${d.reconciliation.id}`, { document_id: null });
+	assert.equal(r.json().reconciliation.document_url, null);
+	expectStatus(await call("POST", `/reconciliations/${d.reconciliation.id}/pre-reconcile`), 409); // nothing attached
+	expectStatus(await call("PATCH", `/reconciliations/${d.reconciliation.id}`, { document_id: 99999 }), 422);
+
+	// A card statement read with the signs the other way round is put right by its balances.
+	await post("2026-03-10", "Card purchase", dr("6100", 8000), cr("2100", 8000));
+	await post("2026-03-25", "Card payment", dr("2100", 3000), cr("1000", 3000));
+	const visa = await uploadPdf("visa.pdf", "visa march");
+	ai.json = { period_start: null, end_date: "2026-03-31", opening_balance: "0", closing_balance: "50.00", lines: [{ date: "2026-03-10", description: "STORE", amount: "-80.00" }, { date: "2026-03-26", description: "PAYMENT - THANK YOU", amount: "30.00" }] };
+	r = await call("POST", "/reconciliations/from-statement", { account_code: "2100", document_id: visa.id });
+	expectStatus(r, 201);
+	d = r.json();
+	assert.deepEqual(d.reading.lines.map((l: any) => l.amount_cents), [8000, -3000]);
+	assert.deepEqual([d.reading.matched.length, d.difference_cents], [2, 0]);
+	assert.match(ai.requests.at(-1)!.body.messages.at(-1).content.at(-1).text, /a credit card or loan/);
+	expectStatus(await call("POST", `/reconciliations/${d.reconciliation.id}/finish`), 200);
+
+	// A document that isn't a statement starts nothing.
+	ai.json = { period_start: null, end_date: null, opening_balance: null, closing_balance: null, lines: [] };
+	r = await call("POST", "/reconciliations/from-statement", { account_code: "4000", document_id: other.id });
+	expectStatus(r, 422);
+	assert.match(r.json().error.message, /is it a statement/);
+	// A manual start can carry the statement too.
+	r = await call("POST", "/reconciliations", { account_code: "4000", statement_date: "2026-03-31", statement_balance_cents: 0, document_id: other.id });
+	expectStatus(r, 201);
+	assert.equal(r.json().reconciliation.document_id, other.id);
 });
 
 test("A mailbox over IMAP and SMTP (Proton Mail Bridge) shared with modules", async (t) => {

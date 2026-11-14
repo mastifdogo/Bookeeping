@@ -167,6 +167,7 @@ backend/src/orgs.ts       Organizations: per-organization databases and request 
 backend/src/reports.ts    Balance sheet and income statement
 backend/src/dashboard.ts  Dashboard summary, notifications and to-dos
 backend/src/reconcile.ts  Reconciling accounts against statements
+backend/src/statement-reading.ts  The AI reads a statement PDF; its lines are matched to the books
 backend/src/backup.ts     `ledger backup run`: dumps to an SMB share and/or Google Drive
 backend/src/restore.ts    Settings → Backups → Restore (per organization): the app's part and root's (`ledger update run`)
 backend/src/module-settings.ts  Module settings declared in ledger-module.json
@@ -374,6 +375,18 @@ that appears on it. When the cleared balance matches (difference 0.00),
 finish. The next statement starts from there. Only the most recent
 reconciliation of an account can be undone. Posted entries never change;
 reconciliations only mark lines as cleared.
+
+Choose the statement's PDF (one under Documents, or import it there and
+then) and the page opens as a split screen: the statement on one side, the
+transactions on the other, with a divider you drag to resize. **Read
+statement and pre-reconcile** has the AI (the LLM connection for images and
+documents, which must be a provider that reads PDFs) copy out the
+statement's closing date, balances and lines; Ledger starts the
+reconciliation with that date and balance and ticks the transactions that
+match a statement line (same amount, close in date). Each ticked line shows
+the statement line it was paired with, and statement lines missing from the
+books are listed. The AI finishes nothing: you check the ticks against the
+statement and press Finish.
 
 ### Backups
 

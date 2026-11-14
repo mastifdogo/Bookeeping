@@ -30,6 +30,7 @@ import {
 	decodePasswordChange,
 	decodeReverseRequest,
 	decodeReconciliationCreate,
+	decodeReconciliationFromStatement,
 	decodeReconciliationUpdate,
 	decodeClearedChange,
 	parseJson,
@@ -129,6 +130,7 @@ import { promises as fsp } from "node:fs";
 import pathMod from "node:path";
 import { createReadStream } from "node:fs";
 import { INLINE_TYPES, openStored } from "./module-storage.ts";
+import { preReconcile, reconcileFromStatement } from "./statement-reading.ts";
 import { addDocument, deleteDocument, documentFolders, DOCUMENT_KINDS, DOCUMENT_ORIGINS, getDocument, listDocuments, MAX_DOCUMENT_BYTES, openDocument, updateDocument, type DocumentKind, type DocumentOrigin } from "./documents.ts";
 import { MAX_MODULES, normalizeRepo, readDesired, readModuleResults, requestModuleSync, writeDesired, compatible, type DesiredModule } from "./modules.ts";
 import { fetchManifest, githubApi, latestModuleRelease, repoIdentity } from "./github.ts";
@@ -899,6 +901,19 @@ async function handleCreateReconciliation(c: Ctx): Promise<void> {
 	writeJSON(c.res, 201, await createReconciliation(c.app, input, c.user!.id));
 }
 
+/** The AI reads the statement's date and balance, the reconciliation starts with them, and matching lines are ticked. */
+async function handleReconcileFromStatement(c: Ctx): Promise<void> {
+	const input = await decodeBody(c, true, decodeReconciliationFromStatement);
+	const acc = (await listAccounts(c.app, true)).find((a) => a.code === input.account_code);
+	if (!acc) throw new HttpError(422, `account ${JSON.stringify(input.account_code)} does not exist`, "validation_failed");
+	writeJSON(c.res, 201, await reconcileFromStatement(c.app, input, { name: acc.name, type: acc.type, currency: acc.currency }, c.user!.id));
+}
+
+/** The AI reads the attached statement again and ticks the lines that match. */
+async function handlePreReconcile(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await preReconcile(c.app, pathId(c, "reconciliationId")));
+}
+
 async function handleGetReconciliation(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await getReconciliation(c.app, pathId(c, "reconciliationId")));
 }
@@ -1516,7 +1531,10 @@ async function handleDocumentFile(c: Ctx): Promise<void> {
 		"Content-Type": f.doc.content_type,
 		"Content-Length": f.doc.size_bytes,
 		"Content-Disposition": `${c.query.get("download") ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`,
-		"Content-Security-Policy": "sandbox; frame-ancestors 'self'",
+		// Only PDFs and pictures are stored (checked by content). A browser's PDF viewer doesn't run
+		// inside a sandbox, and the Reconcile page shows the statement in a frame beside the lines.
+		"Content-Security-Policy": f.doc.content_type === "application/pdf" ? "frame-ancestors 'self'" : "sandbox; frame-ancestors 'self'",
+		"X-Content-Type-Options": "nosniff",
 		"Cache-Control": "private, no-cache",
 	});
 	createReadStream(f.full).pipe(c.res);
@@ -2052,6 +2070,8 @@ const ROUTES: Route[] = [
 
 	route("GET", "/reconciliations", true, handleListReconciliations),
 	route("POST", "/reconciliations", true, handleCreateReconciliation),
+	route("POST", "/reconciliations/from-statement", true, handleReconcileFromStatement),
+	route("POST", "/reconciliations/:reconciliationId/pre-reconcile", true, handlePreReconcile),
 	route("GET", "/reconciliations/:reconciliationId", true, handleGetReconciliation),
 	route("PATCH", "/reconciliations/:reconciliationId", true, handleUpdateReconciliation),
 	route("DELETE", "/reconciliations/:reconciliationId", true, handleDeleteReconciliation),
