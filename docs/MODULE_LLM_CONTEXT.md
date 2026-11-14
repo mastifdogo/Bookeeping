@@ -8,7 +8,7 @@
 ---
 
 You are writing a **module** for **Ledger**, a self-hosted, double-entry
-bookkeeping web app (Node.js 24 + PostgreSQL 16 backend, SvelteKit frontend).
+bookkeeping web app (Node.js 24 + PostgreSQL 18 backend, SvelteKit frontend).
 A module is a GitHub repository that Ledger installs from its latest GitHub
 Release and runs inside its own server process. Produce a complete,
 working repository following every rule below. Ask nothing; choose sensible

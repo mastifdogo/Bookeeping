@@ -44,7 +44,7 @@ LXC container and installs everything inside it.
 
 The script will:
 
-- download the latest Debian 12 template if needed
+- download the latest Debian 13 template if needed
 - create an unprivileged container (`nesting=1`) with the CSV directory
   bind-mounted at `/app/csv_data`, owned by the mapped service UID (100990)
 - install PostgreSQL (tuned for a small container), Ledger, the systemd service
@@ -89,12 +89,12 @@ configuration and port:
 
 **Download a ready-made one:** every
 [GitHub Release](https://github.com/mastifdogo/Bookeeping/releases) has a
-Debian 12 CT template (`debian-12-ledger_<version>_amd64.tar.zst`) with Ledger
+Debian 13 CT template (`debian-13-ledger_<version>_amd64.tar.zst`) with Ledger
 and PostgreSQL pre-installed. On the Proxmox host:
 
 ```sh
 wget -P /var/lib/vz/template/cache \
-  https://github.com/mastifdogo/Bookeeping/releases/download/<version>/debian-12-ledger_<version>_amd64.tar.zst
+  https://github.com/mastifdogo/Bookeeping/releases/download/<version>/debian-13-ledger_<version>_amd64.tar.zst
 ```
 
 It then appears under **local → CT Templates**. Each release's notes include
@@ -103,8 +103,8 @@ the exact URL and its SHA-256 checksum.
 **Or build it yourself** (needs root and `apt install mmdebstrap zstd`):
 
 ```sh
-make lxc-template                 # dist/debian-12-ledger_<version>_amd64.tar.zst
-make lxc-template SUITE=noble     # Ubuntu 24.04 (also trixie, jammy; ARCH=arm64)
+make lxc-template                 # dist/debian-13-ledger_<version>_amd64.tar.zst
+make lxc-template SUITE=noble     # Ubuntu 24.04 (also bookworm, jammy; ARCH=arm64)
 ```
 
 Upload it under **CT Templates**, create an unprivileged container with
@@ -122,7 +122,7 @@ the unpacked release:
 
 ```sh
 apt install -y curl ca-certificates
-sh deploy/pgdg.sh && apt update && apt install -y postgresql-18   # PostgreSQL 18 (Debian 12's own is 15)
+sh deploy/pgdg.sh && apt update && apt install -y postgresql-18   # PostgreSQL 18 (Debian 13's own is 17)
 sh deploy/install.sh                                  # user, program, systemd units, /etc/ledger/ledger.env
 cp /usr/local/share/ledger/postgresql-lowmem.conf /etc/postgresql/*/main/conf.d/ledger.conf
 systemctl restart postgresql
@@ -138,7 +138,7 @@ permissions, HTTPS behind a reverse proxy, backup/restore and troubleshooting.
 
 Push a version tag. GitHub Actions (`.github/workflows/release.yml`) runs the
 unit and PostgreSQL integration tests, then builds the release tarball and the
-Debian 12 LXC template (an Ubuntu one can be built by hand, see above), and
+Debian 13 LXC template (an Ubuntu one can be built by hand, see above), and
 attaches them with `SHA256SUMS`
 to a GitHub Release:
 

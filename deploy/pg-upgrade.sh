@@ -1,6 +1,6 @@
 #!/bin/sh
-# Moves Ledger's PostgreSQL cluster to PostgreSQL 18 (from the version the
-# distribution shipped, 15 on Debian 12). Run as root; started by
+# Moves Ledger's PostgreSQL cluster to PostgreSQL 18 (from an older
+# one: 15 as Debian 12 shipped it, or 16 from Ledger 0.17). Run as root; started by
 # `ledger update run` once after an update, or by hand:
 #
 #   sh /usr/local/share/ledger/pg-upgrade.sh           upgrade if needed

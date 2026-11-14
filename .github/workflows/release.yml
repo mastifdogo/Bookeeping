@@ -8,7 +8,7 @@
 #
 # Release assets:
 #   ledger-<tag>-linux-amd64.tar.gz           server + Node.js runtime + SQL + deploy scripts
-#   debian-12-ledger_<tag>_amd64.tar.zst       Proxmox CT template (Debian 12)
+#   debian-13-ledger_<tag>_amd64.tar.zst       Proxmox CT template (Debian 13)
 #   SHA256SUMS
 name: Release
 
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to create, e.g. v0.17.0-debian13.1 (a tag with a suffix is published as a pre-release)'
+        description: 'Release tag to create, e.g. v0.18.0 (a tag with a suffix, such as v0.18.0-test.1, is published as a pre-release)'
         required: true
         type: string
       suite:
@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 45
     env:
       VERSION: ${{ inputs.tag || github.ref_name }}
-      # This branch (debian-13-test) builds the template on Debian 13 unless told otherwise.
+      # The template is built on Debian 13 unless told otherwise.
       SUITE: ${{ inputs.suite || 'trixie' }}
     services:
       postgres:
@@ -138,7 +138,7 @@ jobs:
           deb="debian-$([ "$SUITE" = trixie ] && echo 13 || echo 12)-ledger_${VERSION}_amd64.tar.zst"
           sum() { awk -v f="$1" '$2 == f { print $1 }' dist/SHA256SUMS; }
           cat > notes.md <<EOF
-          ## Proxmox LXC template (Debian $([ "$SUITE" = trixie ] && echo "13, test build" || echo 12))
+          ## Proxmox LXC template (Debian $([ "$SUITE" = trixie ] && echo 13 || echo 12))
 
           On the Proxmox host (as root), download the template into the local template store:
 

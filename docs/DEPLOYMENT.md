@@ -5,7 +5,7 @@ container, with CSV files and nightly database backups on a TrueNAS share.
 
 ```
 Proxmox host
- └─ LXC "ledger" (Debian 12, 1 core, 512 MB)
+ └─ LXC "ledger" (Debian 13, 1 core, 512 MB)
      ├─ ledger.service        :8080   (Node.js, ~60–90 MB RAM)
      ├─ postgresql             localhost only
      └─ /app/csv_data  ◄── bind mount ── TrueNAS dataset (CSV files + backups/)
@@ -81,8 +81,8 @@ On the Proxmox host:
 
 ```sh
 cd /var/lib/vz/template/cache
-wget https://github.com/mastifdogo/Bookeeping/releases/download/<version>/debian-12-ledger_<version>_amd64.tar.zst
-sha256sum debian-12-ledger_<version>_amd64.tar.zst     # compare with SHA256SUMS on the release
+wget https://github.com/mastifdogo/Bookeeping/releases/download/<version>/debian-13-ledger_<version>_amd64.tar.zst
+sha256sum debian-13-ledger_<version>_amd64.tar.zst     # compare with SHA256SUMS on the release
 ```
 
 Releases are built by `.github/workflows/release.yml` whenever a `v*` tag is
@@ -92,8 +92,8 @@ pushed. Skip to "Using it" below.
 
 ```sh
 apt install mmdebstrap zstd             # on any Debian/Ubuntu machine, or the Proxmox host
-make lxc-template                       # dist/debian-12-ledger_<version>_amd64.tar.zst
-make lxc-template SUITE=noble           # Ubuntu 24.04 instead; also trixie, jammy; ARCH=arm64
+make lxc-template                       # dist/debian-13-ledger_<version>_amd64.tar.zst
+make lxc-template SUITE=noble           # Ubuntu 24.04 instead; also bookworm, jammy; ARCH=arm64
 # from an existing release, without the source tree:
 deploy/lxc-template/build-lxc-template.sh --release ledger-<version>-linux-amd64.tar.gz
 ```
@@ -163,10 +163,10 @@ the server: the system's own `node` package (if any) is not used.
 
 ```sh
 pveam update
-pveam available --section system | grep debian-12      # note the exact template name
-pveam download local debian-12-standard_<version>_amd64.tar.zst
+pveam available --section system | grep debian-13      # note the exact template name
+pveam download local debian-13-standard_<version>_amd64.tar.zst
 
-pct create 120 local:vztmpl/debian-12-standard_<version>_amd64.tar.zst \
+pct create 120 local:vztmpl/debian-13-standard_<version>_amd64.tar.zst \
   --hostname ledger --unprivileged 1 --features nesting=1 \
   --cores 1 --memory 512 --swap 256 --rootfs local-lvm:4 \
   --net0 name=eth0,bridge=vmbr0,ip=dhcp --onboot 1
@@ -212,7 +212,7 @@ apt update && apt install -y curl ca-certificates
 
 Copy the release tarball into the container (e.g. `pct push 120
 ledger-….tar.gz /root/ledger.tar.gz` on the host), then install PostgreSQL
-18 (from the PostgreSQL project's repository: Debian 12's own is 15) and
+18 (from the PostgreSQL project's repository: Debian 13's own is 17) and
 Ledger:
 
 ```sh
@@ -446,10 +446,12 @@ backups work.
 
 ### PostgreSQL 18
 
-Since Ledger 0.17.0 the container template and the deploy script install
-PostgreSQL 18. A server set up earlier runs the PostgreSQL its distribution
-shipped (15 on Debian 12) and is **moved to 18 by the updater**, once, a few
-minutes after it has updated to 0.17.0 or later:
+Since Ledger 0.18.0 the container template is Debian 13 and it and the
+deploy script install PostgreSQL 18. A server set up earlier stays on the
+Debian it has (Ledger runs on Debian 12 and 13 alike) and runs an older
+PostgreSQL (15 as Debian 12 shipped it, or 16 from Ledger 0.17); its
+database is **moved to 18 by the updater**, once, a few minutes after it has
+updated to 0.18.0 or later:
 
 1. it backs up every organization as usual (if that fails, nothing happens);
 2. `/usr/local/share/ledger/pg-upgrade.sh` installs PostgreSQL 18 from
@@ -468,7 +470,7 @@ with `ledger update pg-upgrade` (as root). To keep a server on its current
 PostgreSQL, add `LEDGER_PG_UPGRADE=off` to `/etc/ledger/ledger.env`.
 
 Afterwards the old cluster still takes disk space. Once satisfied, remove
-it: `pg_lsclusters` shows it as `15 main … down`, and
+it: `pg_lsclusters` shows it as `15 main … down` (or `16`), and
 `pg_dropcluster 15 main` deletes it. Backups made by PostgreSQL 18 can't be
 restored on a server running an older PostgreSQL; the other way round works.
 

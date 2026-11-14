@@ -2,7 +2,7 @@
 
 VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 ARCH         ?= amd64
-SUITE        ?= bookworm
+SUITE        ?= trixie
 # Node.js runtime shipped in releases (an Active LTS line).
 NODE_VERSION ?= 24.22.2
 
@@ -45,7 +45,7 @@ release: build runtime
 	@echo "$(REL).tar.gz"
 
 # Proxmox LXC template with Ledger + PostgreSQL pre-installed (needs root and
-# mmdebstrap). SUITE=bookworm (Debian 12, default), trixie, noble or jammy.
+# mmdebstrap). SUITE=trixie (Debian 13, default), bookworm, noble or jammy.
 lxc-template: release
 	deploy/lxc-template/build-lxc-template.sh --suite $(SUITE) --arch $(ARCH) --release $(REL).tar.gz
 

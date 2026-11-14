@@ -180,8 +180,12 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
   finish within 15 s. **No npm packages**: only `node:*` built-ins and global
   `fetch`; nothing is installed on deploy. Relative imports of the module's
   own files are fine.
-- Ledger runs in a **Debian 12** container (its releases ship only a
-  Debian 12 LXC template; Ubuntu isn't built or supported). Don't call
+- Ledger runs in a **Debian** container: Debian 13 with PostgreSQL 18 on
+  servers set up from Ledger 0.18.0, Debian 12 on older ones (their
+  database is moved to PostgreSQL 18 by the updater, but may still be 15 or
+  16). Releases ship only a Debian 13 LXC template; Ubuntu isn't built or
+  supported. Write for both: SQL that PostgreSQL 15 accepts, nothing that
+  needs a newer Debian. Don't call
   programs that aren't in it (no `spawn` of tools you'd have to
   `apt install`), and don't depend on Ubuntu-specific paths or packages.
 - Backups save every table of the module's schema as a CSV in each backup's folder (next to `ledger.dump`)

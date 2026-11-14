@@ -14,7 +14,7 @@
 # database password and admin password on first boot (ledger-firstboot).
 set -euo pipefail
 
-SUITE=bookworm
+SUITE=trixie
 ARCH=amd64
 MIRROR=""
 OUT_DIR=""
@@ -26,7 +26,7 @@ usage() {
 Usage: $0 [options]
 
   --release FILE   Ledger release tarball (default: this checkout's out/ from 'make build runtime', db/ and deploy/)
-  --suite NAME     bookworm (Debian 12, default), trixie (Debian 13), noble (Ubuntu 24.04), jammy (Ubuntu 22.04)
+  --suite NAME     trixie (Debian 13, default), bookworm (Debian 12), noble (Ubuntu 24.04), jammy (Ubuntu 22.04)
   --arch ARCH      amd64 (default) or arm64; must match the release binary
   --mirror URL     package mirror (default: deb.debian.org / archive.ubuntu.com)
   --version V      version string in the file name (default: from the release or git)
@@ -106,12 +106,11 @@ packages=(
 	systemd-sysv dbus iproute2 iputils-ping openssh-server ca-certificates
 	curl less nano procps tzdata smbclient
 )
-# PostgreSQL 18. Where the distribution's own is older (Debian 12 has 15,
-# Ubuntu 22.04 has 14) it comes from the PostgreSQL project's repository,
-# installed inside the image below; elsewhere from the distribution.
+# PostgreSQL 18, from the PostgreSQL project's repository (installed inside
+# the image below): every distribution's own is older (Debian 13 has 17,
+# Debian 12 has 15).
 PG_VERSION=18
-# Debian 13's own is 17: Ledger uses 18 everywhere on this branch, so that also comes from the project's repository.
-PG_FROM_PGDG=1 # no distribution ships 18 yet
+PG_FROM_PGDG=1
 # Sources name the distribution's keyring explicitly (signed-by), so the
 # build works on any host: apt on an Ubuntu build machine does not trust
 # Debian's archive keys by default, and vice versa. The keyring package is

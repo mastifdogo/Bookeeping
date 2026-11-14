@@ -7,7 +7,8 @@
 #   ./deploy/proxmox-deploy.sh --upgrade --ctid 120
 #
 # A fresh deployment:
-#   1. downloads the latest Debian 12 template (if needed)
+#   1. downloads the latest Debian 13 template (if needed; Debian 12 where
+#      the Proxmox host doesn't offer 13)
 #   2. creates an unprivileged container (nesting=1) with the CSV directory
 #      bind-mounted at /app/csv_data, and maps its ownership to the service UID
 #   3. installs PostgreSQL, Ledger, the systemd units and nightly backups
@@ -70,7 +71,7 @@ Container:
   --disk GB              root disk size in GB (default: $DISK)
   --storage NAME         storage for the root disk (default: $STORAGE)
   --template-storage N   storage holding templates (default: $TEMPLATE_STORAGE)
-  --template FILE        template file name (default: latest debian-12-standard)
+  --template FILE        template file name (default: latest debian-13-standard)
   --privileged           create a privileged container (not recommended)
   --no-onboot            don't start the container at host boot
   --ssh-keys FILE        authorized_keys file for root inside the container
@@ -333,11 +334,15 @@ confirm "Continue?"
 
 # --- Template ----------------------------------------------------------------
 if [ -z "$TEMPLATE" ]; then
-	log "finding the latest Debian 12 template"
+	log "finding the latest Debian 13 template"
 	run pveam update >/dev/null || warn "pveam update failed; using the cached template list"
-	TEMPLATE=$(pveam available --section system 2>/dev/null | awk '{print $2}' |
-		grep -E '^debian-12-standard_.*_amd64\.tar\.(zst|gz|xz)$' | sort -V | tail -n1 || true)
-	[ -n "$TEMPLATE" ] || die "no debian-12-standard template found (pass --template)"
+	for deb in 13 12; do
+		TEMPLATE=$(pveam available --section system 2>/dev/null | awk '{print $2}' |
+			grep -E "^debian-$deb-standard_.*_amd64\.tar\.(zst|gz|xz)\$" | sort -V | tail -n1 || true)
+		[ -z "$TEMPLATE" ] || break
+		[ "$deb" = 12 ] || warn "this Proxmox host offers no Debian 13 template; using Debian 12"
+	done
+	[ -n "$TEMPLATE" ] || die "no debian-13-standard or debian-12-standard template found (pass --template)"
 fi
 if pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -q "vztmpl/$TEMPLATE"; then
 	log "template $TEMPLATE already downloaded"
@@ -404,7 +409,7 @@ ct_sh "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 && apt-get update -q &
 
 # --- Ledger --------------------------------------------------------------------
 push_release
-# PostgreSQL 18 from the PostgreSQL project's repository (Debian 12's own is 15).
+# PostgreSQL 18 from the PostgreSQL project's repository (Debian 13's own is 17).
 log "installing PostgreSQL 18 (this takes a minute)"
 ct_sh "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 && sh $CT_RELEASE_DIR/deploy/pgdg.sh && apt-get update -q && apt-get install -y -q postgresql-18 && apt-get clean"
 log "installing Ledger"
