@@ -102,8 +102,11 @@ for f in ledger-firstboot.sh ledger-firstboot.service ledger-after-firstboot.con
 done
 
 # --- Packages and sources --------------------------------------------------------
+# login: the program behind the console's login prompt. Debian 12 always
+# installed it; from Debian 13 it has to be asked for, and without it the
+# container's console returns to "login:" without asking for a password.
 packages=(
-	systemd-sysv dbus iproute2 iputils-ping openssh-server ca-certificates
+	systemd-sysv dbus login iproute2 iputils-ping openssh-server ca-certificates
 	curl less nano procps tzdata smbclient
 )
 # PostgreSQL 18, from the PostgreSQL project's repository (installed inside
@@ -174,6 +177,7 @@ in_root env LEDGER_UID=990 CSV_DIR=/app/csv_data sh /opt/ledger-release/deploy/i
 in_root chown ledger:ledger /app/csv_data
 chmod 0750 "\$root/app/csv_data"
 rm -rf "\$root/opt/ledger-release"
+[ -x "\$root/usr/bin/login" ] || [ -x "\$root/bin/login" ] || { echo "the image has no login program: nobody could log in on its console" >&2; exit 1; }
 
 # First-boot provisioning.
 install -m 0755 "$work/ledger-firstboot.sh" "\$root/usr/local/sbin/ledger-firstboot"

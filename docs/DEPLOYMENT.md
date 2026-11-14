@@ -604,6 +604,7 @@ organization stays "being created" until the next `ledger update run`.
 | Settings → Updates says updates aren't set up | The server was installed without `deploy/install.sh` 0.6+; run it from a current release. |
 | Update failed: GitHub answered 403 | GitHub's rate limit for unauthenticated requests (60 per hour per IP); it clears within an hour. |
 | Forgot the only password | `ledger-user passwd <name>` as root in the container. |
+| The container's console goes back to `login:` without asking for a password | Templates from Ledger 0.18.0 to 0.19.1 lack the login program. On the Proxmox host: `pct enter <ctid>`, then `apt update && apt install -y login`. Ledger itself is not affected. |
 | `JavaScript heap out of memory` in the log | Raise `LEDGER_MAX_HEAP_MB` in `ledger.env` (keep it well below `MemoryMax=256M`) and restart. |
 
 Logs: `journalctl -u ledger -f` (JSON lines, one per request).
