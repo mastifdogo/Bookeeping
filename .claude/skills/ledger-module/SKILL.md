@@ -84,11 +84,13 @@ Decide, and state briefly to the user:
   they're used, never cache one copy for the whole server.
 - **Dashboard**: what deserves a notification or a to-do (`ctx.dashboard`).
 - **AI, Gmail, search**: AI goes through `ctx.llm` (the admin's LLM
-  connections, never the module's own key), mail through `ctx.gmail` (never
+  connections, never the module's own key), mail through `ctx.mail` (Ledger 0.19.0: whichever mailbox the admin
+  connected, Proton Mail Bridge or another IMAP/SMTP account, else Gmail;
+  use `ctx.gmail` only for Gmail-only features; never
   your own OAuth/IMAP), and records worth finding through
   `ctx.search.provide`. These need Ledger 0.10.0, and the admin must allow
-  the module under Settings → LLM API / Gmail: say so in the README and show
-  `ctx.llm.status()` / `ctx.gmail.status()` in the UI when it isn't allowed
+  the module under Settings → LLM API / Mail (or Gmail): say so in the README and show
+  `ctx.llm.status()` / `ctx.mail.status()` in the UI when it isn't allowed
   yet. Pictures (receipts, photos) go in `images: [{ media_type, data }]`
   (Ledger 0.11.2): they reach the connection set up for images, which may be
   a different model than the one for text; check `status().images.configured`.

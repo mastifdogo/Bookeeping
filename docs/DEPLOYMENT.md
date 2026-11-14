@@ -442,6 +442,48 @@ name is in the file name, e.g. `ledger_org2`, and in the main database's
 Test a restore now and then (into a scratch database name) so you know the
 backups work.
 
+## Proton Mail (optional)
+
+Modules read and send mail through the mailbox under **Settings → Mail**.
+Proton Mail can't be reached with a password alone: Proton's own program,
+**Proton Mail Bridge**, signs in to Proton, decrypts the mail and offers it
+as ordinary IMAP and SMTP on the machine it runs on (it listens on
+`127.0.0.1` only). So the Bridge runs **inside the Ledger container**, and
+Ledger talks to it there. It needs a paid Proton plan.
+
+Before starting: the Bridge is a separate program that keeps a copy of the
+mailbox's index and uses a few hundred MB of memory with a large mailbox, so
+give the container more than the default 512 MB (1 GB is a sensible start:
+`pct set <ctid> -memory 1024` on the Proxmox host).
+
+In outline, inside the container (follow Proton's own instructions for the
+current package and commands; they change between Bridge versions):
+
+1. Install the Bridge's Debian package from Proton's download page, and
+   `pass` and `gnupg`, which it uses to keep its keys on a server without a
+   desktop.
+2. As the user that will run it, create a GPG key without a passphrase and
+   initialise `pass` with it, then start the Bridge's command line
+   (`protonmail-bridge --cli`), `login` with the Proton account, and wait for
+   the first sync.
+3. In the same command line, `info` prints what mail programs need: the
+   IMAP and SMTP ports, the username, and a **Bridge password** (made by the
+   Bridge; not the Proton password).
+4. Keep the Bridge running after you log out, e.g. with a systemd service
+   for that user that runs `protonmail-bridge --noninteractive`.
+
+Then in Ledger, **Settings → Mail → Fill in for Proton Mail Bridge** sets
+`127.0.0.1`, ports 1143 (IMAP) and 1025 (SMTP), STARTTLS, and "Accept the
+server's own certificate" (the Bridge makes its certificate itself). Change
+the ports if `info` shows others, enter the email address, the username and
+the Bridge password, and press **Save and test**: Ledger signs in both ways
+and says what the Bridge answered. Tick the modules that may read and send.
+
+While a mailbox is set up under Settings → Mail, modules use it instead of
+the Gmail account. Any other mailbox with IMAP and SMTP works the same way
+("Fill in for Another mailbox"), with its host's server names and usually an
+app password; leave the certificate box unticked for those.
+
 ## 9. Upgrading
 
 ### PostgreSQL 18

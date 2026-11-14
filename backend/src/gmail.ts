@@ -388,7 +388,7 @@ const encodeWord = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${B
 const wrap76 = (b64: string) => b64.replace(/.{1,76}/g, "$&\r\n");
 
 /** A MIME message from SendMail; validates every address and header. */
-export function buildMime(mail: SendMail): Buffer {
+export function buildMime(mail: SendMail, extra: { from?: string; date?: Date; messageId?: string; omitBcc?: boolean } = {}): Buffer {
 	const err = new ValidationError();
 	const list = (v: unknown, field: string, required: boolean): string[] => {
 		const a = v === undefined ? [] : Array.isArray(v) ? v : [v];
@@ -411,9 +411,13 @@ export function buildMime(mail: SendMail): Buffer {
 	err.throwIfAny();
 	const boundary = (tag: string) => `=_ledger_${tag}_${randomBytes(12).toString("hex")}`;
 	const head = [
+		// Gmail fills these in itself; an SMTP server expects them.
+		...(extra.from ? [`From: ${extra.from}`] : []),
+		...(extra.date ? [`Date: ${extra.date.toUTCString().replace("GMT", "+0000")}`] : []),
+		...(extra.messageId ? [`Message-ID: <${extra.messageId}>`] : []),
 		`To: ${to.join(", ")}`,
 		...(cc.length ? [`Cc: ${cc.join(", ")}`] : []),
-		...(bcc.length ? [`Bcc: ${bcc.join(", ")}`] : []),
+		...(bcc.length && !extra.omitBcc ? [`Bcc: ${bcc.join(", ")}`] : []),
 		...(replyTo.length ? [`Reply-To: ${replyTo.join(", ")}`] : []),
 		`Subject: ${encodeWord(mail.subject)}`,
 		"MIME-Version: 1.0",

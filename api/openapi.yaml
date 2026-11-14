@@ -1645,6 +1645,75 @@ paths:
               schema: { type: object, required: [models], properties: { models: { type: array, items: { type: string } } } }
         default: { $ref: '#/components/responses/Error' }
 
+  /integrations/mail:
+    get:
+      tags: [Integrations]
+      operationId: getMail
+      summary: The IMAP/SMTP mailbox shared with modules, e.g. through Proton Mail Bridge (admin)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MailInfo' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Integrations]
+      operationId: putMail
+      summary: Set the mailbox and which modules may read and send (admin)
+      description: |
+        Only the fields given change. `password` omitted or null keeps the
+        saved one, "" clears it; it must be given again when the server or
+        the username changes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                account: { type: string, description: The email address mail is sent from }
+                from_name: { type: string }
+                username: { type: string }
+                password: { type: string, nullable: true }
+                imap_host: { type: string }
+                imap_port: { type: integer }
+                imap_security: { $ref: '#/components/schemas/MailSecurity' }
+                smtp_host: { type: string }
+                smtp_port: { type: integer }
+                smtp_security: { $ref: '#/components/schemas/MailSecurity' }
+                folder: { type: string }
+                trust_certificate: { type: boolean }
+                allow_read: { type: array, items: { type: string } }
+                allow_send: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MailInfo' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /integrations/mail/test:
+    post:
+      tags: [Integrations]
+      operationId: testMail
+      summary: Sign in to the saved mailbox for reading and for sending; nothing is sent (admin)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imap, smtp]
+                properties:
+                  imap: { $ref: '#/components/schemas/MailCheck' }
+                  smtp: { $ref: '#/components/schemas/MailCheck' }
+        default: { $ref: '#/components/responses/Error' }
+
   /integrations/gmail:
     get:
       tags: [Integrations]
@@ -3333,6 +3402,62 @@ components:
                   error: { type: string }
                   duration_ms: { type: integer }
                   created_at: { type: string, format: date-time }
+    MailSecurity:
+      type: string
+      enum: [starttls, tls, none]
+    MailCheck:
+      type: object
+      required: [ok, message]
+      properties:
+        ok: { type: boolean }
+        message: { type: string }
+    MailInfo:
+      type: object
+      required: [available, config, modules]
+      properties:
+        available: { type: boolean }
+        config:
+          type: object
+          required: [account, from_name, username, has_password, imap_host, imap_port, imap_security, smtp_host, smtp_port, smtp_security, folder, trust_certificate, allow_read, allow_send, connected, can_send, presets, securities]
+          properties:
+            account: { type: string }
+            from_name: { type: string }
+            username: { type: string }
+            has_password: { type: boolean }
+            imap_host: { type: string }
+            imap_port: { type: integer }
+            imap_security: { $ref: '#/components/schemas/MailSecurity' }
+            smtp_host: { type: string }
+            smtp_port: { type: integer }
+            smtp_security: { $ref: '#/components/schemas/MailSecurity' }
+            folder: { type: string }
+            trust_certificate: { type: boolean }
+            allow_read: { type: array, items: { type: string } }
+            allow_send: { type: array, items: { type: string } }
+            connected: { type: boolean, description: Set up for reading }
+            can_send: { type: boolean, description: Set up for sending }
+            securities: { type: array, items: { type: string } }
+            presets:
+              type: array
+              items:
+                type: object
+                required: [id, label, note, values]
+                properties:
+                  id: { type: string }
+                  label: { type: string }
+                  note: { type: string }
+                  values:
+                    type: object
+                    required: [imap_host, imap_port, imap_security, smtp_host, smtp_port, smtp_security, trust_certificate]
+                    properties:
+                      imap_host: { type: string }
+                      imap_port: { type: integer }
+                      imap_security: { $ref: '#/components/schemas/MailSecurity' }
+                      smtp_host: { type: string }
+                      smtp_port: { type: integer }
+                      smtp_security: { $ref: '#/components/schemas/MailSecurity' }
+                      trust_certificate: { type: boolean }
+        modules: { type: array, items: { $ref: '#/components/schemas/ModuleChoice' } }
     GmailInfo:
       type: object
       required: [available, config, modules]

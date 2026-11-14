@@ -58,6 +58,7 @@ import { integrationsAvailable, requireIntegrations, writeIntegration } from "./
 import { applyLlmChange, listModels, llmComplete, llmUsage, pickConnection, publicLlmConfig, readLlmConfig, type Provider } from "./llm.ts";
 import { analyzeUpload, cleanMapping, getUpload, MIGRATION_KINDS, planFor, runMigration } from "./migrate.ts";
 import { analyzeImport, cleanImportMapping, getImportUpload, publicPlan } from "./module-import.ts";
+import { applyMailChange, publicMailConfig, readMailConfig, testMail } from "./mail.ts";
 import { applyGmailChange, codeFromPaste, finishAuth, publicGmailConfig, readGmailConfig, REDIRECT_URI, revoke as revokeGmail, startAuth } from "./gmail.ts";
 import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
 import {
@@ -1294,6 +1295,28 @@ async function handlePutGmail(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await gmailInfo(c));
 }
 
+async function mailInfo(c: Ctx) {
+	const dir = c.app.integrations.dir;
+	return { available: await integrationsAvailable(dir), config: publicMailConfig(await readMailConfig(dir)), modules: moduleChoices(c) };
+}
+
+async function handleGetMail(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await mailInfo(c));
+}
+
+async function handlePutMail(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	const body = await decodeBody(c, true, (v) => plainJson(v));
+	await writeIntegration(c.app.integrations.dir, "mail", applyMailChange(await readMailConfig(c.app.integrations.dir), body));
+	writeJSON(c.res, 200, await mailInfo(c));
+}
+
+/** Signs in to the saved mailbox for reading and for sending; sends nothing. */
+async function handleTestMail(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	writeJSON(c.res, 200, await testMail(await readMailConfig(c.app.integrations.dir)));
+}
+
 async function handleGmailStart(c: Ctx): Promise<void> {
 	await requireIntegrations(c.app.integrations.dir);
 	const body = (await decodeBody(c, false, (v) => plainJson(v))) as { send?: unknown } | null;
@@ -1972,6 +1995,9 @@ const ROUTES: Route[] = [
 	route("PUT", "/integrations/llm", "server", handlePutLlm),
 	route("POST", "/integrations/llm/test", "server", handleTestLlm),
 	route("POST", "/integrations/llm/models", "server", handleLlmModels),
+	route("GET", "/integrations/mail", "server", handleGetMail),
+	route("PUT", "/integrations/mail", "server", handlePutMail),
+	route("POST", "/integrations/mail/test", "server", handleTestMail),
 	route("GET", "/integrations/gmail", "server", handleGetGmail),
 	route("PUT", "/integrations/gmail", "server", handlePutGmail),
 	route("POST", "/integrations/gmail/start", "server", handleGmailStart),

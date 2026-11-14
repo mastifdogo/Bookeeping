@@ -276,6 +276,36 @@ no connection for that kind of request is set up, 403 when the module isn't allo
 provider fails, 422 when the model declines. The messages say where to fix
 it. `maxTokens` is capped by the admin's limit.
 
+## Mail (`ctx.mail`)
+
+The server's shared mailbox, whatever kind it is (Ledger 0.19.0): the
+IMAP/SMTP account an admin set up under **Settings → Mail** (Proton Mail
+through Proton Mail Bridge, or any other mailbox) when there is one, else the
+Gmail account under **Settings → Gmail**. **New modules use `ctx.mail`**, so
+they work with either; `ctx.gmail` below stays for Gmail's own search syntax,
+labels and threads. An admin allows each module to read and, separately, to
+send.
+
+```js
+const s = await ctx.mail.status(); // { connected, kind: "imap" | "gmail" | null, account, canRead, canSend }
+
+// Newest first; every field is optional. No mailbox-specific search syntax.
+const { messages } = await ctx.mail.search({ from: "billing@", subject: "invoice", text: "amount due", since: "2026-03-01", before: "2026-04-01", max: 25 });
+// messages: [{ id, date, from, to, subject, snippet }]   (snippet is "" over IMAP)
+
+const m = await ctx.mail.message(messages[0].id); // { …summary, cc, text, html, attachments: [{ attachmentId, filename, mimeType, size }] }
+const pdf = await ctx.mail.attachment(m.id, m.attachments[0].attachmentId); // Buffer
+const raw = await ctx.mail.raw(m.id);              // Buffer: RFC 822 source
+
+await ctx.mail.send({ to: "ann@example.com", subject: "Invoice 12", text: "…", attachments: [{ filename: "invoice.pdf", contentType: "application/pdf", content: pdfBuffer }] }); // → { id }
+```
+
+Ids are opaque and belong to the mailbox in use: store them only to avoid
+reading a message twice, and expect a 404 for one that is gone (an IMAP server
+can renumber a folder). Reading never marks mail as read. Errors are
+`HttpError`s: 409 not set up, 403 module not allowed, 404 no such message,
+422 bad input, 502 the mail server failed; the messages say where to fix it.
+
 ## Gmail (`ctx.gmail`)
 
 An admin connects one Gmail account under **Settings → Gmail** (Google

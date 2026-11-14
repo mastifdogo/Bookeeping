@@ -1105,6 +1105,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/integrations/mail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The IMAP/SMTP mailbox shared with modules, e.g. through Proton Mail Bridge (admin) */
+        get: operations["getMail"];
+        /**
+         * Set the mailbox and which modules may read and send (admin)
+         * @description Only the fields given change. `password` omitted or null keeps the
+         *     saved one, "" clears it; it must be given again when the server or
+         *     the username changes.
+         */
+        put: operations["putMail"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/mail/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign in to the saved mailbox for reading and for sending; nothing is sent (admin) */
+        post: operations["testMail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/integrations/gmail": {
         parameters: {
             query?: never;
@@ -2519,6 +2559,51 @@ export interface components {
                     created_at: string;
                 }[];
             };
+        };
+        /** @enum {string} */
+        MailSecurity: "starttls" | "tls" | "none";
+        MailCheck: {
+            ok: boolean;
+            message: string;
+        };
+        MailInfo: {
+            available: boolean;
+            config: {
+                account: string;
+                from_name: string;
+                username: string;
+                has_password: boolean;
+                imap_host: string;
+                imap_port: number;
+                imap_security: components["schemas"]["MailSecurity"];
+                smtp_host: string;
+                smtp_port: number;
+                smtp_security: components["schemas"]["MailSecurity"];
+                folder: string;
+                trust_certificate: boolean;
+                allow_read: string[];
+                allow_send: string[];
+                /** @description Set up for reading */
+                connected: boolean;
+                /** @description Set up for sending */
+                can_send: boolean;
+                securities: string[];
+                presets: {
+                    id: string;
+                    label: string;
+                    note: string;
+                    values: {
+                        imap_host: string;
+                        imap_port: number;
+                        imap_security: components["schemas"]["MailSecurity"];
+                        smtp_host: string;
+                        smtp_port: number;
+                        smtp_security: components["schemas"]["MailSecurity"];
+                        trust_certificate: boolean;
+                    };
+                }[];
+            };
+            modules: components["schemas"]["ModuleChoice"][];
         };
         GmailInfo: {
             available: boolean;
@@ -4553,6 +4638,93 @@ export interface operations {
                 content: {
                     "application/json": {
                         models: string[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getMail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putMail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The email address mail is sent from */
+                    account?: string;
+                    from_name?: string;
+                    username?: string;
+                    password?: string | null;
+                    imap_host?: string;
+                    imap_port?: number;
+                    imap_security?: components["schemas"]["MailSecurity"];
+                    smtp_host?: string;
+                    smtp_port?: number;
+                    smtp_security?: components["schemas"]["MailSecurity"];
+                    folder?: string;
+                    trust_certificate?: boolean;
+                    allow_read?: string[];
+                    allow_send?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailInfo"];
+                };
+            };
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    testMail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        imap: components["schemas"]["MailCheck"];
+                        smtp: components["schemas"]["MailCheck"];
                     };
                 };
             };

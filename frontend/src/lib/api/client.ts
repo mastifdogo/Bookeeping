@@ -44,6 +44,7 @@ export type Role = Schemas['Role'];
 export type SearchResults = Schemas['SearchResults'];
 export type LlmInfo = Schemas['LlmInfo'];
 export type GmailInfo = Schemas['GmailInfo'];
+export type MailInfo = Schemas['MailInfo'];
 export type SettingsField = Schemas['SettingsField'];
 export type Dashboard = Schemas['Dashboard'];
 export type DashboardItem = Schemas['DashboardItem'];

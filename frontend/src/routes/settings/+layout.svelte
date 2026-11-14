@@ -12,6 +12,7 @@
 		{ href: '/settings/users', label: 'Users', title: '', admin: true, org: true },
 		{ href: '/settings/llm', label: 'LLM API', title: '', admin: true },
 		{ href: '/settings/gmail', label: 'Gmail', title: '', admin: true },
+		{ href: '/settings/mail', label: 'Mail', title: 'Proton Mail Bridge or another IMAP mailbox', admin: true },
 		{ href: '/settings/backups', label: 'Backups', title: '', admin: true, org: true },
 		{ href: '/settings/import-export', label: 'Import & export', title: '', admin: false },
 		{ href: '/settings/modules', label: 'Modules', title: '', admin: true },

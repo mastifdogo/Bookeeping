@@ -112,6 +112,7 @@ export default async function register(ctx) {
 | `dashboard.*` | Notifications and to-dos on Ledger's dashboard, below. |
 | `settings.*` | `get()`, `set(values)`, `onChange(fn)` for the manifest's settings, below. |
 | `llm.*` | The shared AI provider (Ledger ≥ 0.10.0): `status()`, `complete()`, `json()`, below. |
+| `mail.*` | The shared mailbox of any kind, IMAP/SMTP (Proton Mail Bridge, …) or Gmail (Ledger ≥ 0.19.0): `status()`, `search()`, `message()`, `attachment()`, `raw()`, `send()`, below. Prefer it to `gmail.*`. |
 | `gmail.*` | The shared Gmail account (Ledger ≥ 0.10.0): `status()`, `search()`, `message()`, `attachment()`, `raw()`, `send()`, below. |
 | `search.provide(fn)` | Adds results to Ledger's search bar (Ledger ≥ 0.10.0), below. |
 | `files.*` | Hand files (statements, bills, receipts, transactions) to other modules and receive them (Ledger ≥ 0.11.0), below. |
@@ -365,6 +366,28 @@ POST from the UI, passing `req.user`); users can edit or reject it.
 Background jobs and `onReceive` handlers may call the AI and store
 suggestions, but never act on them. No "auto-approve" setting.
 
+### ctx.mail (Ledger ≥ 0.19.0)
+
+**Use this for mail, not `ctx.gmail`, and never your own IMAP, SMTP or
+OAuth.** It is whichever mailbox the admin connected: the IMAP/SMTP account
+under Settings → Mail (Proton Mail via Proton Mail Bridge, or any other) if
+there is one, else Gmail. The admin allows each module to read and,
+separately, to send.
+
+```js
+const st = await ctx.mail.status(); // { connected, kind: "imap" | "gmail" | null, account, canRead, canSend }
+const { messages } = await ctx.mail.search({ from?, to?, subject?, text?, since?: "YYYY-MM-DD", before?: "YYYY-MM-DD", max?: 25 }); // newest first, max ≤ 100
+// messages: [{ id, date (ISO), from, to, subject, snippet }]  (snippet "" over IMAP; no Gmail query syntax, labels or threads)
+const m = await ctx.mail.message(id);   // { …, cc, text, html, attachments: [{ attachmentId, filename, mimeType, size }] }
+const buf = await ctx.mail.attachment(m.id, m.attachments[0].attachmentId); // Buffer
+const raw = await ctx.mail.raw(id);      // Buffer (RFC 822)
+await ctx.mail.send({ to, cc?, bcc?, replyTo?, subject, text?, html?, attachments?: [{ filename, contentType?, content: Buffer }] }); // → { id }
+```
+
+Ids are opaque and tied to the mailbox in use; a stored id can answer 404
+later (the mailbox changed or was renumbered): handle it. Reading never marks
+mail read. Errors: 409 not set up, 403 not allowed, 404, 422, 502.
+
 ### ctx.gmail (Ledger ≥ 0.10.0)
 
 **Never implement OAuth, IMAP or an Apps Script bridge for Gmail.** The admin
@@ -568,7 +591,7 @@ database.
 
 ## 8. Checklist for your answer
 
-- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`; `">=0.13.2"` for `ctx.storage` or `ctx.imports`), with a drawn `nav.icon` that fits the module
+- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.9.1"` (`">=0.19.0"` for `ctx.mail`; `">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`; `">=0.13.2"` for `ctx.storage` or `ctx.imports`), with a drawn `nav.icon` that fits the module
 - [ ] background jobs that touch the books run through `ctx.orgs.forEach` so every organization gets them
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → LLM API / Gmail

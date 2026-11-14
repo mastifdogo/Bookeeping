@@ -22,6 +22,7 @@ import { moduleValues, saveSettings, type SettingValue } from "./module-settings
 import type { SearchProvider } from "./search.ts";
 import { connectionReady, llmComplete, pickConnection, PROVIDER_INFO, readLlmConfig, type LlmRequest } from "./llm.ts";
 import { gmailFor } from "./gmail.ts";
+import { mailFor } from "./mail.ts";
 import { filesFor, type FileSummary } from "./module-files.ts";
 import { storageFor } from "./module-storage.ts";
 import { callImport, checkImportSpec, type ImportRow, type ImportSpec } from "./module-import.ts";
@@ -210,6 +211,12 @@ function makeContext(app: App, m: LoadedModule) {
 		},
 		/** Gmail, connected under Settings → Gmail (an admin must allow reading and sending per module). */
 		gmail: gmailFor(app, id),
+		/**
+		 * The shared mailbox, whatever kind it is: the IMAP/SMTP account under
+		 * Settings → Mail (Proton Mail Bridge or any other) when one is set
+		 * up, else Gmail. status, search, message, raw, attachment, send.
+		 */
+		mail: mailFor(app, id),
 		/**
 		 * Files for and from other modules (statements, bills, receipts,
 		 * transaction lists), without posting anything. Receive them by

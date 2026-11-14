@@ -15,7 +15,7 @@ import { today } from "../src/date.ts";
 import { postItem } from "../src/dashboard.ts";
 import { fetchDriveBackup, orgBackupDir, readBackupStatus, readConfig, readOrgConfig, runBackup } from "../src/backup.ts";
 import { fakeGoogle } from "./fake-google.ts";
-import { fakeAi, fakeGmail } from "./fake-services.ts";
+import { fakeAi, fakeGmail, fakeMail } from "./fake-services.ts";
 
 type Line = { account_code: string; debit_cents: number; credit_cents: number; memo?: string };
 const dr = (code: string, cents: number): Line => ({ account_code: code, debit_cents: cents, credit_cents: 0 });
@@ -1544,6 +1544,126 @@ test("LLM API settings from before 0.18.2: openai meant any compatible server", 
 	assert.deepEqual((await call("GET", "/integrations/llm")).json().config.connections.map((c: any) => c.provider), ["compatible", "openai"]);
 });
 
+test("A mailbox over IMAP and SMTP (Proton Mail Bridge) shared with modules", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	const pdf = Buffer.from("%PDF-1.4 fake");
+	const bill = (from: string, subject: string) =>
+		Buffer.from(
+			[
+				`From: ${from}`,
+				"To: me@proton.me",
+				`Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
+				"Date: Tue, 03 Mar 2026 10:00:00 -0500",
+				"MIME-Version: 1.0",
+				'Content-Type: multipart/mixed; boundary="outer"',
+				"",
+				"--outer",
+				"Content-Type: text/plain; charset=utf-8",
+				"",
+				"Amount due: $85.50",
+				"--outer",
+				'Content-Type: application/pdf; name="bill.pdf"',
+				"Content-Disposition: attachment; filename=\"bill.pdf\"",
+				"Content-Transfer-Encoding: base64",
+				"",
+				pdf.toString("base64"),
+				"--outer--",
+				"",
+			].join("\r\n"),
+		);
+	const mail = await fakeMail(t, new Map([[4, bill("Rogers <billing@rogers.example>", "Your bill")], [9, bill("=?UTF-8?Q?Hydro-Qu=C3=A9bec?= <factures@hydro.example>", "Votre facture — mars")]]));
+	await loadModules(t, app, {
+		bills: `export default function (ctx) {
+			ctx.route("GET", "/status", () => ctx.mail.status());
+			ctx.route("POST", "/search", (req) => ctx.mail.search(req.body));
+			ctx.route("GET", "/message/:id", (req) => ctx.mail.message(req.params.id));
+			ctx.route("GET", "/pdf/:id", async (req) => ({ bytes: (await ctx.mail.attachment(req.params.id, "0")).toString("latin1"), raw: (await ctx.mail.raw(req.params.id)).length }));
+			ctx.route("POST", "/send", (req) => ctx.mail.send(req.body));
+		}`,
+	});
+	await mkdir(app.integrations.dir, { mode: 0o700 });
+
+	// Nothing set up: no mailbox of either kind.
+	assert.deepEqual((await call("GET", "/m/bills/status")).json(), { connected: false, kind: null, account: "", canRead: false, canSend: false });
+	let r = await call("GET", "/integrations/mail");
+	expectStatus(r, 200);
+	assert.equal(r.json().config.connected, false);
+	const proton = r.json().config.presets.find((p: any) => p.id === "proton").values;
+	assert.deepEqual([proton.imap_host, proton.imap_security, proton.trust_certificate], ["127.0.0.1", "starttls", true]);
+
+	for (const bad of [{ imap_port: 0 }, { imap_host: "bad host" }, { account: "not-an-address" }, { imap_security: "ssl" }, { allow_read: ["Bad Id"] }, { nope: 1 }]) {
+		expectStatus(await call("PUT", "/integrations/mail", bad), 422);
+	}
+	const settings = { account: "me@proton.me", from_name: "Books", username: "me@proton.me", password: "wrong", imap_host: "127.0.0.1", imap_port: mail.imapPort, imap_security: "none", smtp_host: "127.0.0.1", smtp_port: mail.smtpPort, smtp_security: "none" };
+	r = await call("PUT", "/integrations/mail", settings);
+	expectStatus(r, 200);
+	assert.equal(r.json().config.connected, true);
+	assert.equal(r.json().config.has_password, true);
+	assert.equal(JSON.stringify(r.json()).includes("wrong"), false); // the password never leaves the server
+	// The test signs in both ways and says what the server said.
+	r = await call("POST", "/integrations/mail/test");
+	assert.equal(r.json().imap.ok, false);
+	assert.match(r.json().imap.message, /refused the login/);
+	assert.match(r.json().smtp.message, /refused the login.*535/);
+	// A saved password isn't sent to another server.
+	expectStatus(await call("PUT", "/integrations/mail", { imap_host: "elsewhere.example" }), 422);
+	await call("PUT", "/integrations/mail", { password: "bridge-pass" });
+	r = await call("POST", "/integrations/mail/test");
+	assert.deepEqual(r.json(), { imap: { ok: true, message: "Signed in; 2 messages in INBOX." }, smtp: { ok: true, message: "Signed in; ready to send." } });
+
+	// Modules need permission, separately for reading and sending.
+	r = await call("POST", "/m/bills/search", {});
+	expectStatus(r, 403);
+	assert.match(r.json().error.message, /Settings → Mail/);
+	await call("PUT", "/integrations/mail", { allow_read: ["bills"] });
+	assert.deepEqual((await call("GET", "/m/bills/status")).json(), { connected: true, kind: "imap", account: "me@proton.me", canRead: true, canSend: false });
+	r = await call("POST", "/m/bills/search", {});
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().messages.map((m: any) => [m.id, m.from, m.subject]), [
+		["7.9", "Hydro-Québec <factures@hydro.example>", "Votre facture — mars"],
+		["7.4", "Rogers <billing@rogers.example>", "Your bill"],
+	]);
+	assert.equal(r.json().messages[0].date, "2026-03-03T15:00:00.000Z");
+	r = await call("POST", "/m/bills/search", { from: "rogers", since: "2026-01-01", max: 5 });
+	assert.deepEqual(r.json().messages.map((m: any) => m.id), ["7.4"]);
+	assert.match(mail.imapLog.at(-3)!, /UID SEARCH FROM "rogers" SINCE 1-Jan-2026$/);
+	// Text that isn't ASCII goes as a literal.
+	r = await call("POST", "/m/bills/search", { from: "Québec" });
+	assert.deepEqual(r.json().messages.map((m: any) => m.id), ["7.9"]);
+	assert.match(mail.imapLog.at(-3)!, /UID SEARCH CHARSET UTF-8 FROM Québec$/);
+	expectStatus(await call("POST", "/m/bills/search", { since: "soon" }), 422);
+	expectStatus(await call("POST", "/m/bills/search", { label: "x" }), 422);
+
+	r = await call("GET", "/m/bills/message/7.4");
+	expectStatus(r, 200);
+	assert.equal(r.json().text, "Amount due: $85.50");
+	assert.deepEqual(r.json().attachments, [{ attachmentId: "0", filename: "bill.pdf", mimeType: "application/pdf", size: pdf.length }]);
+	assert.equal((await call("GET", "/m/bills/pdf/7.4")).json().bytes, pdf.toString("latin1"));
+	expectStatus(await call("GET", "/m/bills/message/7.5"), 404);
+	expectStatus(await call("GET", "/m/bills/message/8.4"), 404); // the mailbox was rebuilt since
+	expectStatus(await call("GET", "/m/bills/message/abc"), 422);
+	assert.equal(mail.imapLog.some((l) => /SELECT|STORE/.test(l)), false, "the mailbox is only ever read");
+
+	// Sending.
+	const letter = { to: "Ann <ann@example.com>", bcc: "audit@example.com", subject: "Invoice 12", text: "Hello.\n.dot line\n", attachments: [{ filename: "inv.pdf", contentType: "application/pdf", content: "%PDF" }] };
+	expectStatus(await call("POST", "/m/bills/send", letter), 403);
+	await call("PUT", "/integrations/mail", { allow_send: ["bills"] });
+	expectStatus(await call("POST", "/m/bills/send", { ...letter, to: "not an address" }), 422);
+	r = await call("POST", "/m/bills/send", letter);
+	expectStatus(r, 200);
+	assert.match(r.json().id, /^[0-9a-f]{32}@proton\.me$/);
+	const sent = mail.sent.at(-1)!;
+	assert.deepEqual([sent.from, sent.to], ["me@proton.me", ["ann@example.com", "audit@example.com"]]);
+	assert.match(sent.data, /^From: "Books" <me@proton\.me>\r\nDate: [^\r]+ \+0000\r\nMessage-ID: <[0-9a-f]{32}@proton\.me>\r\nTo: Ann <ann@example\.com>\r\nSubject: Invoice 12\r\n/);
+	assert.equal(/^Bcc:/m.test(sent.data), false, "blind copies aren't named in the message");
+	assert.match(sent.data, /filename="inv\.pdf"/);
+	r = await call("POST", "/m/bills/send", { to: "nobody@example.com", subject: "x", text: "y" });
+	expectStatus(r, 502);
+	assert.match(r.json().error.message, /recipient nobody@example\.com.*550/);
+});
+
 test("Gmail shared with modules", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;
@@ -1555,6 +1675,7 @@ test("Gmail shared with modules", async (t) => {
 		bills: `export default function (ctx) {
 			ctx.route("GET", "/status", () => ctx.gmail.status());
 			ctx.route("GET", "/bills", () => ctx.gmail.search("bill newer_than:30d", { max: 10 }));
+			ctx.route("GET", "/any-mailbox", async () => ({ status: await ctx.mail.status(), found: await ctx.mail.search({ text: "bill", since: "2026-03-02" }) }));
 			ctx.route("GET", "/msg/:id", async (req) => {
 				const m = await ctx.gmail.message(req.params.id);
 				const pdf = await ctx.gmail.attachment(m.id, m.attachments[0].attachmentId);
@@ -1621,6 +1742,12 @@ test("Gmail shared with modules", async (t) => {
 		["m2", "Hydro <bills@hydro.example>", "Your bill m2"],
 	]);
 	assert.equal(r.json().nextPageToken, "p2");
+	// ctx.mail reads the same Gmail account when no IMAP mailbox is set up.
+	r = await call("GET", "/m/bills/any-mailbox");
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().status.kind, r.json().status.canRead], ["gmail", true]);
+	assert.deepEqual(r.json().found.messages.map((m: any) => m.id), ["m1", "m2"]);
+	assert.deepEqual(Object.keys(r.json().found.messages[0]), ["id", "date", "from", "to", "subject", "snippet"]);
 	r = await call("GET", "/m/bills/msg/m1");
 	assert.deepEqual([r.json().text, r.json().html, r.json().attachments[0].filename, r.json().pdf], ["Amount due: $42.00", "<p>Amount due</p>", "bill.pdf", "%PDF"]);
 	assert.match(r.json().raw, /Amount due: \$42.00/);
