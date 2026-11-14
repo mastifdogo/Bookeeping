@@ -44,6 +44,14 @@ export async function fakeAi(t: TestContext): Promise<FakeAi> {
 			return json(res, 200, { model: body.model, stop_reason: "end_turn", content: [{ type: "text", text: answer }], usage: { input_tokens: 12, output_tokens: 3 } });
 		}
 		if (req.url === "/api/chat") return json(res, 200, { model: body.model, message: { role: "assistant", content: answer }, prompt_eval_count: 7, eval_count: 2 });
+		if (req.url?.startsWith("/v1/models")) return json(res, 200, { data: [{ id: "models/model-b" }, { id: "model-a" }] });
+		if (req.url === "/api/tags") return json(res, 200, { models: [{ name: "qwen2.5vl:7b" }] });
+		// A server that knows neither max_tokens nor JSON schemas.
+		if (req.url === "/picky/v1/chat/completions") {
+			if (body.max_tokens !== undefined) return json(res, 400, { error: { message: "Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead." } });
+			if (body.response_format?.type === "json_schema") return json(res, 400, { error: { message: "response_format.type must be text or json_object" } });
+			return json(res, 200, { model: body.model, choices: [{ finish_reason: body.max_completion_tokens < 5 ? "length" : "stop", message: { content: answer } }], usage: { prompt_tokens: 5, completion_tokens: 1 } });
+		}
 		if (req.url === "/v1/chat/completions") return json(res, 200, { model: body.model, choices: [{ message: { content: answer } }], usage: { prompt_tokens: 5, completion_tokens: 1 } });
 		json(res, 404, { error: "not found" });
 	});

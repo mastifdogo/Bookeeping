@@ -92,6 +92,15 @@ Decide, and state briefly to the user:
   yet. Pictures (receipts, photos) go in `images: [{ media_type, data }]`
   (Ledger 0.11.2): they reach the connection set up for images, which may be
   a different model than the one for text; check `status().images.configured`.
+- **No provider in particular**: the admin can put any LLM provider behind
+  `ctx.llm` (Ledger 0.19.0: Anthropic, OpenAI, Gemini, OpenRouter, Mistral,
+  Groq, Ollama, any OpenAI-compatible server). Never branch on
+  `status().provider` or a model name, and keep provider and model names out
+  of prompts, UI text and READMEs ("the AI", not a brand). Go by
+  `status().configured`, `images.configured` and `readsPdf`; when `readsPdf`
+  is false, PDFs in `documents` aren't sent, so put their text in the
+  prompt. Validate what `json()` returns: not every server enforces the
+  schema.
 - **AI only proposes; a person approves**: anything an LLM decides
   (`ctx.llm` output) must be approved by a human before it takes effect:
   posting or reversing entries, sending mail, changing or deleting records,

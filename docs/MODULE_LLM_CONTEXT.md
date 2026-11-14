@@ -323,9 +323,16 @@ const api = (path, opts = {}) =>
 ### ctx.llm (Ledger ≥ 0.10.0)
 
 **Never call an AI API yourself and never ask for an AI API key in your
-settings.** The admin sets up LLM connections (Claude, Ollama or an
-OpenAI-compatible server) under Settings → LLM API and ticks which modules
-may use them; keys never reach modules. Since Ledger 0.11.2 there can be
+settings.** The admin sets up LLM connections under Settings → LLM API and
+ticks which modules may use them; keys never reach modules. A connection can
+be any provider (Ledger ≥ 0.19.0: Anthropic, OpenAI, Gemini, OpenRouter,
+Mistral, Groq, Ollama, any OpenAI-compatible server), so **stay
+provider-neutral**: never branch on `status().provider` or a model name,
+keep provider names out of prompts and UI text, and go by `configured`,
+`images.configured` and `readsPdf` (false: PDFs in `documents` are not
+sent, so include their text in the prompt). `json()` returns parsed JSON
+from every provider but not every server enforces the schema: validate
+`data`. Since Ledger 0.11.2 there can be
 several connections: one for text and one for images and documents (e.g. a
 local vision model). Requests with `images` or `documents` go to the
 connection for images, others to the one for text; `connection: "<id>"`

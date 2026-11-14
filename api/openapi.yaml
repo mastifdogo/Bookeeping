@@ -1580,7 +1580,7 @@ paths:
                     properties:
                       id: { type: string, pattern: '^[a-z][a-z0-9-]{0,31}$' }
                       name: { type: string }
-                      provider: { type: string, enum: [anthropic, ollama, openai] }
+                      provider: { type: string, enum: [anthropic, openai, gemini, openrouter, mistral, groq, ollama, compatible] }
                       model: { type: string }
                       base_url: { type: string }
                       api_key: { type: string, nullable: true }
@@ -1613,6 +1613,36 @@ paths:
           content:
             application/json:
               schema: { type: object, required: [text, model, duration_ms], properties: { text: { type: string }, model: { type: string }, duration_ms: { type: integer } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /integrations/llm/models:
+    post:
+      tags: [Integrations]
+      operationId: listLlmModels
+      summary: The models a provider offers (admin)
+      description: |
+        For a saved connection (`connection`), or one being filled in
+        (`provider`, `base_url`, `api_key`). With `connection` and no
+        `api_key`, the saved key is used if provider and server address are
+        the saved ones.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                connection: { type: string }
+                provider: { type: string }
+                base_url: { type: string }
+                api_key: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, required: [models], properties: { models: { type: array, items: { type: string } } } }
         default: { $ref: '#/components/responses/Error' }
 
   /integrations/gmail:
@@ -3226,7 +3256,7 @@ components:
         available: { type: boolean }
         config:
           type: object
-          required: [connections, allow_modules, configured, images_configured, providers, uses, defaults]
+          required: [connections, allow_modules, configured, images_configured, providers, provider_info, uses, defaults]
           properties:
             connections:
               type: array
@@ -3236,7 +3266,7 @@ components:
                 properties:
                   id: { type: string }
                   name: { type: string }
-                  provider: { type: string, enum: [anthropic, ollama, openai] }
+                  provider: { type: string, enum: [anthropic, openai, gemini, openrouter, mistral, groq, ollama, compatible] }
                   model: { type: string }
                   base_url: { type: string }
                   has_api_key: { type: boolean }
@@ -3248,6 +3278,21 @@ components:
             configured: { type: boolean, description: Something answers text requests }
             images_configured: { type: boolean, description: Something answers requests with images or documents }
             providers: { type: array, items: { type: string } }
+            provider_info:
+              description: What Ledger knows about each provider, in the order to offer them
+              type: array
+              items:
+                type: object
+                required: [id, label, protocol, base_url, model, needs_key, effort, pdf]
+                properties:
+                  id: { type: string }
+                  label: { type: string }
+                  protocol: { type: string, enum: [anthropic, openai, ollama], description: The wire protocol it speaks }
+                  base_url: { type: string, description: Used when a connection gives no server address }
+                  model: { type: string, description: 'Used when a connection names no model ("" = one must be picked)' }
+                  needs_key: { type: boolean }
+                  effort: { type: boolean, description: The effort setting applies }
+                  pdf: { type: boolean, description: PDFs are sent to the model as files }
             uses: { type: array, items: { type: string } }
             defaults:
               type: object

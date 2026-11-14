@@ -222,10 +222,20 @@ await ctx.dashboard.list({ kind: "todo", open: true }); // your module's items
 
 ## AI (`ctx.llm`)
 
-An admin sets up LLM connections under **Settings → LLM API**: Claude
-(Anthropic API), Ollama, or any OpenAI-compatible server, and ticks the
+An admin sets up LLM connections under **Settings → LLM API** and ticks the
 modules allowed to use them. Modules never see the API keys. Every call is
 logged per module and connection.
+
+Any provider can sit behind a connection (Ledger 0.19.0): Anthropic, OpenAI,
+Google Gemini, OpenRouter, Mistral, Groq, Ollama, or any other
+OpenAI-compatible server, hosted or local. **Write modules for no provider in
+particular**: the same `complete()` and `json()` calls work with all of
+them, so don't branch on `status().provider` or on model names, don't put
+provider-specific wording in prompts, and decide by what `status()` says is
+possible (`configured`, `images.configured`, `readsPdf`). `json()` gives
+parsed JSON from every provider: where a server can't enforce a schema,
+Ledger asks for a JSON object with the schema in the prompt, so still check
+the values you get.
 
 Since Ledger 0.11.2 there can be several connections, each used for text,
 for images and documents, or both: for example Claude for text and a local
@@ -251,7 +261,8 @@ const { data } = await ctx.llm.json({
 	schema: { type: "object", properties: { picks: { type: "array", items: { type: "object", properties: { id: { type: "string" }, account_code: { type: "string" } }, required: ["id", "account_code"] } } }, required: ["picks"] },
 });
 
-// A conversation, and PDFs (read by Claude; others get the text only)
+// A conversation, and PDFs (sent as files where status().readsPdf is true; other providers get the text only,
+// so put the document's extracted text in the prompt when it is false)
 await ctx.llm.complete({ messages: [{ role: "user", content: "…" }, { role: "assistant", content: "…" }, { role: "user", content: "…" }] });
 await ctx.llm.json({ prompt: "Read this bill", schema, documents: [{ media_type: "application/pdf", data: base64, name: "bill.pdf" }] });
 

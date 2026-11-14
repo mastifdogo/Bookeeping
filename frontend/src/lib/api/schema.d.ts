@@ -1082,6 +1082,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/integrations/llm/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The models a provider offers (admin)
+         * @description For a saved connection (`connection`), or one being filled in
+         *     (`provider`, `base_url`, `api_key`). With `connection` and no
+         *     `api_key`, the saved key is used if provider and server address are
+         *     the saved ones.
+         */
+        post: operations["listLlmModels"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/integrations/gmail": {
         parameters: {
             query?: never;
@@ -2431,7 +2454,7 @@ export interface components {
                     id: string;
                     name: string;
                     /** @enum {string} */
-                    provider: "anthropic" | "ollama" | "openai";
+                    provider: "anthropic" | "openai" | "gemini" | "openrouter" | "mistral" | "groq" | "ollama" | "compatible";
                     model: string;
                     base_url: string;
                     has_api_key: boolean;
@@ -2447,6 +2470,25 @@ export interface components {
                 /** @description Something answers requests with images or documents */
                 images_configured: boolean;
                 providers: string[];
+                /** @description What Ledger knows about each provider, in the order to offer them */
+                provider_info: {
+                    id: string;
+                    label: string;
+                    /**
+                     * @description The wire protocol it speaks
+                     * @enum {string}
+                     */
+                    protocol: "anthropic" | "openai" | "ollama";
+                    /** @description Used when a connection gives no server address */
+                    base_url: string;
+                    /** @description Used when a connection names no model ("" = one must be picked) */
+                    model: string;
+                    needs_key: boolean;
+                    /** @description The effort setting applies */
+                    effort: boolean;
+                    /** @description PDFs are sent to the model as files */
+                    pdf: boolean;
+                }[];
                 uses: string[];
                 defaults: {
                     [key: string]: {
@@ -4427,7 +4469,7 @@ export interface operations {
                         id: string;
                         name: string;
                         /** @enum {string} */
-                        provider: "anthropic" | "ollama" | "openai";
+                        provider: "anthropic" | "openai" | "gemini" | "openrouter" | "mistral" | "groq" | "ollama" | "compatible";
                         model?: string;
                         base_url?: string;
                         api_key?: string | null;
@@ -4479,6 +4521,38 @@ export interface operations {
                         text: string;
                         model: string;
                         duration_ms: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listLlmModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    connection?: string;
+                    provider?: string;
+                    base_url?: string;
+                    api_key?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        models: string[];
                     };
                 };
             };

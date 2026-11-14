@@ -20,7 +20,7 @@ import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { createEntity, ensureEntity, findEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
 import { moduleValues, saveSettings, type SettingValue } from "./module-settings.ts";
 import type { SearchProvider } from "./search.ts";
-import { connectionReady, llmComplete, pickConnection, readLlmConfig, type LlmRequest } from "./llm.ts";
+import { connectionReady, llmComplete, pickConnection, PROVIDER_INFO, readLlmConfig, type LlmRequest } from "./llm.ts";
 import { gmailFor } from "./gmail.ts";
 import { filesFor, type FileSummary } from "./module-files.ts";
 import { storageFor } from "./module-storage.ts";
@@ -198,7 +198,7 @@ function makeContext(app: App, m: LoadedModule) {
 					provider: text?.provider ?? null,
 					model: text?.model || null,
 					images: { configured: images !== null, provider: images?.provider ?? null, model: images?.model || null },
-					readsPdf: images?.provider === "anthropic",
+					readsPdf: images !== null && PROVIDER_INFO[images.provider].pdf,
 					connections: c.connections.filter(connectionReady).map((x) => ({ id: x.id, name: x.name, uses: [...x.uses], provider: x.provider, model: x.model })),
 				};
 			},

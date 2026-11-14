@@ -1454,19 +1454,57 @@ test("LLM API connections shared with modules", async (t) => {
 	assert.deepEqual(status.connections.map((x: any) => x.id), ["main", "vision"]);
 
 	// OpenAI-compatible servers get pictures as data URLs.
-	await call("PUT", "/integrations/llm", { connections: [claudeNoKey, { id: "vision", name: "LM Studio", provider: "openai", model: "local-vl", base_url: ai.base + "/v1", uses: ["images"] }] });
+	await call("PUT", "/integrations/llm", { connections: [claudeNoKey, { id: "vision", name: "LM Studio", provider: "compatible", model: "local-vl", base_url: ai.base + "/v1", uses: ["images"] }] });
 	r = await call("POST", "/m/sorter/look", { q: "compatible?" });
 	expectStatus(r, 200);
 	last = ai.requests.at(-1)!;
 	assert.equal(last.path, "/v1/chat/completions");
 	assert.equal(last.body.messages.at(-1).content[1].image_url.url, "data:image/png;base64,iVBORw0KGgo=");
+	assert.equal(last.body.max_tokens, 16000);
+
+	// Every provider is a row of the same table: the settings page gets it from the server.
+	r = await call("GET", "/integrations/llm");
+	const infos = r.json().config.provider_info;
+	assert.deepEqual(infos.map((p: any) => p.id), r.json().config.providers);
+	assert.deepEqual(infos.filter((p: any) => p.protocol === "openai").map((p: any) => p.id), ["openai", "gemini", "openrouter", "mistral", "groq", "compatible"]);
+	// The models a provider offers: for a saved connection (with its saved key), or one being filled in.
+	r = await call("POST", "/integrations/llm/models", { connection: "main" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().models, ["model-a", "model-b"]);
+	assert.equal(ai.requests.at(-1)!.headers["x-api-key"], "sk-test");
+	// The saved key isn't sent to a different server than the one it was saved for.
+	expectStatus(await call("POST", "/integrations/llm/models", { connection: "main", provider: "anthropic", base_url: ai.base + "/elsewhere" }), 409);
+	assert.deepEqual((await call("POST", "/integrations/llm/models", { provider: "ollama", base_url: ai.base })).json().models, ["qwen2.5vl:7b"]);
+	expectStatus(await call("POST", "/integrations/llm/models", { provider: "openai", base_url: ai.base + "/v1" }), 409); // needs a key
+	expectStatus(await call("POST", "/integrations/llm/models", { provider: "gpt" }), 422);
+
+	// A hosted provider needs its key before it counts as ready.
+	r = await call("PUT", "/integrations/llm", { connections: [{ id: "gpt", name: "OpenAI", provider: "openai", model: "some-model", base_url: ai.base + "/picky/v1", uses: ["text"] }], allow_modules: ["sorter"] });
+	assert.equal(r.json().config.configured, false);
+	r = await call("PUT", "/integrations/llm", { connections: [{ id: "gpt", name: "OpenAI", provider: "openai", model: "some-model", base_url: ai.base + "/picky/v1", api_key: "sk-o", uses: ["text"] }] });
+	assert.equal(r.json().config.configured, true);
+	// A server that doesn't take JSON schemas is asked for a JSON object, with the schema in the prompt.
+	r = await call("POST", "/m/sorter/ask", { q: "strict?" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().data, { answer: "strict?" });
+	last = ai.requests.at(-1)!;
+	assert.equal(last.headers.authorization, "Bearer sk-o");
+	assert.equal(last.body.max_completion_tokens, 16000);
+	assert.deepEqual(last.body.response_format, { type: "json_object" });
+	assert.match(last.body.messages[0].content, /^Be brief\.\n\nAnswer with one JSON object[^]*"answer"/);
+	// One that names the length cap differently gets the name it knows.
+	await call("PUT", "/integrations/llm", { connections: [{ id: "gpt", name: "Picky", provider: "compatible", model: "some-model", base_url: ai.base + "/picky/v1", uses: ["text"] }] });
+	expectStatus(await call("POST", "/m/sorter/chat", { q: "tokens?" }), 200);
+	assert.equal(ai.requests.at(-1)!.body.max_completion_tokens, 16000);
+	assert.equal(ai.requests.at(-2)!.body.max_tokens, 16000);
+	await call("PUT", "/integrations/llm", { connections: [claudeNoKey, { id: "vision", name: "LM Studio", provider: "compatible", model: "local-vl", base_url: ai.base + "/v1", uses: ["images"] }] });
 
 	// Usage per module and connection.
 	r = await call("GET", "/integrations/llm");
 	const usage = Object.fromEntries(r.json().usage.last_30_days.map((u: any) => [u.source, [u.calls, u.failed]]));
 	// Only calls that reach a provider are logged (not the refused ones).
-	assert.deepEqual(usage, { sorter: [6, 0], ledger: [2, 0] });
-	assert.equal(r.json().usage.recent[0].connection, "vision");
+	assert.deepEqual(usage, { sorter: [8, 0], ledger: [2, 0] });
+	assert.equal(r.json().usage.recent[0].connection, "gpt");
 });
 
 test("LLM API settings from Ledger 0.11.1 become one connection", async (t) => {
@@ -1485,6 +1523,25 @@ test("LLM API settings from Ledger 0.11.1 become one connection", async (t) => {
 	);
 	assert.deepEqual(cfg.allow_modules, ["x-mod"]);
 	assert.equal(cfg.images_configured, true);
+});
+
+test("LLM API settings from before 0.19.0: openai meant any compatible server", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await mkdir(app.integrations.dir, { mode: 0o700 });
+	const file = path.join(app.integrations.dir, "llm.json");
+	const local = { id: "main", name: "LM Studio", provider: "openai", model: "local", base_url: "", api_key: "", effort: "low", max_tokens: 16000, uses: ["text"] };
+	await writeFile(file, JSON.stringify({ connections: [local], allow_modules: [] }));
+	let r = await call("GET", "/integrations/llm");
+	assert.equal(r.json().config.connections[0].provider, "compatible");
+	assert.equal(r.json().config.configured, true);
+	// Saved in the new format, "openai" is OpenAI itself and stays so.
+	const { api_key: _k, ...conn } = local;
+	r = await call("PUT", "/integrations/llm", { connections: [{ ...conn, provider: "compatible" }, { ...conn, id: "gpt", api_key: "sk-o", uses: [] }] });
+	expectStatus(r, 200);
+	assert.equal(JSON.parse(await readFile(file, "utf8")).version, 2);
+	assert.deepEqual((await call("GET", "/integrations/llm")).json().config.connections.map((c: any) => c.provider), ["compatible", "openai"]);
 });
 
 test("Gmail shared with modules", async (t) => {

@@ -55,7 +55,7 @@ import { importJournalEntries } from "./import.ts";
 import { getDashboard, setItemClosed } from "./dashboard.ts";
 import { search } from "./search.ts";
 import { integrationsAvailable, requireIntegrations, writeIntegration } from "./integrations.ts";
-import { applyLlmChange, llmComplete, llmUsage, pickConnection, publicLlmConfig, readLlmConfig } from "./llm.ts";
+import { applyLlmChange, listModels, llmComplete, llmUsage, pickConnection, publicLlmConfig, readLlmConfig, type Provider } from "./llm.ts";
 import { analyzeUpload, cleanMapping, getUpload, MIGRATION_KINDS, planFor, runMigration } from "./migrate.ts";
 import { analyzeImport, cleanImportMapping, getImportUpload, publicPlan } from "./module-import.ts";
 import { applyGmailChange, codeFromPaste, finishAuth, publicGmailConfig, readGmailConfig, REDIRECT_URI, revoke as revokeGmail, startAuth } from "./gmail.ts";
@@ -1255,8 +1255,27 @@ async function handleTestLlm(c: Ctx): Promise<void> {
 		}
 		return (o ?? {}) as { connection?: string };
 	});
-	const r = await llmComplete(c.app, "ledger", { prompt: "Reply with the single word OK.", maxTokens: 50, connection: body?.connection });
+	const r = await llmComplete(c.app, "ledger", { prompt: "Reply with the single word OK.", maxTokens: 500, connection: body?.connection });
 	writeJSON(c.res, 200, { text: r.text.trim().slice(0, 200), model: r.model, duration_ms: Date.now() - started });
+}
+
+/** The models a provider offers: a saved connection's ({connection}), or one being filled in ({provider, base_url, api_key}; a saved key is used when none is typed). */
+async function handleLlmModels(c: Ctx): Promise<void> {
+	await requireIntegrations(c.app.integrations.dir);
+	const body = await decodeBody(c, true, (v) => {
+		const o = (v && typeof v === "object" && !Array.isArray(v) ? plainJson(v) : null) as Record<string, unknown> | null;
+		if (!o || Object.entries(o).some(([k, x]) => !["connection", "provider", "base_url", "api_key"].includes(k) || typeof x !== "string")) {
+			throw new DecodeError('expected {"connection": "<id>"} and/or {"provider", "base_url", "api_key"}');
+		}
+		return o as { connection?: string; provider?: string; base_url?: string; api_key?: string };
+	});
+	const saved = (await readLlmConfig(c.app.integrations.dir)).connections.find((x) => x.id === body.connection);
+	const provider = (body.provider ?? saved?.provider ?? "") as Provider;
+	const base = body.base_url ?? saved?.base_url ?? "";
+	if (base !== "" && !/^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(base)) throw new HttpError(422, "The server address must be an http(s) URL.");
+	// A saved key only goes to the server it was saved for.
+	const sameServer = saved && saved.provider === provider && saved.base_url === base.replace(/\/+$/, "");
+	writeJSON(c.res, 200, { models: await listModels({ provider, base_url: base, api_key: body.api_key || (sameServer ? saved.api_key : "") }) });
 }
 
 async function gmailInfo(c: Ctx) {
@@ -1952,6 +1971,7 @@ const ROUTES: Route[] = [
 	route("GET", "/integrations/llm", "server", handleGetLlm),
 	route("PUT", "/integrations/llm", "server", handlePutLlm),
 	route("POST", "/integrations/llm/test", "server", handleTestLlm),
+	route("POST", "/integrations/llm/models", "server", handleLlmModels),
 	route("GET", "/integrations/gmail", "server", handleGetGmail),
 	route("PUT", "/integrations/gmail", "server", handlePutGmail),
 	route("POST", "/integrations/gmail/start", "server", handleGmailStart),

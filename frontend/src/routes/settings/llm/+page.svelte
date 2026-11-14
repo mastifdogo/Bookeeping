@@ -5,19 +5,19 @@
 
 	let { data }: PageProps = $props();
 
-	const LABELS: Record<string, string> = {
-		anthropic: 'Claude (Anthropic API)',
-		ollama: 'Ollama (a model on your own computer or server)',
-		openai: 'OpenAI-compatible server (LM Studio, llama.cpp, vLLM…)'
-	};
-	const CLAUDE_MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5', 'claude-fable-5-1'];
 	const USE_LABELS: Record<string, string> = { text: 'Text', images: 'Images and documents' };
 
 	type Use = 'text' | 'images';
+	type Provider = LlmInfo['config']['connections'][number]['provider'];
+	/** What the server knows about a provider: its label, default address and model, whether it needs a key. */
+	const about = (p: string) => info.config.provider_info.find((x) => x.id === p);
+	/** Models each provider offers, fetched with "Find models" (by connection row). */
+	let models = $state<Record<number, string[]>>({});
+
 	type Conn = {
 		id: string;
 		name: string;
-		provider: 'anthropic' | 'ollama' | 'openai';
+		provider: Provider;
 		model: string;
 		base_url: string;
 		api_key: string;
@@ -71,7 +71,7 @@
 		conns.push({
 			id,
 			name: first ? 'Main' : 'Images',
-			provider: 'anthropic',
+			provider: conns[0]?.provider ?? info.config.provider_info[0]!.id as Provider,
 			model: '',
 			base_url: '',
 			api_key: '',
@@ -100,7 +100,16 @@
 	}
 
 	// Which connection answers each kind of request: the first ready one that lists it.
-	const answering = (u: Use) => conns.find((c) => c.uses.includes(u) && (c.provider === 'anthropic' ? c.has_api_key || c.api_key : c.model));
+	const answering = (u: Use) =>
+		conns.find((c) => c.uses.includes(u) && (!about(c.provider)?.needs_key || (c.has_api_key && !c.clear_key) || c.api_key) && (c.model || about(c.provider)?.model));
+
+	const findModels = (c: Conn, i: number) =>
+		act(async () => {
+			const body = { ...(c.fresh ? {} : { connection: c.id }), provider: c.provider, base_url: c.base_url.trim(), ...(c.api_key ? { api_key: c.api_key } : {}) };
+			const r = unwrap(await api().POST('/integrations/llm/models', { body }));
+			models[i] = r.models;
+			notice = r.models.length === 0 ? 'The provider listed no models.' : `${r.models.length} models found: pick one in the Model box.`;
+		});
 
 	const save = (e?: SubmitEvent) => {
 		e?.preventDefault();
@@ -145,7 +154,8 @@
 {#if notice}<div class="notice ok">{notice}</div>{/if}
 
 <p class="muted" style="margin-top:0">
-	LLM connections for Ledger and its modules (sorting transactions, reading bills and receipts, …). Keys stay on the server;
+	LLM connections for Ledger and its modules (sorting transactions, reading bills and receipts, …), from any provider: a
+	hosted service, or a model on your own computer. Keys stay on the server;
 	modules call the models through Ledger, and only the ones you allow below. Add a second connection to send pictures
 	and PDFs to a vision model while text goes elsewhere.
 </p>
@@ -176,7 +186,7 @@
 				</label>
 				<label style="flex:2; min-width:14rem">
 					Provider
-					<select bind:value={c.provider}>{#each info.config.providers as p (p)}<option value={p}>{LABELS[p] ?? p}</option>{/each}</select>
+					<select bind:value={c.provider} onchange={() => delete models[i]}>{#each info.config.provider_info as p (p.id)}<option value={p.id}>{p.label}</option>{/each}</select>
 				</label>
 			</div>
 			<fieldset class="uses">
@@ -188,26 +198,29 @@
 			<div class="row">
 				<label style="flex:1; min-width:14rem">
 					Model
-					<input bind:value={c.model} placeholder={info.config.defaults[c.provider]?.model || 'model name'} list="models-{i}" autocomplete="off" />
-					{#if c.provider === 'anthropic'}<datalist id="models-{i}">{#each CLAUDE_MODELS as m (m)}<option value={m}></option>{/each}</datalist>{/if}
+					<span class="with-button">
+						<input bind:value={c.model} placeholder={about(c.provider)?.model || 'model name'} list="models-{i}" autocomplete="off" />
+						<button type="button" disabled={busy} onclick={() => findModels(c, i)} title="Ask the provider which models it offers">Find models</button>
+					</span>
+					<datalist id="models-{i}">{#each models[i] ?? [] as m (m)}<option value={m}></option>{/each}</datalist>
 				</label>
 				<label style="flex:1; min-width:14rem">
 					Server address
-					<input bind:value={c.base_url} placeholder={info.config.defaults[c.provider]?.base_url} />
+					<input bind:value={c.base_url} placeholder={about(c.provider)?.base_url} />
 				</label>
 			</div>
 			<div class="row">
 				<label style="flex:1; min-width:14rem">
-					{c.provider === 'anthropic' ? 'API key' : 'API key (if the server needs one)'}
+					{about(c.provider)?.needs_key ? 'API key' : 'API key (if the server needs one)'}
 					<input
 						type="password"
 						bind:value={c.api_key}
 						disabled={c.clear_key}
 						autocomplete="new-password"
-						placeholder={c.has_api_key ? '•••••••• (saved; type to replace)' : c.provider === 'anthropic' ? 'sk-ant-…' : ''}
+						placeholder={c.has_api_key ? '•••••••• (saved; type to replace)' : ''}
 					/>
 				</label>
-				{#if c.provider === 'anthropic'}
+				{#if about(c.provider)?.effort}
 					<label>
 						Effort
 						<select bind:value={c.effort}><option value="low">Low (fast, cheap)</option><option value="medium">Medium</option><option value="high">High</option></select>
@@ -216,8 +229,11 @@
 				<label>Max tokens per call <input type="number" min="256" max="64000" step="1" bind:value={c.max_tokens} style="width:8rem" /></label>
 			</div>
 			{#if c.has_api_key}<label class="inline small"><input type="checkbox" bind:checked={c.clear_key} /> Remove the saved key</label>{/if}
-			{#if c.uses.includes('images') && c.provider !== 'anthropic'}
-				<p class="muted small">Pick a model that can see pictures (e.g. qwen2.5vl, llava, gemma3). PDFs are read by Claude only.</p>
+			{#if c.uses.includes('images')}
+				<p class="muted small">
+					Pick a model that can see pictures.
+					{about(c.provider)?.pdf ? 'PDFs are sent to it as files.' : 'This provider gets only the text of a request with PDFs, not the files.'}
+				</p>
 			{/if}
 		</section>
 	{/each}
@@ -285,6 +301,17 @@
 	}
 	.spacer {
 		flex: 1;
+	}
+	.with-button {
+		display: flex;
+		gap: 0.4rem;
+	}
+	.with-button input {
+		flex: 1;
+		min-width: 0;
+	}
+	.with-button button {
+		white-space: nowrap;
 	}
 	button.icon {
 		padding: 0.2rem 0.5rem;
