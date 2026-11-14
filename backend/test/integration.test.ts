@@ -1525,7 +1525,7 @@ test("LLM API settings from Ledger 0.11.1 become one connection", async (t) => {
 	assert.equal(cfg.images_configured, true);
 });
 
-test("LLM API settings from before 0.19.0: openai meant any compatible server", async (t) => {
+test("LLM API settings from before 0.18.2: openai meant any compatible server", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;
 	const { app, call } = ta;

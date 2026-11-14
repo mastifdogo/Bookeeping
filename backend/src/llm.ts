@@ -51,7 +51,7 @@ export const PROVIDER_INFO: Record<Provider, ProviderInfo> = {
 
 export const DEFAULTS = Object.fromEntries(PROVIDERS.map((p) => [p, { model: PROVIDER_INFO[p].model, base_url: PROVIDER_INFO[p].base_url }])) as Record<Provider, { model: string; base_url: string }>;
 
-/** llm.json's format: 2 since Ledger 0.19.0 (before, "openai" meant any compatible server). */
+/** llm.json's format: 2 since Ledger 0.18.2 (before, "openai" meant any compatible server). */
 const CONFIG_VERSION = 2;
 
 /** Models that accept server-side refusal fallbacks. */
@@ -92,7 +92,7 @@ export const LLM_DEFAULTS: LlmConfig = { connections: [], allow_modules: [] };
 /**
  * Reads Settings → LLM API. Older files are read as they were meant: the
  * single-provider file of Ledger ≤ 0.11.1 becomes one connection used for
- * everything, and "openai" from before 0.19.0 (any OpenAI-compatible server)
+ * everything, and "openai" from before 0.18.2 (any OpenAI-compatible server)
  * becomes "compatible".
  */
 export async function readLlmConfig(dir: string): Promise<LlmConfig> {

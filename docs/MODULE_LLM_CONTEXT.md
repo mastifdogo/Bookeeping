@@ -325,7 +325,7 @@ const api = (path, opts = {}) =>
 **Never call an AI API yourself and never ask for an AI API key in your
 settings.** The admin sets up LLM connections under Settings → LLM API and
 ticks which modules may use them; keys never reach modules. A connection can
-be any provider (Ledger ≥ 0.19.0: Anthropic, OpenAI, Gemini, OpenRouter,
+be any provider (Ledger ≥ 0.18.2: Anthropic, OpenAI, Gemini, OpenRouter,
 Mistral, Groq, Ollama, any OpenAI-compatible server), so **stay
 provider-neutral**: never branch on `status().provider` or a model name,
 keep provider names out of prompts and UI text, and go by `configured`,

@@ -226,7 +226,7 @@ An admin sets up LLM connections under **Settings → LLM API** and ticks the
 modules allowed to use them. Modules never see the API keys. Every call is
 logged per module and connection.
 
-Any provider can sit behind a connection (Ledger 0.19.0): Anthropic, OpenAI,
+Any provider can sit behind a connection (Ledger 0.18.2): Anthropic, OpenAI,
 Google Gemini, OpenRouter, Mistral, Groq, Ollama, or any other
 OpenAI-compatible server, hosted or local. **Write modules for no provider in
 particular**: the same `complete()` and `json()` calls work with all of

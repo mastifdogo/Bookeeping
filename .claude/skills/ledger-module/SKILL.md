@@ -93,7 +93,7 @@ Decide, and state briefly to the user:
   (Ledger 0.11.2): they reach the connection set up for images, which may be
   a different model than the one for text; check `status().images.configured`.
 - **No provider in particular**: the admin can put any LLM provider behind
-  `ctx.llm` (Ledger 0.19.0: Anthropic, OpenAI, Gemini, OpenRouter, Mistral,
+  `ctx.llm` (Ledger 0.18.2: Anthropic, OpenAI, Gemini, OpenRouter, Mistral,
   Groq, Ollama, any OpenAI-compatible server). Never branch on
   `status().provider` or a model name, and keep provider and model names out
   of prompts, UI text and READMEs ("the AI", not a brand). Go by
