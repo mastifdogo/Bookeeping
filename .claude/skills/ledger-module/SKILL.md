@@ -25,7 +25,8 @@ If the user just tags or runs this skill and says nothing else, the job is:
    module against it and against the rules in this skill: newer `ctx`
    features it should use (for example the shared entity list instead of
    its own customer or vendor table, account tags, sub-accounts,
-   `ctx.storage`, `ctx.imports`), things Ledger now does differently, and
+   `ctx.storage`, `ctx.imports`, and the PDF store `ctx.documents` for
+   every PDF the module receives, makes or reads), things Ledger now does differently, and
    anything the checker reports.
 3. Make those changes, raise `"ledger"` in the manifest to the oldest
    Ledger version that has everything the module now uses, and bump the
@@ -94,15 +95,28 @@ Decide, and state briefly to the user:
   yet. Pictures (receipts, photos) go in `images: [{ media_type, data }]`
   (Ledger 0.11.2): they reach the connection set up for images, which may be
   a different model than the one for text; check `status().images.configured`.
-- **Documents**: PDFs of receipts, statements and invoices live in
-  Ledger's Documents store (`ctx.documents`, Ledger 0.19.0). A module that
-  reads them lists the ones it hasn't handled
-  (`list({ kind, unmarked: true })`), reads the bytes, and `mark`s each when
-  done; a module that makes a PDF people should keep (an invoice, a report)
-  `add`s it there with `origin: "created"`. A statement carries its bank
-  or card account (`account_code`, Ledger 0.19.1): set it when the module
-  knows it, filter by it, never guess it. No upload box of the module's
-  own for these, and no private-only copy in `ctx.storage`.
+- **PDFs go in Ledger's PDF store, `ctx.documents` (Ledger 0.19.0). Always.**
+  Every PDF a module takes in or produces is filed there, not anywhere else:
+  - A PDF the module **receives** (uploaded in its page, fetched from mail,
+    downloaded from a bank or supplier): `ctx.documents.add({ kind,
+    filename, data, origin: "imported", ... }, req.user)`.
+  - A PDF the module **makes** (an invoice, a statement of account, a
+    report): `ctx.documents.add({ ..., origin: "created" }, req.user)`.
+  - A PDF the module **needs** (a receipt, statement or invoice to read):
+    take it from the store with `list({ kind, unmarked: true })` and
+    `read(id)`, then `mark(id)` when done. Link to it in the module's page
+    with `ctx.documents.url(id)`.
+  Keep only the document's `id` in the module's tables. Do **not** store
+  PDFs in `ctx.storage`, in `bytea` columns, in `ctx.files`, or behind an
+  upload box of the module's own that bypasses the store; if the module
+  offers an upload, it files the PDF with `add` and works from the returned
+  id. The same goes for PNG and JPEG scans of receipts, statements and
+  invoices. A statement carries its bank or card account (`account_code`,
+  Ledger 0.19.1): set it when the module knows it, filter by it, never
+  guess it. `add` answers 409 when the file is already in the store: use
+  the document it names instead of failing. An older module that keeps PDFs
+  elsewhere is moved over: a migration or one-off job files each existing
+  PDF with `add` and stores the id.
 - **No provider in particular**: the admin can put any LLM provider behind
   `ctx.llm` (Ledger 0.18.2: Anthropic, OpenAI, Gemini, OpenRouter, Mistral,
   Groq, Ollama, any OpenAI-compatible server). Never branch on
@@ -211,10 +225,12 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
   understands them, and never keep secrets in tables (use `secret` settings).
   Binary (`bytea`) columns appear there only as `(binary, <n> bytes; in the
   .dump)` (Ledger 0.13.1): keep a file's name, type, size and dates in
-  readable columns next to its bytes. Better: keep documents (generated
-  PDFs, scans, attachments) with `ctx.storage` (Ledger 0.13.2): files on
-  the share per organization, carried in every backup under
-  `files/<module>/`, opened by users at `ctx.storage.url(path)`.
+  readable columns next to its bytes. Better: keep files out of tables.
+  PDFs (and scans of receipts, statements and invoices) go in the PDF store,
+  `ctx.documents`, as above; other files the module keeps (CSV exports,
+  spreadsheets, attachments that aren't PDFs) go in `ctx.storage` (Ledger
+  0.13.2): files on the share per organization, carried in every backup
+  under `files/<module>/`, opened by users at `ctx.storage.url(path)`.
 - **Restores** (Ledger 0.14.0): each organization backs up and restores its
   own books. A restore replaces the module's tables and its `ctx.storage`
   files with the backup's (a restore from an uploaded dump file, 0.14.2,

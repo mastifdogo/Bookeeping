@@ -286,9 +286,13 @@ Each has a kind (`receipt`, `statement`, `invoice`, `other`), an origin
 (`entity_id`) and note. The files are ordinary files on the data share,
 filed as `<kind>s/<year>/<id>-<name>.pdf`, and every backup carries them.
 
-**A module that reads receipts, statements or invoices takes them from here,
-and a module that makes a PDF people should keep puts it here**, instead of
-keeping its own upload box or a private copy in `ctx.storage`.
+**Every PDF a module receives, makes or reads goes through this store.** A
+PDF it takes in (uploaded in its page, fetched from mail, downloaded) is
+filed with `add` and `origin: "imported"`; one it makes (an invoice, a
+report) with `origin: "created"`; one it needs is read from here. The module
+keeps only the document's id. PDFs don't go in `ctx.storage`, `bytea`
+columns or `ctx.files`, or behind an upload box that bypasses the store;
+`ctx.storage` remains for files that aren't PDFs.
 
 ```js
 // Documents this module hasn't dealt with yet, newest first
@@ -470,19 +474,21 @@ can offer bank and card accounts first.
 
 ## Files the module keeps (`ctx.storage`)
 
-Ledger 0.13.2 and later. A module stores its own files (PDFs it generates,
-scans, attachments) with `ctx.storage`. They live on the data share next to
+Ledger 0.13.2 and later. A module stores its own files that aren't PDFs
+(CSV exports, spreadsheets, other attachments) with `ctx.storage`; PDFs, and
+scans of receipts, statements and invoices, go in the PDF store
+(`ctx.documents`, above). They live on the data share next to
 the CSV files, separately per organization and module, and every backup
 folder carries them under `files/<module>/…`, so prefer this over `bytea`
-columns for documents.
+columns.
 
 ```js
-const f = await ctx.storage.put("invoices/2026/INV-31.pdf", pdfBuffer); // Buffer, Uint8Array or base64, up to 100 MB
+const f = await ctx.storage.put("exports/2026/sales-march.csv", csvBuffer); // Buffer, Uint8Array or base64, up to 100 MB
 // { path, size, content_type, modified_at, url }
-const file = await ctx.storage.get("invoices/2026/INV-31.pdf"); // plus data (a Buffer); null if missing
+const file = await ctx.storage.get("exports/2026/sales-march.csv"); // plus data (a Buffer); null if missing
 const all = await ctx.storage.list("invoices");                 // files under a folder, sorted by path
-await ctx.storage.remove("invoices/2026/INV-31.pdf");           // false if there was none
-const href = ctx.storage.url("invoices/2026/INV-31.pdf");       // for links, <iframe> and <img> in your page
+await ctx.storage.remove("exports/2026/sales-march.csv");           // false if there was none
+const href = ctx.storage.url("exports/2026/sales-march.csv");       // for links, <iframe> and <img> in your page
 ```
 
 Paths are folders and a file name (letters, digits, spaces and `. _ - ( )`,

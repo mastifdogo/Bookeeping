@@ -369,9 +369,15 @@ suggestions, but never act on them. No "auto-approve" setting.
 
 ### ctx.documents (Ledger ≥ 0.19.0)
 
-**Receipts, statements and invoices as PDFs come from here, and PDFs a
-module makes for people to keep go here.** Don't build a separate upload box
-for them, and don't keep the only copy in `ctx.storage`. People manage them
+**This is the PDF store: every PDF a module receives, makes or reads goes
+through it.** A PDF taken in (uploaded in the module's page, fetched from
+mail, downloaded) is filed with `add(..., origin: "imported")`; a PDF the
+module makes (invoice, report) with `add(..., origin: "created")`; a PDF it
+needs is read from here. Keep only the document `id` in module tables. Never
+put PDFs in `ctx.storage`, `bytea` columns or `ctx.files`, and never behind
+an upload box that bypasses the store. The same holds for PNG/JPEG scans of
+receipts, statements and invoices. On 409 from `add` (already in the store)
+use the document the error names. People manage them
 on Ledger's Documents page; files are on the data share and in backups.
 
 ```js
@@ -510,19 +516,20 @@ hand each other entity lists as files of kind `entity` (`ctx.files`, with
 
 ### ctx.storage (Ledger ≥ 0.13.2)
 
-A module's own files: PDFs it generates (invoices), scans, attachments it
-keeps. They live on the data share next to the CSV files, per organization
+A module's own files that are **not PDFs**: CSV exports, spreadsheets, other
+attachments it keeps. (PDFs, and scans of receipts, statements and invoices,
+go in the PDF store, `ctx.documents`.) They live on the data share next to the CSV files, per organization
 and module (not in the database), and every backup folder carries them under
-`files/<module>/…`. Use it instead of `bytea` columns for documents.
+`files/<module>/…`. Use it instead of `bytea` columns.
 
 ```js
-const f = await ctx.storage.put("invoices/2026/INV-31.pdf", pdfBuffer); // Buffer, Uint8Array or base64; ≤ 100 MB; replaces
+const f = await ctx.storage.put("exports/2026/sales-march.csv", csvBuffer); // Buffer, Uint8Array or base64; ≤ 100 MB; replaces
 // f: { path, size, content_type, modified_at, url }
-const got = await ctx.storage.get("invoices/2026/INV-31.pdf"); // → { ...f, data: Buffer } or null
+const got = await ctx.storage.get("exports/2026/sales-march.csv"); // → { ...f, data: Buffer } or null
 await ctx.storage.stat(path);                 // → f or null
-await ctx.storage.list("invoices/2026");      // → [f] under a folder ("" = all), sorted by path
+await ctx.storage.list("exports/2026");      // → [f] under a folder ("" = all), sorted by path
 await ctx.storage.remove(path);               // → boolean; empty folders go too
-ctx.storage.url(path);                        // "/api/v1/modules/<id>/storage/invoices/2026/INV-31.pdf"
+ctx.storage.url(path);                        // "/api/v1/modules/<id>/storage/exports/2026/sales-march.csv"
 ```
 
 Paths are up to 8 `/`-separated parts of letters, digits, spaces and
@@ -629,7 +636,7 @@ database.
 - [ ] entries posted from module records carry `links` (Ledger ≥ 0.11.2)
 - [ ] every action an LLM proposes waits for a person to approve it (pending suggestions in the UI; nothing posted, sent or changed on AI output alone)
 - [ ] searchable records exposed with `ctx.search.provide`
-- [ ] documents the module keeps (PDFs, scans) in `ctx.storage`, not `bytea` columns; records people bring from elsewhere importable with `ctx.imports.provide`
+- [ ] every PDF (and scan of a receipt, statement or invoice) the module receives or makes is filed in the PDF store with `ctx.documents.add`, with only its id kept in module tables; other files in `ctx.storage`, not `bytea` columns; records people bring from elsewhere importable with `ctx.imports.provide`
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries
 - [ ] survives a restore (Ledger ≥ 0.14.0): an organization's restore replaces the module's tables and `ctx.storage` files with a backup's (an uploaded dump: tables only) but keeps its current settings and the server's users; handle a row whose stored file, setting or external record no longer matches
