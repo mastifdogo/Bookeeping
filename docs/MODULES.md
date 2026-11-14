@@ -278,7 +278,7 @@ it. `maxTokens` is capped by the admin's limit.
 
 ## Mail (`ctx.mail`)
 
-The server's shared mailbox, whatever kind it is (Ledger 0.19.0): the
+The server's shared mailbox, whatever kind it is (Ledger 0.18.3): the
 IMAP/SMTP account an admin set up under **Settings → Mail** (Proton Mail
 through Proton Mail Bridge, or any other mailbox) when there is one, else the
 Gmail account under **Settings → Gmail**. **New modules use `ctx.mail`**, so

@@ -84,7 +84,7 @@ Decide, and state briefly to the user:
   they're used, never cache one copy for the whole server.
 - **Dashboard**: what deserves a notification or a to-do (`ctx.dashboard`).
 - **AI, Gmail, search**: AI goes through `ctx.llm` (the admin's LLM
-  connections, never the module's own key), mail through `ctx.mail` (Ledger 0.19.0: whichever mailbox the admin
+  connections, never the module's own key), mail through `ctx.mail` (Ledger 0.18.3: whichever mailbox the admin
   connected, Proton Mail Bridge or another IMAP/SMTP account, else Gmail;
   use `ctx.gmail` only for Gmail-only features; never
   your own OAuth/IMAP), and records worth finding through
