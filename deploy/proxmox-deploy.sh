@@ -7,8 +7,7 @@
 #   ./deploy/proxmox-deploy.sh --upgrade --ctid 120
 #
 # A fresh deployment:
-#   1. downloads the latest Debian 13 template (if needed; Debian 12 where
-#      the Proxmox host doesn't offer 13)
+#   1. downloads the latest Debian 13 template (if needed)
 #   2. creates an unprivileged container (nesting=1) with the CSV directory
 #      bind-mounted at /app/csv_data, and maps its ownership to the service UID
 #   3. installs PostgreSQL, Ledger, the systemd units and nightly backups
@@ -336,13 +335,9 @@ confirm "Continue?"
 if [ -z "$TEMPLATE" ]; then
 	log "finding the latest Debian 13 template"
 	run pveam update >/dev/null || warn "pveam update failed; using the cached template list"
-	for deb in 13 12; do
-		TEMPLATE=$(pveam available --section system 2>/dev/null | awk '{print $2}' |
-			grep -E "^debian-$deb-standard_.*_amd64\.tar\.(zst|gz|xz)\$" | sort -V | tail -n1 || true)
-		[ -z "$TEMPLATE" ] || break
-		[ "$deb" = 12 ] || warn "this Proxmox host offers no Debian 13 template; using Debian 12"
-	done
-	[ -n "$TEMPLATE" ] || die "no debian-13-standard or debian-12-standard template found (pass --template)"
+	TEMPLATE=$(pveam available --section system 2>/dev/null | awk '{print $2}' |
+		grep -E '^debian-13-standard_.*_amd64\.tar\.(zst|gz|xz)$' | sort -V | tail -n1 || true)
+	[ -n "$TEMPLATE" ] || die "no debian-13-standard template found (update Proxmox, or pass --template)"
 fi
 if pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -q "vztmpl/$TEMPLATE"; then
 	log "template $TEMPLATE already downloaded"

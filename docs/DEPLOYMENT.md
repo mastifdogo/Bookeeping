@@ -447,8 +447,10 @@ backups work.
 ### PostgreSQL 18
 
 Since Ledger 0.18.0 the container template is Debian 13 and it and the
-deploy script install PostgreSQL 18. A server set up earlier stays on the
-Debian it has (Ledger runs on Debian 12 and 13 alike) and runs an older
+deploy script install PostgreSQL 18. **Debian 12 is deprecated**: a server
+set up earlier keeps working on it for now, but new work targets Debian 13
+only, so plan to move it (set up a new container from the current template
+and restore a backup into it). Such a server also runs an older
 PostgreSQL (15 as Debian 12 shipped it, or 16 from Ledger 0.17); its
 database is **moved to 18 by the updater**, once, a few minutes after it has
 updated to 0.18.0 or later:
