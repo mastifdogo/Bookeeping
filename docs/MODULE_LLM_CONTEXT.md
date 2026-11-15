@@ -408,7 +408,9 @@ ctx.documents.onAdded((doc) => { … });       // a person or another module add
 
 `account_code` (Ledger ≥ 0.19.1) is the bank, card or loan account a
 statement belongs to: set it when adding a statement, filter by it
-(`"none"` = not set yet), and never guess it. PDF, PNG and JPEG only (checked by content), ≤ 50 MB. The same file twice
+(`"none"` = not set yet), and never guess it. `reconciled` (Ledger ≥ 0.19.4)
+is true on a statement an account has been reconciled against; filter with
+`list({ reconciled: false })` for statements still to do. PDF, PNG and JPEG only (checked by content), ≤ 50 MB. The same file twice
 answers 409. Runs in the request's organization; in background jobs use
 `ctx.orgs.forEach`. In `onAdded` only queue work; a person approves what
 comes of it.

@@ -340,7 +340,9 @@ A bank or card statement belongs to its account (Ledger 0.19.1): pass
 `account_code` to `add` or `update` when the module knows it, and ask for one
 account's statements with `list({ kind: "statement", account_code })`.
 Reconciling an account against a statement sets it too, and a statement of
-one account can't be used to reconcile another.
+one account can't be used to reconcile another. Once that reconciliation is
+finished the statement reads `reconciled: true` (Ledger 0.19.4);
+`list({ kind: "statement", reconciled: false })` gives the ones still to do.
 
 Only PDFs and PNG or JPEG pictures are accepted (told from the file's
 content), up to 50 MB, and the same file can't be added twice: `add` answers

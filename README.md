@@ -399,7 +399,9 @@ reconciliation with that date and balance and ticks the transactions that
 match a statement line (same amount, close in date). Each ticked line shows
 the statement line it was paired with, and statement lines missing from the
 books are listed. The AI finishes nothing: you check the ticks against the
-statement and press Finish.
+statement and press Finish, which takes you back to the Reconcile page. A
+statement that has been reconciled against is tagged "reconciled" under
+Documents and is no longer offered when starting a reconciliation.
 
 ### Backups
 

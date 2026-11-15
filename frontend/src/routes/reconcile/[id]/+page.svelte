@@ -72,7 +72,12 @@
 		});
 	}
 
-	const finish = () => run(async () => unwrap(await api().POST('/reconciliations/{reconciliationId}/finish', path())));
+	// Finishing closes this window: back to the Reconcile page, which says what was finished.
+	const finish = () =>
+		run(async () => {
+			const done = unwrap(await api().POST('/reconciliations/{reconciliationId}/finish', path()));
+			await goto(`/reconcile?finished=${done.reconciliation.id}`);
+		});
 	const undo = () => run(async () => unwrap(await api().POST('/reconciliations/{reconciliationId}/undo', path())));
 	// --- The statement beside the lines -------------------------------------
 	let pickId = $state<number | null>(null);

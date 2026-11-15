@@ -2731,6 +2731,8 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
             url: string;
+            /** @description A statement an account has been reconciled against (the reconciliation is finished) */
+            reconciled: boolean;
             marks: {
                 module: string;
                 /** @enum {string} */
@@ -3879,6 +3881,8 @@ export interface operations {
                 entity_id?: number;
                 /** @description Documents of this account; "none" for those without one */
                 account_code?: string;
+                /** @description true: only statements already reconciled against; false: only those that are not */
+                reconciled?: boolean;
                 /** @description Words in the title, file name, note or entity name */
                 q?: string;
                 limit?: number;

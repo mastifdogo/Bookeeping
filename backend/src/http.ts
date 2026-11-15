@@ -1458,7 +1458,7 @@ async function handleListDocuments(c: Ctx): Promise<void> {
 		return Number(v);
 	};
 	const [list, folders] = await Promise.all([
-		listDocuments(c.app, { kind: pick<DocumentKind>("kind", DOCUMENT_KINDS), origin: pick<DocumentOrigin>("origin", DOCUMENT_ORIGINS), year: int("year"), entity_id: int("entity_id"), account_code: c.query.get("account_code"), q: c.query.get("q"), limit: int("limit"), offset: int("offset") }),
+		listDocuments(c.app, { kind: pick<DocumentKind>("kind", DOCUMENT_KINDS), origin: pick<DocumentOrigin>("origin", DOCUMENT_ORIGINS), year: int("year"), entity_id: int("entity_id"), account_code: c.query.get("account_code"), reconciled: c.query.get("reconciled") === "true" ? true : c.query.get("reconciled") === "false" ? false : null, q: c.query.get("q"), limit: int("limit"), offset: int("offset") }),
 		documentFolders(c.app),
 	]);
 	writeJSON(c.res, 200, { ...list, folders, max_bytes: MAX_DOCUMENT_BYTES });

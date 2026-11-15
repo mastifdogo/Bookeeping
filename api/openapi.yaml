@@ -898,6 +898,7 @@ paths:
         - { name: year, in: query, schema: { type: integer } }
         - { name: entity_id, in: query, schema: { type: integer } }
         - { name: account_code, in: query, schema: { type: string }, description: 'Documents of this account; "none" for those without one' }
+        - { name: reconciled, in: query, schema: { type: boolean }, description: 'true: only statements already reconciled against; false: only those that are not' }
         - { name: q, in: query, schema: { type: string }, description: 'Words in the title, file name, note or entity name' }
         - { name: limit, in: query, schema: { type: integer } }
         - { name: offset, in: query, schema: { type: integer } }
@@ -3626,7 +3627,7 @@ components:
       enum: [receipt, statement, invoice, other]
     Document:
       type: object
-      required: [id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url, marks]
+      required: [id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url, reconciled, marks]
       properties:
         id: { type: integer }
         kind: { $ref: '#/components/schemas/DocumentKind' }
@@ -3648,6 +3649,7 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         url: { type: string }
+        reconciled: { type: boolean, description: A statement an account has been reconciled against (the reconciliation is finished) }
         marks:
           type: array
           items:

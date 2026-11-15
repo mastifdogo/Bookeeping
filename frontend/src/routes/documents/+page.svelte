@@ -289,6 +289,7 @@
 									<td>
 										<a href={d.url} target="_blank" rel="noopener"><strong>{d.title}</strong></a>
 										{#if d.origin === 'created'}<span class="badge ok">made in Ledger</span>{/if}
+										{#if d.reconciled}<span class="badge ok" title="An account has been reconciled against this statement">reconciled</span>{/if}
 										<div class="muted small">
 											{d.path}{#if d.note} · {d.note}{/if}
 										</div>

@@ -63,6 +63,8 @@ export interface DocumentInfo {
 	updated_at: Date;
 	/** The address a logged-in user's browser opens it at. */
 	url: string;
+	/** A statement an account has been reconciled against (the reconciliation is finished). */
+	reconciled: boolean;
 	/** What modules did with it: [{ module, status, note }]. */
 	marks: { module: string; status: "done" | "skipped"; note: string }[];
 }
@@ -89,6 +91,8 @@ export interface DocumentFilter {
 	account_code?: string | null;
 	/** Words in the title, file name, note or entity name. */
 	q?: string | null;
+	/** true: only statements already reconciled against; false: only those that aren't. */
+	reconciled?: boolean | null;
 	/** Only documents this module hasn't marked yet. */
 	unmarkedBy?: string | null;
 	limit?: number;
@@ -99,6 +103,7 @@ const SELECT = `
 	SELECT d.id, d.kind, d.origin, d.source, d.title, d.filename, d.path, d.content_type, d.size_bytes, d.sha256,
 	       to_char(d.doc_date, 'YYYY-MM-DD') AS doc_date, d.entity_id, e.name AS entity_name, a.code AS account_code, a.name AS account_name, d.note, u.username AS added_by,
 	       d.created_at, d.updated_at,
+	       EXISTS (SELECT 1 FROM reconciliations rc WHERE rc.document_id = d.id AND rc.status = 'finished') AS reconciled,
 	       coalesce((SELECT jsonb_agg(jsonb_build_object('module', m.module, 'status', m.status, 'note', m.note) ORDER BY m.module)
 	                   FROM document_marks m WHERE m.document_id = d.id), '[]'::jsonb) AS marks
 	  FROM documents d
@@ -205,6 +210,9 @@ export async function listDocuments(app: App, f: DocumentFilter = {}): Promise<{
 	if (f.entity_id) add(`d.entity_id = ?`, f.entity_id);
 	if (f.account_code === "none") where.push(`d.account_id IS NULL`);
 	else if (f.account_code) add(`a.code = ?`, f.account_code);
+	if (f.reconciled === true || f.reconciled === false) {
+		where.push(`${f.reconciled ? "" : "NOT "}EXISTS (SELECT 1 FROM reconciliations rc WHERE rc.document_id = d.id AND rc.status = 'finished')`);
+	}
 	if (f.unmarkedBy) add(`NOT EXISTS (SELECT 1 FROM document_marks m WHERE m.document_id = d.id AND m.module = ?)`, f.unmarkedBy);
 	for (const word of (f.q ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 8)) {
 		add(`(d.title || ' ' || d.filename || ' ' || d.note || ' ' || coalesce(e.name, '') || ' ' || coalesce(a.code || ' ' || a.name, '')) ILIKE ?`, `%${word.replace(/[\\%_]/g, "\\$&")}%`);
@@ -366,7 +374,7 @@ export function documentsFor(app: App, self: string, actorOf: (u: unknown) => nu
 	};
 	return {
 		kinds: DOCUMENT_KINDS,
-		/** Documents, newest first: { kind, origin, source, year, entity_id, account_code, q, unmarked, limit, offset } → { data, total }. */
+		/** Documents, newest first: { kind, origin, source, year, entity_id, account_code, reconciled, q, unmarked, limit, offset } → { data, total }. */
 		list: (f: Omit<DocumentFilter, "unmarkedBy"> & { unmarked?: boolean } = {}) => {
 			const { unmarked, ...rest } = f ?? {};
 			return listDocuments(app, { ...rest, unmarkedBy: unmarked ? self : null });

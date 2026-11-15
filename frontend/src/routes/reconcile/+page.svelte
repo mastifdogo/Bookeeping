@@ -100,12 +100,21 @@
 			.sort((a, b) => b.statement_date.localeCompare(a.statement_date) || b.id - a.id)
 	);
 
+	// The reconciliation just finished, when this page was opened from it.
+	let justFinished = $derived(data.finished ? data.reconciliations.find((r) => r.id === data.finished && r.status === 'finished') : undefined);
+
 	const openRow = (e: MouseEvent, href: string) => {
 		if (!(e.target as HTMLElement).closest('a, button, input')) goto(href);
 	};
 </script>
 
 <h1>Reconcile</h1>
+{#if justFinished}
+	<div class="notice ok">
+		Reconciled <span class="mono">{justFinished.account_code}</span> {justFinished.account_name} to {describe(justFinished.statement_date)}, {justFinished.statement_date.slice(0, 4)}.
+		<a href="/reconcile/{justFinished.id}">Open it</a>
+	</div>
+{/if}
 <p class="muted" style="margin-top:0">
 	Match an account against a bank or card statement. Choose the statement's PDF and the AI reads its closing date,
 	balance and lines, then ticks the transactions that match, with the statement shown beside them for you to check. Or

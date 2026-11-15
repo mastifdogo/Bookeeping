@@ -1841,6 +1841,16 @@ test("Reconcile against a statement PDF the AI reads", async (t) => {
 	assert.deepEqual(d.reading.lines.map((l: any) => l.amount_cents), [8000, -3000]);
 	assert.deepEqual([d.reading.matched.length, d.difference_cents], [2, 0]);
 	assert.match(ai.requests.at(-1)!.body.messages.at(-1).content.at(-1).text, /a credit card or loan/);
+	// Until it is finished the statement isn't "reconciled"; afterwards it is, and can be left out of lists.
+	assert.equal((await call("GET", `/documents/${visa.id}`)).json().reconciled, false);
+	expectStatus(await call("POST", `/reconciliations/${d.reconciliation.id}/finish`), 200);
+	assert.equal((await call("GET", `/documents/${visa.id}`)).json().reconciled, true);
+	const names = async (q: string) => (await call("GET", `/documents?kind=statement&${q}`)).json().data.map((x: any) => x.title).sort();
+	assert.deepEqual(await names("reconciled=true"), ["visa"]);
+	assert.deepEqual(await names("reconciled=false"), ["march", "other"]);
+	// Undoing the reconciliation takes the tag off again.
+	expectStatus(await call("POST", `/reconciliations/${d.reconciliation.id}/undo`), 200);
+	assert.equal((await call("GET", `/documents/${visa.id}`)).json().reconciled, false);
 	expectStatus(await call("POST", `/reconciliations/${d.reconciliation.id}/finish`), 200);
 
 	// A document that isn't a statement starts nothing.

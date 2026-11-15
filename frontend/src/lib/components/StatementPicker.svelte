@@ -4,6 +4,7 @@
 	import { api, unwrap, type Document } from '#lib/api/client.ts';
 
 	// accountCode: only that account's statements are offered, plus those not yet given an account.
+	// Statements already reconciled against are left out: each is reconciled once.
 	let {
 		value = $bindable(null),
 		statements,
@@ -14,7 +15,7 @@
 
 	let added = $state<Document[]>([]);
 	let all = $derived(
-		[...added, ...statements.filter((s) => !added.some((a) => a.id === s.id))].filter((s) => !accountCode || s.account_code === null || s.account_code === accountCode)
+		[...added, ...statements.filter((s) => !added.some((a) => a.id === s.id))].filter((s) => !s.reconciled && (!accountCode || s.account_code === null || s.account_code === accountCode))
 	);
 	// A statement of another account doesn't stay chosen when the account changes.
 	$effect(() => {
