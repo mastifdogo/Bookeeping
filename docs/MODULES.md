@@ -276,6 +276,16 @@ no connection for that kind of request is set up, 403 when the module isn't allo
 provider fails, 422 when the model declines. The messages say where to fix
 it. `maxTokens` is capped by the admin's limit.
 
+## Entry amounts can change
+
+Since Ledger 0.19.5 a person can change the amounts of a posted entry on its
+page; the change is logged and the entry reads `amended: true`. Modules
+can't do this, but they see the result: an entry a module posted may no
+longer carry the amounts it posted. Where the figure matters (an invoice's
+balance, a bill marked paid), read it from the entry
+(`ctx.ledger.linkedEntries(ref)`) instead of trusting the module's own copy,
+and show a difference to the user rather than overwriting either side.
+
 ## Account codes can change
 
 Since Ledger 0.19.3 a person can give an account a new code. Journal lines

@@ -288,6 +288,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/journal-entries/{entryId}/amounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the amounts of a posted entry's lines; every change is logged
+         * @description Give the lines that change, each with its new debit or credit. The
+         *     entry must still balance in each currency. Refused (409) for an
+         *     entry that was reversed or is a reversal, and for a line ticked on a
+         *     reconciliation. Nothing else about a posted entry can change.
+         */
+        patch: operations["amendJournalEntry"];
+        trace?: never;
+    };
     "/journal-entries/{entryId}/reverse": {
         parameters: {
             query?: never;
@@ -1864,6 +1889,24 @@ export interface components {
             memo: string;
         };
         JournalEntry: {
+            /** @description Whether any of its amounts were changed after it was posted */
+            amended: boolean;
+            /** @description Every change made to its amounts, oldest first (only when one entry is fetched) */
+            changes?: {
+                id: number;
+                line_number: number;
+                account_code: string;
+                account_name: string;
+                currency: components["schemas"]["Currency"];
+                old_debit_cents: components["schemas"]["Cents"];
+                old_credit_cents: components["schemas"]["Cents"];
+                new_debit_cents: components["schemas"]["Cents"];
+                new_credit_cents: components["schemas"]["Cents"];
+                reason: string;
+                changed_by: string | null;
+                /** Format: date-time */
+                changed_at: string;
+            }[];
             /** @description The vendor or customer the entry is with */
             entity: {
                 id: number;
@@ -3390,6 +3433,42 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    amendJournalEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason?: string;
+                    lines: {
+                        line_number: number;
+                        debit_cents: components["schemas"]["Cents"];
+                        credit_cents: components["schemas"]["Cents"];
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

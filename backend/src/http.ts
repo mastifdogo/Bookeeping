@@ -29,6 +29,7 @@ import {
 	decodeLoginRequest,
 	decodePasswordChange,
 	decodeReverseRequest,
+	decodeEntryAmend,
 	decodeReconciliationCreate,
 	decodeReconciliationFromStatement,
 	decodeReconciliationUpdate,
@@ -49,7 +50,7 @@ import {
 	writeUpdateRepo,
 } from "./update.ts";
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listCurrencies, updateAccount } from "./accounts.ts";
-import { createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry, type EntryFilter } from "./ledger.ts";
+import { amendEntryAmounts, createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry, type EntryFilter } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { CSV_FILENAME_RE, MAX_FILE_BYTES, exportGeneralLedger, listCsvFiles, openCsvFile, saveUploadedCsv } from "./files.ts";
 import { importJournalEntries } from "./import.ts";
@@ -864,6 +865,13 @@ async function handleReverseJournalEntry(c: Ctx): Promise<void> {
 	const id = pathId(c, "entryId");
 	const input = await decodeBody(c, false, decodeReverseRequest);
 	writeJSON(c.res, 201, await reverseJournalEntry(c.app, id, input, c.user!.id));
+}
+
+/** New amounts for some of a posted entry's lines; each change is logged. */
+async function handleAmendJournalEntry(c: Ctx): Promise<void> {
+	const id = pathId(c, "entryId");
+	const input = await decodeBody(c, true, decodeEntryAmend);
+	writeJSON(c.res, 200, await amendEntryAmounts(c.app, id, input, c.user!.id));
 }
 
 async function handleTrialBalance(c: Ctx): Promise<void> {
@@ -2063,6 +2071,7 @@ const ROUTES: Route[] = [
 	route("POST", "/journal-entries", true, handleCreateJournalEntry),
 	route("GET", "/journal-entries/:entryId", true, handleGetJournalEntry),
 	route("POST", "/journal-entries/:entryId/reverse", true, handleReverseJournalEntry),
+	route("PATCH", "/journal-entries/:entryId/amounts", true, handleAmendJournalEntry),
 
 	route("GET", "/search", true, handleSearch),
 	route("GET", "/dashboard", true, handleGetDashboard),

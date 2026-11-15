@@ -15,6 +15,9 @@ GRANT USAGE ON SCHEMA public TO :"app_role";
 GRANT SELECT                          ON currencies                              TO :"app_role";
 GRANT SELECT, INSERT, UPDATE          ON accounts                                TO :"app_role";
 GRANT SELECT, INSERT                  ON journal_entries, transactions, csv_imports TO :"app_role";
+-- Only a posted line's amount can change, and the database logs each change (migration 019).
+GRANT UPDATE (amount)                 ON transactions                            TO :"app_role";
+GRANT SELECT, INSERT                  ON transaction_changes                     TO :"app_role";
 GRANT SELECT, INSERT, UPDATE          ON users                                   TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON sessions                                TO :"app_role";
 

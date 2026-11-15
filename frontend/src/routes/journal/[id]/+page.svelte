@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import Amount from '#lib/components/Amount.svelte';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, today, unwrap } from '#lib/api/client.ts';
+	import { centsToInput, parseAmount } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -15,6 +16,64 @@
 	let reverseDate = $state(today());
 	let busy = $state(false);
 	let error = $state<unknown>(null);
+
+	let canEdit = $derived(page.data.user != null && page.data.user.role !== 'viewer');
+
+	// Changing amounts: the same lines, new figures. Each change is logged below.
+	let amending = $state(false);
+	let draft = $state<Record<number, { debit: string; credit: string }>>({});
+	let reason = $state('');
+	function startAmend() {
+		error = null;
+		reversing = false;
+		draft = Object.fromEntries(e.lines.map((l) => [l.line_number, { debit: l.debit_cents ? centsToInput(l.debit_cents) : '', credit: l.credit_cents ? centsToInput(l.credit_cents) : '' }]));
+		reason = '';
+		amending = true;
+	}
+	const cents = (s: string) => (s.trim() === '' ? 0 : parseAmount(s));
+	// What each currency's debits and credits come to with the figures typed so far.
+	let draftTotals = $derived(
+		e.totals.map((t) => {
+			let debit = 0;
+			let credit = 0;
+			let bad = false;
+			for (const l of e.lines.filter((x) => x.currency === t.currency)) {
+				const d = cents(draft[l.line_number]?.debit ?? '');
+				const c = cents(draft[l.line_number]?.credit ?? '');
+				if (d === null || c === null) bad = true;
+				debit += d ?? 0;
+				credit += c ?? 0;
+			}
+			return { currency: t.currency, debit, credit, bad };
+		})
+	);
+	let changedLines = $derived(
+		e.lines
+			.map((l) => ({ line_number: l.line_number, debit_cents: cents(draft[l.line_number]?.debit ?? ''), credit_cents: cents(draft[l.line_number]?.credit ?? ''), was: l }))
+			.filter((x) => x.debit_cents !== x.was.debit_cents || x.credit_cents !== x.was.credit_cents)
+	);
+	let canSave = $derived(
+		amending && changedLines.length > 0 && draftTotals.every((t) => !t.bad && t.debit === t.credit) && changedLines.every((x) => x.debit_cents !== null && x.credit_cents !== null && (x.debit_cents > 0) !== (x.credit_cents > 0))
+	);
+	async function saveAmend(ev: SubmitEvent) {
+		ev.preventDefault();
+		busy = true;
+		error = null;
+		try {
+			unwrap(
+				await api().PATCH('/journal-entries/{entryId}/amounts', {
+					params: { path: { entryId: e.id } },
+					body: { lines: changedLines.map((x) => ({ line_number: x.line_number, debit_cents: x.debit_cents!, credit_cents: x.credit_cents! })), ...(reason.trim() ? { reason: reason.trim() } : {}) }
+				})
+			);
+			amending = false;
+			await invalidateAll();
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
 
 	async function reverse(ev: SubmitEvent) {
 		ev.preventDefault();
@@ -45,9 +104,11 @@
 	{#if e.reverses_id}<span class="badge">reversal of <a href="/journal/{e.reverses_id}">#{e.reverses_id}</a></span>{/if}
 	{#if e.reversed_by_id}<span class="badge warn">reversed by <a href="/journal/{e.reversed_by_id}">#{e.reversed_by_id}</a></span>{/if}
 	{#if e.import_id}<span class="badge">imported (batch {e.import_id})</span>{/if}
+	{#if e.amended}<span class="badge warn" title="Its amounts were changed after it was posted; see the changes below">amounts changed</span>{/if}
 	<span class="spacer"></span>
-	{#if !e.reverses_id && !e.reversed_by_id}
-		<button class="danger" onclick={() => (reversing = !reversing)}>Reverse…</button>
+	{#if !e.reverses_id && !e.reversed_by_id && canEdit}
+		<button onclick={() => (amending ? (amending = false) : startAmend())}>{amending ? 'Cancel' : 'Change amounts…'}</button>
+		<button class="danger" onclick={() => ((amending = false), (reversing = !reversing))}>Reverse…</button>
 	{/if}
 </div>
 
@@ -89,6 +150,24 @@
 	</div>
 {/if}
 
+<form onsubmit={saveAmend}>
+{#if amending}
+	<div class="card amend">
+		<p style="margin:0">
+			Type the new amounts below. Debits and credits must still be equal. The old and new figures, who changed them and when are kept with
+			this entry. {#if e.links.length > 0}<strong>A module posted this entry; its own record does not change.</strong>{/if}
+		</p>
+		<div class="toolbar" style="margin:0.6rem 0 0; align-items:flex-end">
+			<label style="flex:1; min-width:14rem">Why (optional) <input bind:value={reason} maxlength="500" placeholder="e.g. receipt total was 45.00" /></label>
+			{#each draftTotals as t (t.currency)}
+				<span class="small" class:off={t.bad || t.debit !== t.credit}>
+					{t.currency}: {#if t.bad}an amount isn't a number{:else if t.debit === t.credit}balanced{:else}out by <Amount cents={Math.abs(t.debit - t.credit)} />{/if}
+				</span>
+			{/each}
+			<button class="primary" disabled={busy || !canSave}>Save amounts</button>
+		</div>
+	</div>
+{/if}
 <div class="table-wrap">
 	<table>
 		<thead>
@@ -101,8 +180,13 @@
 					<td><a class="mono" href="/accounts/{encodeURIComponent(l.account_code)}">{l.account_code}</a> {l.account_name}</td>
 					<td>{l.memo}</td>
 					<td>{l.currency}</td>
-					<td class="num"><Amount cents={l.debit_cents} blankZero /></td>
-					<td class="num"><Amount cents={l.credit_cents} blankZero /></td>
+					{#if amending && draft[l.line_number]}
+						<td class="num"><input class="amt" inputmode="decimal" aria-label="Debit, line {l.line_number}" bind:value={draft[l.line_number]!.debit} oninput={() => draft[l.line_number]!.debit.trim() && (draft[l.line_number]!.credit = '')} /></td>
+						<td class="num"><input class="amt" inputmode="decimal" aria-label="Credit, line {l.line_number}" bind:value={draft[l.line_number]!.credit} oninput={() => draft[l.line_number]!.credit.trim() && (draft[l.line_number]!.debit = '')} /></td>
+					{:else}
+						<td class="num"><Amount cents={l.debit_cents} blankZero /></td>
+						<td class="num"><Amount cents={l.credit_cents} blankZero /></td>
+					{/if}
 				</tr>
 			{/each}
 		</tbody>
@@ -118,8 +202,40 @@
 		</tfoot>
 	</table>
 </div>
+</form>
+
+{#if e.changes && e.changes.length > 0}
+	<h2>Changes to amounts</h2>
+	<div class="table-wrap">
+		<table>
+			<thead>
+				<tr><th>When</th><th>By</th><th>Line</th><th>Account</th><th class="num">Was</th><th class="num">Now</th><th>Why</th></tr>
+			</thead>
+			<tbody>
+				{#each e.changes as c (c.id)}
+					<tr>
+						<td class="small">{new Date(c.changed_at).toLocaleString()}</td>
+						<td>{c.changed_by ?? '—'}</td>
+						<td class="muted">{c.line_number}</td>
+						<td><span class="mono">{c.account_code}</span> {c.account_name}</td>
+						<td class="num"><Amount cents={c.old_debit_cents || c.old_credit_cents} /> {c.old_debit_cents ? 'Dr' : 'Cr'}</td>
+						<td class="num"><Amount cents={c.new_debit_cents || c.new_credit_cents} /> {c.new_debit_cents ? 'Dr' : 'Cr'}</td>
+						<td>{c.reason}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+{/if}
 
 <style>
+	input.amt {
+		width: 8rem;
+		text-align: right;
+	}
+	.amend .off {
+		color: var(--danger);
+	}
 	.links ul {
 		list-style: none;
 		margin: 0.35rem 0 0;

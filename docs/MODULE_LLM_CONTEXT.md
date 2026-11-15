@@ -163,8 +163,11 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
   the parent's `total_balance_cents` instead of adding accounts yourself.
 - Journal entries must balance **per currency** (total debits = total
   credits in each currency), each line is either debit or credit (>0, not
-  both), accounts must exist and be active. Posted entries are **immutable**:
-  to undo, reverse. Modules can't edit or delete entries.
+  both), accounts must exist and be active. Modules can't edit or delete entries:
+  to undo, reverse. A **person** can change a posted entry's amounts
+  (Ledger ≥ 0.19.5; logged, entry marked `amended: true`), so never assume
+  an entry the module posted still carries the amounts it posted: read them
+  from the entry (`ctx.ledger.linkedEntries(ref)`), not from the module's copy.
 
 ### ctx.ledger
 

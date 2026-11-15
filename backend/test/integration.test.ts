@@ -1591,6 +1591,90 @@ test("An account's code can be changed, and modules keep pointing at the same ac
 	assert.equal((await call("GET", "/accounts/1200")).json().balance_cents, 0);
 });
 
+test("A posted entry's amounts can be changed, and every change is logged", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	await createAccount(ta, "6200", "Shipping", "expense", "CAD");
+	let r = await call("POST", "/journal-entries", entry("2026-04-02", "Paper and courier", dr("6100", 4000), dr("6200", 1000), cr("1000", 5000)));
+	expectStatus(r, 201);
+	const id = r.json().id;
+	assert.deepEqual([r.json().amended, r.json().changes], [false, []]);
+	const amend = (lines: unknown, reason?: string) => call("PATCH", `/journal-entries/${id}/amounts`, { lines, ...(reason === undefined ? {} : { reason }) });
+	const line = (n: number, debit: number, credit: number) => ({ line_number: n, debit_cents: debit, credit_cents: credit });
+
+	// It must still balance, name real lines, and actually change something.
+	for (const bad of [[line(1, 4500, 0)], [line(9, 1, 0)], [line(1, 4000, 0)], [line(1, 0, 0)], [line(1, 5, 5)], [line(1, -5, 0)], [line(1, 4500, 0), line(1, 4600, 0)], []]) {
+		expectStatus(await amend(bad), 422);
+	}
+	assert.equal((await call("GET", `/journal-entries/${id}`)).json().amended, false);
+
+	// The receipt said 45.00, not 40.00: two lines change together.
+	r = await amend([line(1, 4500, 0), line(3, 0, 5500)], "Receipt total was 45.00");
+	expectStatus(r, 200);
+	let e = r.json();
+	assert.deepEqual(e.lines.map((l: any) => [l.line_number, l.debit_cents, l.credit_cents]), [[1, 4500, 0], [2, 1000, 0], [3, 0, 5500]]);
+	assert.deepEqual(e.totals, [{ currency: "CAD", amount_cents: 5500 }]);
+	assert.equal(e.amended, true);
+	assert.deepEqual(
+		e.changes.map((c: any) => [c.line_number, c.account_code, c.old_debit_cents, c.old_credit_cents, c.new_debit_cents, c.new_credit_cents, c.reason, c.changed_by]),
+		[[1, "6100", 4000, 0, 4500, 0, "Receipt total was 45.00", "tester"], [3, "1000", 0, 5000, 0, 5500, "Receipt total was 45.00", "tester"]],
+	);
+	// Balances and reports follow.
+	assert.equal((await call("GET", "/accounts/6100")).json().balance_cents, 4500);
+	assert.equal((await call("GET", "/accounts/1000")).json().balance_cents, -5500);
+	// A second change adds to the log; the list of entries marks it.
+	expectStatus(await amend([line(2, 800, 0), line(3, 0, 5300)]), 200);
+	e = (await call("GET", `/journal-entries/${id}`)).json();
+	assert.equal(e.changes.length, 4);
+	assert.deepEqual([e.changes[3].old_credit_cents, e.changes[3].new_credit_cents, e.changes[3].reason], [5500, 5300, ""]);
+	assert.equal((await call("GET", "/journal-entries")).json().data.find((x: any) => x.id === id).amended, true);
+
+	// The database itself keeps the rule: no change without saying who, nothing but the amount, and the log can't be edited.
+	await assert.rejects(app.db.query(`UPDATE transactions SET amount = amount + 1 WHERE journal_entry_id = $1`, [id]), /immutable/);
+	const one = await app.db.connect();
+	try {
+		for (const [sql, why] of [
+			[`UPDATE transactions SET memo = 'x' WHERE journal_entry_id = $1`, /immutable/],
+			[`UPDATE transactions SET amount = amount + 1 WHERE journal_entry_id = $1 AND line_number = 1`, /balance/i],
+		] as const) {
+			await one.query("BEGIN");
+			await one.query(`SELECT set_config('ledger.amend_by', '1', true)`);
+			// The second is only refused at COMMIT, when the entry is checked for balance.
+			await assert.rejects(one.query(sql, [id]).then(() => one.query("COMMIT")), why);
+			await one.query("ROLLBACK");
+		}
+	} finally {
+		one.release();
+	}
+	await assert.rejects(app.db.query(`DELETE FROM transaction_changes`), /immutable/);
+	await assert.rejects(app.db.query(`UPDATE transaction_changes SET reason = 'x'`), /immutable/);
+	assert.equal((await call("GET", `/journal-entries/${id}`)).json().changes.length, 4);
+
+	// A line ticked on a reconciliation keeps its amount until it is unticked or the reconciliation undone.
+	r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-04-30", statement_balance_cents: -5300 });
+	const rec = r.json();
+	await call("POST", `/reconciliations/${rec.reconciliation.id}/cleared`, { clear: [rec.lines[0].transaction_id] });
+	r = await amend([line(1, 4600, 0), line(3, 0, 5400)]);
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /line 3 is ticked on the reconciliation to 2026-04-30; untick it there/);
+	// The other lines of that entry can still be moved between themselves.
+	expectStatus(await amend([line(1, 4400, 0), line(2, 900, 0)]), 200);
+	await call("POST", `/reconciliations/${rec.reconciliation.id}/finish`);
+	r = await amend([line(1, 4600, 0), line(3, 0, 5500)]);
+	assert.match(r.json().error.message, /undo that reconciliation/);
+
+	// A reversed entry and its reversal mirror each other, so neither changes.
+	r = await call("POST", "/journal-entries", entry("2026-04-05", "Wrong", dr("6100", 100), cr("1000", 100)));
+	const wrong = r.json().id;
+	const rev = (await call("POST", `/journal-entries/${wrong}/reverse`, {})).json().id;
+	expectStatus(await call("PATCH", `/journal-entries/${wrong}/amounts`, { lines: [line(1, 200, 0), line(2, 0, 200)] }), 409);
+	expectStatus(await call("PATCH", `/journal-entries/${rev}/amounts`, { lines: [line(1, 200, 0), line(2, 0, 200)] }), 409);
+	expectStatus(await call("PATCH", `/journal-entries/999999/amounts`, { lines: [line(1, 200, 0)] }), 404);
+});
+
 test("Documents: PDFs of receipts, statements and invoices, shared with modules", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;

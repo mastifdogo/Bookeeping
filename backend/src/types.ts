@@ -124,6 +124,32 @@ export interface JournalEntry {
 	lines: JournalLine[];
 	/** Module records linked to this entry. */
 	links: EntryLink[];
+	/** Whether any of its amounts were changed after it was posted. */
+	amended: boolean;
+	/** Every change made to its amounts, oldest first (only when one entry is fetched). */
+	changes?: EntryChange[];
+}
+
+/** One change to the amount of a posted line. */
+export interface EntryChange {
+	id: number;
+	line_number: number;
+	account_code: string;
+	account_name: string;
+	currency: Currency;
+	old_debit_cents: bigint;
+	old_credit_cents: bigint;
+	new_debit_cents: bigint;
+	new_credit_cents: bigint;
+	reason: string;
+	changed_by: string | null;
+	changed_at: Date;
+}
+
+/** New amounts for some lines of a posted entry. */
+export interface EntryAmend {
+	lines: { line_number: number; debit_cents: bigint; credit_cents: bigint }[];
+	reason?: string;
 }
 
 export interface EntryLink {

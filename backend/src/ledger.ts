@@ -8,6 +8,8 @@ import {
 	ACCOUNT_CODE_RE,
 	type Currency,
 	type CurrencyTotal,
+	type EntryAmend,
+	type EntryChange,
 	type EntryLink,
 	type EntryLinkInput,
 	type JournalEntry,
@@ -436,7 +438,8 @@ export async function reverseJournalEntry(app: App, id: bigint, req: ReverseRequ
 
 const ENTRY_SELECT = `
 	SELECT e.id, e.entry_date, e.description, e.reference, e.reverses_id,
-	       r.id AS reversed_by_id, e.import_id, u.username, e.posted_at, e.entity_id, en.name AS entity_name
+	       r.id AS reversed_by_id, e.import_id, u.username, e.posted_at, e.entity_id, en.name AS entity_name,
+	       EXISTS (SELECT 1 FROM transaction_changes c WHERE c.journal_entry_id = e.id) AS amended
 	  FROM journal_entries e
 	  LEFT JOIN journal_entries r ON r.reverses_id = e.id
 	  LEFT JOIN users u ON u.id = e.created_by
@@ -471,7 +474,91 @@ function toEntry(r: EntryRow): JournalEntry {
 		totals: [],
 		lines: [],
 		links: [],
+		amended: (r as EntryRow & { amended?: boolean }).amended === true,
 	};
+}
+
+/** Every change made to an entry's amounts, oldest first. */
+async function entryChanges(db: Queryable, id: bigint): Promise<EntryChange[]> {
+	const rows = await queryRows<{ id: bigint; line_number: number; code: string; name: string; currency: Currency; old_amount: bigint; new_amount: bigint; reason: string; username: string | null; changed_at: Date }>(
+		db,
+		`SELECT c.id, t.line_number, a.code, a.name, t.currency, c.old_amount, c.new_amount, c.reason, u.username, c.changed_at
+		   FROM transaction_changes c
+		   JOIN transactions t ON t.id = c.transaction_id
+		   JOIN accounts a ON a.id = t.account_id
+		   LEFT JOIN users u ON u.id = c.changed_by
+		  WHERE c.journal_entry_id = $1 ORDER BY c.id`,
+		[id],
+	);
+	return rows.map((r) => {
+		const [od, oc] = splitAmount(r.old_amount);
+		const [nd, nc] = splitAmount(r.new_amount);
+		return { id: Number(r.id), line_number: r.line_number, account_code: r.code, account_name: r.name, currency: r.currency, old_debit_cents: od, old_credit_cents: oc, new_debit_cents: nd, new_credit_cents: nc, reason: r.reason, changed_by: r.username, changed_at: r.changed_at };
+	});
+}
+
+/**
+ * Changes the amounts of a posted entry's lines. The entry must still
+ * balance in each currency. Refused for an entry that was reversed or is a
+ * reversal (the pair must keep mirroring each other) and for lines ticked
+ * on a reconciliation (the reconciled balance would no longer be true).
+ * The database logs every changed line with who changed it and why.
+ */
+export async function amendEntryAmounts(app: App, id: bigint, input: EntryAmend, actorId: number | null): Promise<JournalEntry> {
+	const orig = await getJournalEntry(app, id);
+	if (orig.reverses_id !== null) throw new ConflictError(`entry ${id} is a reversal; its amounts follow the entry it reverses`);
+	if (orig.reversed_by_id !== null) throw new ConflictError(`entry ${id} was reversed by entry ${orig.reversed_by_id}; its amounts can't change any more`);
+	const v = new ValidationError();
+	const reason = trimSpace(input.reason ?? "");
+	if (reason.length > 500) v.add("reason", "must be at most 500 characters");
+	if (!Array.isArray(input.lines) || input.lines.length === 0) v.add("lines", "give the lines to change");
+	v.throwIfAny();
+	const byNumber = new Map(orig.lines.map((l) => [l.line_number, l]));
+	const next = new Map<number, bigint>(orig.lines.map((l) => [l.line_number, l.debit_cents - l.credit_cents]));
+	const seen = new Set<number>();
+	input.lines.forEach((l, i) => {
+		const f = `lines[${i}]`;
+		const cur = byNumber.get(l.line_number);
+		if (!cur) return v.add(`${f}.line_number`, `entry ${id} has no line ${l.line_number}`);
+		if (seen.has(l.line_number)) return v.add(`${f}.line_number`, "is given twice");
+		seen.add(l.line_number);
+		if (l.debit_cents < 0n || l.credit_cents < 0n) return v.add(f, "amounts can't be negative");
+		if ((l.debit_cents > 0n) === (l.credit_cents > 0n)) return v.add(f, "give a debit or a credit, not both and not neither");
+		if (l.debit_cents > MAX_CENTS || l.credit_cents > MAX_CENTS) return v.add(f, "the amount is too large");
+		next.set(l.line_number, l.debit_cents - l.credit_cents);
+	});
+	v.throwIfAny();
+	const changed = orig.lines.filter((l) => next.get(l.line_number) !== l.debit_cents - l.credit_cents);
+	if (changed.length === 0) {
+		v.add("lines", "the amounts are the same as before");
+		v.throwIfAny();
+	}
+	// Each currency must still balance.
+	const sums = new Map<Currency, bigint>();
+	for (const l of orig.lines) sums.set(l.currency, (sums.get(l.currency) ?? 0n) + next.get(l.line_number)!);
+	for (const [cur, sum] of sums) {
+		if (sum !== 0n) v.add("lines", `the ${cur} lines don't balance: debits and credits differ by ${formatCents(sum < 0n ? -sum : sum)}`);
+	}
+	v.throwIfAny();
+
+	await withTx(app.db, {}, async (tx) => {
+		const ticked = await queryRow<{ line_number: number; statement_date: string; status: string }>(
+			tx,
+			`SELECT t.line_number, r.statement_date, r.status
+			   FROM reconciliation_lines l JOIN transactions t ON t.id = l.transaction_id JOIN reconciliations r ON r.id = l.reconciliation_id
+			  WHERE t.id = ANY($1::bigint[]) ORDER BY t.line_number LIMIT 1`,
+			[changed.map((l) => l.id)],
+		);
+		if (ticked) {
+			throw new ConflictError(
+				`line ${ticked.line_number} is ticked on the reconciliation to ${ticked.statement_date}; ${ticked.status === "finished" ? "undo that reconciliation" : "untick it there"} before changing its amount`,
+			);
+		}
+		// The database only lets an amount change inside a transaction that says who is changing it, and logs it.
+		await tx.query(`SELECT set_config('ledger.amend_by', $1, true), set_config('ledger.amend_reason', $2, true)`, [String(actorId ?? "system"), reason]);
+		for (const l of changed) await tx.query(`UPDATE transactions SET amount = $2 WHERE id = $1`, [l.id, next.get(l.line_number)]);
+	});
+	return getJournalEntry(app, id);
 }
 
 export async function getJournalEntry(app: App, id: bigint): Promise<JournalEntry> {
@@ -479,6 +566,7 @@ export async function getJournalEntry(app: App, id: bigint): Promise<JournalEntr
 	if (!row) throw new NotFoundError();
 	const e = toEntry(row);
 	await attachLines(app, [e]);
+	e.changes = e.amended ? await entryChanges(app.db, id) : [];
 	return e;
 }
 

@@ -4,7 +4,7 @@
 // parsed exactly from their source text.
 
 import { parseDate } from "./date.ts";
-import type { AccountCreate, AccountUpdate, JournalEntryCreate, JournalLineCreate, ReverseRequest } from "./types.ts";
+import type { AccountCreate, AccountUpdate, EntryAmend, JournalEntryCreate, JournalLineCreate, ReverseRequest } from "./types.ts";
 
 /** A malformed request body (HTTP 400 "invalid JSON: ..."). */
 export class DecodeError extends Error {}
@@ -155,6 +155,21 @@ export function decodeJournalEntryCreate(v: unknown): JournalEntryCreate {
 		entity_id: entity === undefined ? null : Number(entity),
 		lines: ((lines as unknown[] | null | undefined) ?? []).map(decodeLine),
 	};
+}
+
+/** { lines: [{ line_number, debit_cents, credit_cents }], reason? } */
+export function decodeEntryAmend(v: unknown): EntryAmend {
+	const o = object(v, "EntryAmend", ["lines", "reason"]);
+	if (!Array.isArray(o.lines)) throw new DecodeError("EntryAmend.lines must be a list");
+	const lines = o.lines.map((x, i) => {
+		const p = `EntryAmend.lines[${i}].`;
+		const l = object(x, `EntryAmend.lines[${i}]`, ["line_number", "debit_cents", "credit_cents"]);
+		const n = int64(l, "line_number", p);
+		if (n === undefined || n < 1n || n > 100000n) throw new DecodeError(`${p}line_number must be a line's number`);
+		return { line_number: Number(n), debit_cents: int64(l, "debit_cents", p) ?? 0n, credit_cents: int64(l, "credit_cents", p) ?? 0n };
+	});
+	const reason = str(o, "reason", "EntryAmend.");
+	return reason === undefined ? { lines } : { lines, reason };
 }
 
 export function decodeReverseRequest(v: unknown): ReverseRequest {

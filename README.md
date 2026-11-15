@@ -208,7 +208,8 @@ docs/DEPLOYMENT.md    Proxmox LXC + TrueNAS deployment guide
 | No zero / both-sided lines | `validateJournalEntry` | `CHECK (amount <> 0)` |
 | Integer money only | `bigint` cents; JSON floats rejected | `BIGINT` cents |
 | All-or-nothing posting | one `BEGIN … COMMIT` per entry | deferred triggers abort the `COMMIT` |
-| Posted rows immutable | no update/delete code paths | triggers reject `UPDATE`/`DELETE`/`TRUNCATE`; lines can't be added to an entry from a later transaction |
+| Posted rows fixed | no delete code paths; only a line's amount can change | triggers reject `DELETE`/`TRUNCATE` and every `UPDATE` but a logged amount change; lines can't be added to an entry from a later transaction |
+| Amount changes logged | `PATCH /journal-entries/{id}/amounts` | the trigger that allows the change writes old and new amount, who and why to `transaction_changes`, which can't be edited; the entry must still balance at `COMMIT`; refused for lines ticked on a reconciliation |
 | Corrections | `POST /journal-entries/{id}/reverse` | `UNIQUE (reverses_id)`: reversed once at most |
 | Inactive accounts | pre-check with `FOR SHARE` lock | `BEFORE INSERT` trigger |
 | CSV import all-or-nothing, never twice | one transaction per file | `UNIQUE (sha256)` on `csv_imports` |
@@ -355,6 +356,17 @@ the largest expenses this month. Below that are **notifications** and
 installed or fails). Dismiss a notification with ✕; tick a to-do to mark it
 done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)).
 
+### Changing an entry's amounts
+
+An entry's page has **Change amounts…**: type new debit and credit figures
+for its lines (they must still balance) and, optionally, why. Accounts,
+dates, descriptions and the number of lines can't change; for those, reverse
+the entry and post a new one. Every change is kept and shown under the
+entry: the line, what it was, what it is now, who changed it and when. The
+entry is marked "amounts changed". Amounts can't be changed on an entry
+that was reversed or is a reversal, or on a line ticked on a reconciliation
+(untick it, or undo the reconciliation, first).
+
 ### Renumbering accounts
 
 An account's code can be changed on its page (**Edit**). Its entries,
@@ -399,7 +411,10 @@ reconciliation with that date and balance and ticks the transactions that
 match a statement line (same amount, close in date). Each ticked line shows
 the statement line it was paired with, and statement lines missing from the
 books are listed. The AI finishes nothing: you check the ticks against the
-statement and press Finish, which takes you back to the Reconcile page. A
+statement and press Finish, which takes you back to the Reconcile page.
+The Reconcile page lists bank accounts and credit cards (accounts tagged
+chequing, savings or credit card) and accounts already reconciled; **Add
+account…** pulls any other account into the list. A
 statement that has been reconciled against is tagged "reconciled" under
 Documents and is no longer offered when starting a reconciliation.
 
