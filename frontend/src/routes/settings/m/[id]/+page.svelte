@@ -77,7 +77,11 @@
 		const fit = () => {
 			try {
 				const doc = frame.contentDocument;
-				if (doc?.documentElement) frame.style.height = `${Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0) + 2}px`;
+				const body = doc?.body;
+				if (!doc || !body) return;
+				// Where the content ends, not the frame's own height (which the page fills whatever it holds).
+				const bottom = body.getBoundingClientRect().bottom + (doc.defaultView?.scrollY ?? 0) + parseFloat(doc.defaultView?.getComputedStyle(body).marginBottom || '0');
+				frame.style.height = `${Math.ceil(bottom) + 2}px`;
 			} catch {
 				// not measurable: the height in the stylesheet stays
 			}
