@@ -28,7 +28,7 @@ import { ORGS_RUN_NOW_FILE } from "./orgs.ts";
 import { performRestore, restoreOps } from "./restore.ts";
 import { backupStateDir } from "./backup.ts";
 import { parseListenAddr } from "./config.ts";
-import { repoIdentity } from "./github.ts";
+import { githubHeaders, githubProblem, repoIdentity } from "./github.ts";
 import {
 	EMPTY_STATUS,
 	RUN_NOW_FILE,
@@ -108,10 +108,10 @@ interface Release {
 
 async function latestRelease(o: UpdaterOptions): Promise<Release> {
 	const res = await fetch(`${o.apiBase}/repos/${o.repo}/releases/latest`, {
-		headers: { Accept: "application/vnd.github+json", "User-Agent": "ledger-updater" },
+		headers: { Accept: "application/vnd.github+json", ...githubHeaders(`${o.apiBase}/`, "ledger-updater") },
 		signal: AbortSignal.timeout(30_000),
 	});
-	if (!res.ok) throw new Error(`GitHub answered ${res.status} for the latest release of ${o.repo}`);
+	if (!res.ok) throw new Error(`${githubProblem(res)} (asking for the latest release of ${o.repo})`);
 	const body = (await res.json()) as { tag_name?: unknown; assets?: { name?: unknown; browser_download_url?: unknown }[] };
 	const tag = typeof body.tag_name === "string" ? body.tag_name : "";
 	if (!TAG_RE.test(tag)) throw new Error(`unexpected release tag ${JSON.stringify(tag)}`);

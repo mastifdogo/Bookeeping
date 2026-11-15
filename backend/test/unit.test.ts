@@ -235,3 +235,27 @@ test("backup folder names carry the date, time and UTC offset", async () => {
 	assert.equal(folderTime("ledger-20261112T023005Z.dump"), null);
 	assert.equal(folderTime("ledger-2026-11-12_02-30-05"), null);
 });
+
+test("GitHub's hourly limit is explained, and a token is only sent to GitHub", async () => {
+	const { githubHeaders, githubProblem } = await import("../src/github.ts");
+	const limited = new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(Date.UTC(2026, 10, 15, 7, 30) / 1000) } });
+	assert.match(githubProblem(limited), /hourly limit .* \(GitHub answered 403\)\. Try again after 07:30 UTC\. To raise the limit .* LEDGER_GITHUB_TOKEN/);
+	assert.equal(githubProblem(new Response("", { status: 500 })), "GitHub answered 500");
+	// Some other 403 (a repository that forbids access) isn't called a limit.
+	assert.equal(githubProblem(new Response("", { status: 403, headers: { "x-ratelimit-remaining": "41" } })), "GitHub answered 403");
+	const before = process.env.LEDGER_GITHUB_TOKEN;
+	try {
+		delete process.env.LEDGER_GITHUB_TOKEN;
+		assert.equal(githubHeaders("https://api.github.com/repos/o/r").Authorization, undefined);
+		process.env.LEDGER_GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+		assert.equal(githubHeaders("https://api.github.com/repos/o/r").Authorization, "Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+		assert.equal(githubHeaders("https://example.com/x.tar.gz").Authorization, undefined);
+		assert.doesNotMatch(githubProblem(limited), /LEDGER_GITHUB_TOKEN=/);
+		assert.match(githubProblem(new Response("", { status: 401 })), /refused the token/);
+		process.env.LEDGER_GITHUB_TOKEN = "has spaces and\nnewlines";
+		assert.equal(githubHeaders("https://api.github.com/x").Authorization, undefined);
+	} finally {
+		if (before === undefined) delete process.env.LEDGER_GITHUB_TOKEN;
+		else process.env.LEDGER_GITHUB_TOKEN = before;
+	}
+});

@@ -16,7 +16,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import pg from "pg";
 import { log } from "./log.ts";
-import { latestModuleRelease } from "./github.ts";
+import { githubHeaders, githubProblem, latestModuleRelease } from "./github.ts";
 import {
 	MANIFEST_FILE,
 	MODULES_STATUS_FILE,
@@ -70,7 +70,9 @@ function run(cmd: string, args: string[], opts: { input?: string; capture?: bool
 }
 
 async function download(url: string, file: string): Promise<void> {
-	const res = await fetch(url, { headers: { "User-Agent": "ledger" }, redirect: "follow", signal: AbortSignal.timeout(5 * 60_000) });
+	// The archive's address is on GitHub's API, so it counts toward the hourly limit like any other request.
+	const res = await fetch(url, { headers: githubHeaders(url), redirect: "follow", signal: AbortSignal.timeout(5 * 60_000) });
+	if (res.status === 403 || res.status === 429) throw new Error(githubProblem(res));
 	if (!res.ok) throw new Error(`download failed (${res.status})`);
 	const buf = Buffer.from(await res.arrayBuffer());
 	if (buf.length > MAX_DOWNLOAD_BYTES) throw new Error(`module archive larger than ${MAX_DOWNLOAD_BYTES} bytes`);

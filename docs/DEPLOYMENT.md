@@ -603,6 +603,7 @@ organization stays "being created" until the next `ledger update run`.
 | "cross-origin request rejected" (403) behind a proxy | The proxy rewrites `Host`. Pass the original host through. |
 | Settings → Updates says updates aren't set up | The server was installed without `deploy/install.sh` 0.6+; run it from a current release. |
 | Update failed: GitHub answered 403 | GitHub's rate limit for unauthenticated requests (60 per hour per IP); it clears within an hour. |
+| "GitHub answered 403" when checking for updates or adding a module | GitHub allows a server's address 60 requests an hour without a token, and every check of Ledger and of each module uses some. Wait for the time the message gives, or add `LEDGER_GITHUB_TOKEN=<a GitHub token>` to `/etc/ledger/ledger.env` (no permissions needed for public repositories) and `systemctl restart ledger`: the limit becomes 5,000. |
 | Forgot the only password | `ledger-user passwd <name>` as root in the container. |
 | The container's console goes back to `login:` without asking for a password | Templates from Ledger 0.18.0 to 0.19.1 lack the login program. On the Proxmox host: `pct enter <ctid>`, then `apt update && apt install -y login`. Ledger itself is not affected. |
 | `JavaScript heap out of memory` in the log | Raise `LEDGER_MAX_HEAP_MB` in `ledger.env` (keep it well below `MemoryMax=256M`) and restart. |
