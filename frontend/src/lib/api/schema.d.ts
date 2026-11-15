@@ -507,7 +507,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Finish (the difference must be 0) */
+        /**
+         * Finish (the difference must be 0, or posted to Unreconciled)
+         * @description With a difference left, finishing is refused unless post_difference is
+         *     true: then the difference is posted between the account and Ledger's
+         *     Unreconciled clearing account (in the account's currency) and ticked.
+         *     When the AI's statement lines that aren't in the books add up to the
+         *     difference, each gets its own entry; otherwise one entry for the whole
+         *     difference.
+         */
         post: operations["finishReconciliation"];
         delete?: never;
         options?: never;
@@ -1784,7 +1792,9 @@ export interface components {
             };
         };
         Account: {
-            /** @description The module that made the account (a clearing account of its own) */
+            /** @description Left out of account lists and pickers (still in reports). Clearing accounts are hidden unless shown. */
+            hidden: boolean;
+            /** @description The module that made the account (a clearing account of its own; "ledger" for Ledger's own) */
             module_id: string | null;
             /** @description That module's own name for it */
             module_key: string | null;
@@ -1817,6 +1827,8 @@ export interface components {
             /** @description Make it a sub-account of this account (same type and currency, at most 5 levels deep) */
             parent_code?: string | null;
             kind?: components["schemas"]["AccountKind"] | null;
+            /** @description Hide it from account lists and pickers; defaults to true for a clearing account */
+            hidden?: boolean;
         };
         AccountUpdate: {
             /** @description A new code for the account. Its postings stay with it; the code is also rewritten where modules keep it. */
@@ -1828,6 +1840,8 @@ export interface components {
             parent_code?: string | null;
             /** @description null removes the tag */
             kind?: components["schemas"]["AccountKind"] | null;
+            /** @description Hide or show the account in lists and pickers */
+            hidden?: boolean;
         };
         /**
          * @description Exactly one of debit_cents / credit_cents must be > 0. The amount is
@@ -2289,8 +2303,19 @@ export interface components {
             difference_cents: components["schemas"]["SignedCents"];
             /** @description Uncleared lines dated on or before the statement, plus the lines cleared on this statement */
             lines: components["schemas"]["ReconciliationLine"][];
+            /** @description Debits and credits of the lines ticked on this statement, and of the lines not ticked */
+            totals: {
+                cleared: components["schemas"]["SideTotals"];
+                uncleared: components["schemas"]["SideTotals"];
+            };
             /** @description What the AI read from the attached statement, if it was asked to */
             reading: components["schemas"]["StatementReading"] | null;
+        };
+        SideTotals: {
+            debit_count: number;
+            debit_cents: components["schemas"]["Cents"];
+            credit_count: number;
+            credit_cents: components["schemas"]["Cents"];
         };
         StatementReading: {
             /** Format: date-time */
@@ -3833,7 +3858,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default false */
+                    post_difference?: boolean;
+                };
+            };
+        };
         responses: {
             /** @description Finished */
             200: {

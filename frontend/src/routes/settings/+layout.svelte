@@ -9,6 +9,7 @@
 	const ALL = [
 		{ href: '/settings/account', label: 'Account', title: '', admin: false },
 		{ href: '/settings/sidebar', label: 'Sidebar', title: '', admin: false },
+		{ href: '/settings/clearing', label: 'Clearing accounts', title: 'Hide or show clearing accounts', admin: false },
 		{ href: '/settings/users', label: 'Users', title: '', admin: true, org: true },
 		{ href: '/settings/llm', label: 'LLM API', title: '', admin: true },
 		{ href: '/settings/mail', label: 'Mail', title: 'Proton Mail Bridge, another IMAP mailbox, or Gmail', admin: true },

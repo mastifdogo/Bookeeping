@@ -4,7 +4,7 @@
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import StatementPicker from '#lib/components/StatementPicker.svelte';
 	import { api, unwrap, type ReconciliationDetail } from '#lib/api/client.ts';
-	import { centsToInput, parseSignedAmount } from '#lib/money.ts';
+	import { centsToInput, formatCents, parseSignedAmount } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -73,11 +73,23 @@
 	}
 
 	// Finishing closes this window: back to the Reconcile page, which says what was finished.
-	const finish = () =>
-		run(async () => {
-			const done = unwrap(await api().POST('/reconciliations/{reconciliationId}/finish', path()));
+	// With a difference left, it is posted to the Unreconciled clearing account first.
+	const finish = () => {
+		const off = d.difference_cents !== 0;
+		if (
+			off &&
+			!confirm(
+				`Finish with a difference of ${formatCents(d.difference_cents)} ${rec.currency}?\n\nThe difference is posted between ${rec.account_code} and the Unreconciled clearing account` +
+					(postsLines ? `, one entry for each of the ${notInBooks.length} statement lines not in your books` : '') +
+					', and ticked, so the account matches the statement. Move it to the right account later. Lines not ticked stay for the next statement.'
+			)
+		)
+			return;
+		return run(async () => {
+			const done = unwrap(await api().POST('/reconciliations/{reconciliationId}/finish', { ...path(), body: { post_difference: off } }));
 			await goto(`/reconcile?finished=${done.reconciliation.id}`);
 		});
+	};
 	const undo = () => run(async () => unwrap(await api().POST('/reconciliations/{reconciliationId}/undo', path())));
 	// --- The statement beside the lines -------------------------------------
 	let pickId = $state<number | null>(null);
@@ -93,6 +105,8 @@
 	// Which statement line the AI paired with each journal line.
 	let aiMatch = $derived(new Map((ai?.matched ?? []).map(([t, i]) => [t, ai!.lines[i]])));
 	let notInBooks = $derived((ai?.unmatched ?? []).map((i) => ai!.lines[i]!).filter(Boolean));
+	// Finishing posts these one by one when they make up exactly the difference.
+	let postsLines = $derived(notInBooks.length > 0 && notInBooks.reduce((t, l) => t + l.amount_cents, 0) === d.difference_cents);
 	// The statement's own closing date and balance, when they aren't the ones this reconciliation uses.
 	let differs = $derived(
 		open && ai && ai.end_date !== null && ai.closing_balance_cents !== null && (ai.end_date !== rec.statement_date || ai.closing_balance_cents !== rec.statement_balance_cents)
@@ -140,12 +154,12 @@
 		run(async () => {
 			const res = await api().DELETE('/reconciliations/{reconciliationId}', path());
 			if (res.response.status !== 204) unwrap(res);
-			await goto('/reconcile');
+			await goto('/reconcile?list');
 		});
 	}
 </script>
 
-<p class="small"><a href="/reconcile">← Reconcile</a></p>
+<p class="small"><a href="/reconcile?list">← All reconciliations</a></p>
 
 <div class="split" class:on={split} class:dragging bind:this={splitEl} style="--left:{left}%">
 	{#if split}
@@ -194,7 +208,13 @@
 	<span class="spacer"></span>
 	{#if open}
 		<button onclick={discard} disabled={busy}>Discard</button>
-		<button class="primary" onclick={finish} disabled={busy || d.difference_cents !== 0}>Finish</button>
+		<button
+			class="primary"
+			onclick={finish}
+			disabled={busy}
+			title={d.difference_cents === 0 ? 'Finish the reconciliation' : 'Post the difference to the Unreconciled clearing account and finish'}
+			>{d.difference_cents === 0 ? 'Finish' : 'Finish, difference to Unreconciled'}</button
+		>
 	{:else}
 		<button onclick={undo} disabled={busy} title="Reopen for changes (most recent reconciliation only)">Undo</button>
 	{/if}
@@ -283,9 +303,29 @@
 		<strong class="big"><Amount cents={d.difference_cents} /></strong>
 		<span class="small">
 			{#if d.difference_cents === 0}{open ? 'Balanced. Ready to finish.' : `Reconciled${rec.finished_by ? ` by ${rec.finished_by}` : ''}.`}{:else}Tick
-				lines until this is 0.00.{/if}
+				lines until this is 0.00, or finish and the difference goes to Unreconciled.{/if}
 		</span>
 	</div>
+</div>
+
+<div class="card totals">
+	<table class="mini">
+		<thead>
+			<tr><th></th><th class="num">{debitNormal ? 'Deposits' : 'Charges'} (debits)</th><th class="num">{debitNormal ? 'Withdrawals' : 'Payments'} (credits)</th></tr>
+		</thead>
+		<tbody>
+			<tr>
+				<th scope="row">Ticked</th>
+				<td class="num"><Amount cents={d.totals.cleared.debit_cents} /> <span class="muted small">({d.totals.cleared.debit_count})</span></td>
+				<td class="num"><Amount cents={d.totals.cleared.credit_cents} /> <span class="muted small">({d.totals.cleared.credit_count})</span></td>
+			</tr>
+			<tr>
+				<th scope="row">Not ticked</th>
+				<td class="num"><Amount cents={d.totals.uncleared.debit_cents} /> <span class="muted small">({d.totals.uncleared.debit_count})</span></td>
+				<td class="num"><Amount cents={d.totals.uncleared.credit_cents} /> <span class="muted small">({d.totals.uncleared.credit_count})</span></td>
+			</tr>
+		</tbody>
+	</table>
 </div>
 
 <div class="toolbar">
@@ -494,6 +534,25 @@
 	}
 	.aimatch {
 		color: var(--ok);
+	}
+	.totals {
+		margin-bottom: 1rem;
+		padding: 0.5rem 0.75rem;
+	}
+	.totals table {
+		margin: 0;
+		width: auto;
+	}
+	.totals th,
+	.totals td {
+		padding: 0.2rem 0.75rem;
+	}
+	.totals th[scope='row'] {
+		background: none;
+		text-transform: none;
+		letter-spacing: 0;
+		font-size: 0.85rem;
+		color: var(--muted);
 	}
 	.summary {
 		display: grid;

@@ -83,6 +83,7 @@
 		<span class="badge">{account.currency}</span>
 		{#if account.kind}<span class="badge">{kindLabel(account.kind)}</span>{/if}
 		{#if !account.is_active}<span class="badge warn">inactive</span>{/if}
+		{#if account.hidden}<span class="badge">hidden</span>{/if}
 	</h1>
 	<span class="spacer"></span>
 	<a class="button" href="/reconcile?account={encodeURIComponent(account.code)}">Reconcile</a>
@@ -94,7 +95,8 @@
 {#if account.description && !editing}<p class="muted">{account.description}</p>{/if}
 {#if account.kind === 'clearing'}
 	<p class="small clearing" class:off={account.balance_cents !== 0}>
-		{#if account.module_id}Made by the {moduleName(account.module_id)} module. {/if}
+		{#if account.module_id === 'ledger'}Ledger's own: reconciliations finished with a difference post it here. {:else if account.module_id}Made by the {moduleName(account.module_id)} module. {/if}
+		{account.hidden ? 'Hidden from account lists' : 'Shown in account lists'} (<a href="/settings/clearing">Settings → Clearing accounts</a>).
 		{#if account.balance_cents === 0}Cleared: everything posted here has been matched by a posting the other way.{:else}
 			<strong><Amount cents={naturalBalance(account.type, account.balance_cents)} currency={account.currency} /> not cleared yet.</strong>
 			What is posted to a clearing account is meant to be cleared by a later posting the other way.{/if}

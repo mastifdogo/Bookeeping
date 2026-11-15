@@ -5,9 +5,11 @@
 // finished. Amounts use the account's natural sign, like the statement.
 
 import type { App } from "./app.ts";
+import { ensureClearingAccount } from "./accounts.ts";
 import { queryRow, queryRows, withTx, type Queryable } from "./db.ts";
 import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
-import type { AccountType, Currency } from "./types.ts";
+import { checkLinesPostable, insertJournalEntry, jsonFieldNames, lockAccounts, validateEntry } from "./ledger.ts";
+import type { AccountType, Currency, JournalEntryCreate } from "./types.ts";
 
 export interface Reconciliation {
 	id: number;
@@ -68,6 +70,14 @@ export interface ReconciliationLine {
 	cleared: boolean;
 }
 
+/** How many lines, and how much, on each side of the account. */
+export interface SideTotals {
+	debit_count: number;
+	debit_cents: bigint;
+	credit_count: number;
+	credit_cents: bigint;
+}
+
 export interface ReconciliationDetail {
 	reconciliation: Reconciliation;
 	/** Cleared on earlier (finished) statements. */
@@ -77,6 +87,8 @@ export interface ReconciliationDetail {
 	/** Statement balance minus cleared balance; 0 means it can be finished. */
 	difference_cents: bigint;
 	lines: ReconciliationLine[];
+	/** Debits and credits of the lines ticked on this statement, and of those not ticked. */
+	totals: { cleared: SideTotals; uncleared: SideTotals };
 	reading: StatementReading | null;
 }
 
@@ -193,12 +205,19 @@ export async function getReconciliation(app: App, id: bigint, db: Queryable = ap
 			cleared: l.cleared,
 		};
 	});
+	const side = (ls: ReconciliationLine[]): SideTotals => ({
+		debit_count: ls.filter((l) => l.debit_cents > 0n).length,
+		debit_cents: ls.reduce((t, l) => t + l.debit_cents, 0n),
+		credit_count: ls.filter((l) => l.credit_cents > 0n).length,
+		credit_cents: ls.reduce((t, l) => t + l.credit_cents, 0n),
+	});
 	return {
 		reconciliation: toRec(r),
 		opening_balance_cents: openingCents,
 		cleared_balance_cents: cleared,
 		difference_cents: r.statement_balance_cents - cleared,
 		lines: out,
+		totals: { cleared: side(out.filter((l) => l.cleared)), uncleared: side(out.filter((l) => !l.cleared)) },
 		reading: (await queryRow<{ reading: StatementReading | null }>(db, `SELECT reading FROM reconciliations WHERE id = $1`, [id]))?.reading ?? null,
 	};
 }
@@ -316,16 +335,80 @@ export async function changeCleared(app: App, id: bigint, change: { clear: bigin
 	});
 }
 
-export async function finishReconciliation(app: App, id: bigint, userId: number | null): Promise<ReconciliationDetail> {
+/** Ledger's own clearing account for what a reconciliation couldn't match, one per currency. */
+export function unreconciledAccount(app: App, currency: Currency) {
+	return ensureClearingAccount(app, "ledger", "Ledger", {
+		key: "unreconciled",
+		name: currency === "CAD" ? "Unreconciled" : `Unreconciled ${currency}`,
+		currency,
+		type: "asset",
+		description:
+			"What a reconciliation finished with a difference posted here: statement lines not in the books, or the gap between the statement and the books. Move each amount to the right account, so this returns to zero.",
+	});
+}
+
+/**
+ * Finishes a reconciliation. With a difference left, it is refused unless
+ * postDifference is set: then the difference is posted between the account
+ * and the Unreconciled clearing account and ticked, so the account matches
+ * the statement. When the AI's statement lines that aren't in the books add
+ * up to exactly the difference, each gets its own entry (its date and
+ * description); otherwise one entry for the whole difference. Lines in the
+ * books that aren't on the statement stay unticked for the next statement.
+ */
+export async function finishReconciliation(app: App, id: bigint, userId: number | null, opts: { postDifference?: boolean } = {}): Promise<ReconciliationDetail> {
+	const pre = await loadRow(app.db, id);
+	const clearing = opts.postDifference ? await unreconciledAccount(app, pre.currency) : null;
 	return withTx(app.db, {}, async (tx) => {
-		await openForUpdate(tx, id);
+		const r = await openForUpdate(tx, id);
 		const d = await getReconciliation(app, id, tx);
 		if (d.difference_cents !== 0n) {
-			throw new ConflictError(`the cleared balance is ${d.difference_cents > 0n ? "below" : "above"} the statement balance; the difference must be 0.00 to finish`);
+			if (!clearing) {
+				throw new ConflictError(`the cleared balance is ${d.difference_cents > 0n ? "below" : "above"} the statement balance; the difference must be 0.00 to finish, or post it to Unreconciled`);
+			}
+			await postDifference(tx, r, d, clearing.code, userId);
+			const after = await getReconciliation(app, id, tx);
+			if (after.difference_cents !== 0n) throw new Error(`posting the difference left ${after.difference_cents}`);
 		}
 		await tx.query(`UPDATE reconciliations SET status = 'finished', finished_at = now(), finished_by = $2 WHERE id = $1`, [id, userId]);
 		return getReconciliation(app, id, tx);
 	});
+}
+
+async function postDifference(tx: Queryable, r: Row, d: ReconciliationDetail, clearingCode: string, userId: number | null): Promise<void> {
+	const s = sign(r.account_type);
+	const last = await lastFinished(tx, r.account_id, r.id);
+	const dateOf = (iso: string) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) && iso <= r.statement_date && (!last || iso >= last.statement_date) ? iso : r.statement_date);
+	const missing = d.reading ? d.reading.unmatched.map((i) => d.reading!.lines[i]).filter((l): l is StatementLine => !!l && Number.isSafeInteger(l.amount_cents) && l.amount_cents !== 0) : [];
+	const missingTotal = missing.reduce((t, l) => t + BigInt(l.amount_cents), 0n);
+	const label = new Date(`${r.statement_date}T00:00:00Z`).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+	const posts: { date: string; description: string; natural: bigint }[] =
+		missing.length > 0 && missingTotal === d.difference_cents
+			? missing.map((l) => ({ date: dateOf(l.date), description: `Not in the books: ${l.description}`.slice(0, 500), natural: BigInt(l.amount_cents) }))
+			: [{ date: r.statement_date, description: `Reconciliation difference, ${r.account_code} statement of ${label}`, natural: d.difference_cents }];
+	const accounts = await lockAccounts(tx, [r.account_code, clearingCode]);
+	for (const p of posts) {
+		const amount = s * p.natural; // debit-positive, on the reconciled account
+		const e: JournalEntryCreate = {
+			entry_date: p.date,
+			description: p.description,
+			reference: `reconcile-${r.id}`,
+			lines: [
+				{ account_code: r.account_code, debit_cents: amount > 0n ? amount : 0n, credit_cents: amount < 0n ? -amount : 0n, memo: "" },
+				{ account_code: clearingCode, debit_cents: amount < 0n ? -amount : 0n, credit_cents: amount > 0n ? amount : 0n, memo: "To be moved to the right account" },
+			],
+		};
+		const v = new ValidationError();
+		validateEntry(v, e, jsonFieldNames);
+		if (v.size === 0) checkLinesPostable(v, e, accounts, jsonFieldNames);
+		v.throwIfAny();
+		const entryId = await insertJournalEntry(tx, e, accounts, null, null, userId);
+		await tx.query(
+			`INSERT INTO reconciliation_lines (reconciliation_id, transaction_id)
+			 SELECT $1, t.id FROM transactions t WHERE t.journal_entry_id = $2 AND t.account_id = $3`,
+			[r.id, entryId, r.account_id],
+		);
+	}
 }
 
 /** Reopens the account's most recent finished reconciliation for changes. */

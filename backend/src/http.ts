@@ -937,7 +937,16 @@ async function handleChangeCleared(c: Ctx): Promise<void> {
 }
 
 async function handleFinishReconciliation(c: Ctx): Promise<void> {
-	writeJSON(c.res, 200, await finishReconciliation(c.app, pathId(c, "reconciliationId"), c.user!.id));
+	const body = await decodeBody(c, false, (v) => {
+		const o = v === undefined || v === null ? {} : v;
+		if (typeof o !== "object" || Array.isArray(o)) throw new DecodeError("json: body must be an object");
+		const allowed = ["post_difference"];
+		for (const k of Object.keys(o)) if (!allowed.includes(k)) throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+		const pd = (o as Record<string, unknown>).post_difference;
+		if (pd !== undefined && typeof pd !== "boolean") throw new DecodeError("json: post_difference must be true or false");
+		return { postDifference: pd === true };
+	});
+	writeJSON(c.res, 200, await finishReconciliation(c.app, pathId(c, "reconciliationId"), c.user!.id, body));
 }
 
 async function handleUndoReconciliation(c: Ctx): Promise<void> {

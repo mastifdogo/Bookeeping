@@ -122,7 +122,7 @@
 		goto((e.currentTarget as HTMLInputElement).checked ? '?inactive=1' : '?', { reset: false });
 	}
 	// Clearing accounts should sit at zero: the ones that don't are pointed out.
-	let uncleared = $derived(data.accounts.filter((a) => a.kind === 'clearing' && a.is_active && a.balance_cents !== 0));
+	let uncleared = $derived([...data.accounts, ...data.hidden].filter((a) => a.kind === 'clearing' && a.is_active && a.balance_cents !== 0));
 </script>
 
 <div class="toolbar">
@@ -185,6 +185,12 @@
 		{#each uncleared as a, i (a.code)}{i ? ', ' : ' '}<a href="/accounts/{encodeURIComponent(a.code)}"><span class="mono">{a.code}</span> {a.name}</a>
 			(<Amount cents={naturalBalance(a.type, a.balance_cents)} currency={a.currency} />){/each}.
 	</div>
+{/if}
+{#if data.hidden.length > 0}
+	<p class="muted small">
+		{data.hidden.length} hidden account{data.hidden.length === 1 ? ' is' : 's are'} not listed here (clearing accounts, unless shown).
+		<a href="/settings/clearing">Settings → Clearing accounts</a>
+	</p>
 {/if}
 <div class="table-wrap">
 	{#if data.accounts.length === 0}

@@ -100,7 +100,7 @@ function date(o: Record<string, unknown>, key: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 export function decodeAccountCreate(v: unknown): AccountCreate {
-	const o = object(v, "AccountCreate", ["code", "name", "type", "currency", "description", "parent_code", "kind"]);
+	const o = object(v, "AccountCreate", ["code", "name", "type", "currency", "description", "parent_code", "kind", "hidden"]);
 	const p = "AccountCreate.";
 	return {
 		kind: str(o, "kind", p) ?? null,
@@ -110,11 +110,12 @@ export function decodeAccountCreate(v: unknown): AccountCreate {
 		type: str(o, "type", p) ?? "",
 		currency: str(o, "currency", p) ?? "",
 		description: str(o, "description", p) ?? "",
+		...(bool(o, "hidden", p) !== undefined ? { hidden: bool(o, "hidden", p) } : {}),
 	};
 }
 
 export function decodeAccountUpdate(v: unknown): AccountUpdate {
-	const o = object(v, "AccountUpdate", ["code", "name", "description", "is_active", "parent_code", "kind"]);
+	const o = object(v, "AccountUpdate", ["code", "name", "description", "is_active", "parent_code", "kind", "hidden"]);
 	const p = "AccountUpdate.";
 	const out: AccountUpdate = {};
 	const code = str(o, "code", p);
@@ -125,6 +126,8 @@ export function decodeAccountUpdate(v: unknown): AccountUpdate {
 	if (name !== undefined) out.name = name;
 	if (description !== undefined) out.description = description;
 	if (isActive !== undefined) out.is_active = isActive;
+	const hidden = bool(o, "hidden", p);
+	if (hidden !== undefined) out.hidden = hidden;
 	// null is meaningful here: it makes the account top-level.
 	if (Object.hasOwn(o, "kind")) out.kind = o.kind === null ? null : (str(o, "kind", p) ?? null);
 	if (Object.hasOwn(o, "parent_code")) out.parent_code = o.parent_code === null ? null : (str(o, "parent_code", p) ?? null);

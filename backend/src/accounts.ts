@@ -24,7 +24,7 @@ import {
 } from "./types.ts";
 
 const ACCOUNT_SELECT = `
-	SELECT a.id, a.code, a.name, a.type, a.currency, a.description, a.is_active, a.kind, a.module_id, a.module_key,
+	SELECT a.id, a.code, a.name, a.type, a.currency, a.description, a.is_active, a.kind, a.module_id, a.module_key, a.hidden,
 	       COALESCE((SELECT sum(t.amount) FROM transactions t WHERE t.account_id = a.id), 0)::bigint AS balance,
 	       (SELECT p.code FROM accounts p WHERE p.id = a.parent_id) AS parent_code,
 	       COALESCE((WITH RECURSIVE sub AS (SELECT a.id UNION ALL SELECT c.id FROM accounts c JOIN sub ON c.parent_id = sub.id)
@@ -44,6 +44,7 @@ interface AccountRow {
 	kind: AccountKind | null;
 	module_id: string | null;
 	module_key: string | null;
+	hidden: boolean;
 	parent_code: string | null;
 	total_balance: bigint;
 	created_at: Date;
@@ -65,6 +66,7 @@ function toAccount(r: AccountRow): Account {
 		kind: r.kind,
 		module_id: r.module_id,
 		module_key: r.module_key,
+		hidden: r.hidden,
 		parent_code: r.parent_code,
 		total_balance_cents: r.total_balance,
 		created_at: r.created_at,
@@ -88,9 +90,9 @@ export async function createAccount(app: App, input: AccountCreate): Promise<Acc
 	v.throwIfAny();
 
 	await app.db.query(
-		`INSERT INTO accounts (code, name, type, currency, description, parent_id, kind)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		[code, trimSpace(input.name), input.type, input.currency, trimSpace(input.description), parentId, kind],
+		`INSERT INTO accounts (code, name, type, currency, description, parent_id, kind, hidden)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		[code, trimSpace(input.name), input.type, input.currency, trimSpace(input.description), parentId, kind, input.hidden ?? kind === "clearing"],
 	);
 	return getAccount(app, code);
 }
@@ -242,7 +244,7 @@ export async function changeAccountCode(app: App, code: string, newCode: string,
 export async function updateAccount(app: App, code: string, input: AccountUpdate, userId: number | null = null): Promise<Account> {
 	const v = new ValidationError();
 	if (input.code !== undefined) {
-		const rest = input.name !== undefined || input.description !== undefined || input.is_active !== undefined || input.parent_code !== undefined || input.kind !== undefined;
+		const rest = input.name !== undefined || input.description !== undefined || input.is_active !== undefined || input.parent_code !== undefined || input.kind !== undefined || input.hidden !== undefined;
 		const done = await changeAccountCode(app, code, input.code, userId);
 		code = done.new_code;
 		for (const m of app.modules.modules.values()) {
@@ -255,8 +257,8 @@ export async function updateAccount(app: App, code: string, input: AccountUpdate
 		}
 		if (!rest) return getAccount(app, code);
 	}
-	if (input.name === undefined && input.description === undefined && input.is_active === undefined && input.parent_code === undefined && input.kind === undefined) {
-		v.add("", "at least one of code, name, description, is_active, parent_code, kind is required");
+	if (input.name === undefined && input.description === undefined && input.is_active === undefined && input.parent_code === undefined && input.kind === undefined && input.hidden === undefined) {
+		v.add("", "at least one of code, name, description, is_active, parent_code, kind, hidden is required");
 	}
 	if (input.name !== undefined) checkText(v, "name", input.name, 1, 200);
 	if (input.description !== undefined) checkText(v, "description", input.description, 0, 1000);
@@ -279,7 +281,8 @@ export async function updateAccount(app: App, code: string, input: AccountUpdate
 		        description = COALESCE($3, description),
 		        is_active   = COALESCE($4, is_active),
 		        parent_id   = CASE WHEN $5 THEN $6::bigint ELSE parent_id END,
-		        kind        = CASE WHEN $7 THEN $8::text ELSE kind END
+		        kind        = CASE WHEN $7 THEN $8::text ELSE kind END,
+		        hidden      = COALESCE($9, hidden)
 		  WHERE code = $1`,
 		[
 			code,
@@ -290,6 +293,7 @@ export async function updateAccount(app: App, code: string, input: AccountUpdate
 			parentId,
 			input.kind !== undefined,
 			kind,
+			input.hidden ?? null,
 		],
 	);
 	if (r.rowCount === 0) throw new NotFoundError();
@@ -435,7 +439,7 @@ export async function ensureClearingAccount(
 		const code = n === 0 ? `${base}${o.currency === "CAD" ? "" : `-${o.currency}`}`.slice(0, 32) : `${base}-${n + 1}`.slice(0, 32);
 		{
 			const r = await app.db.query(
-				`INSERT INTO accounts (code, name, type, currency, description, kind, module_id, module_key) VALUES ($1, $2, $3, $4, $5, 'clearing', $6, $7)
+				`INSERT INTO accounts (code, name, type, currency, description, kind, module_id, module_key, hidden) VALUES ($1, $2, $3, $4, $5, 'clearing', $6, $7, true)
 				 ON CONFLICT DO NOTHING`,
 				[code, trimSpace(o.name as string), type, o.currency, trimSpace((o.description as string | undefined) ?? `Clearing account of ${moduleName}: what is posted here is cleared again later, so its balance returns to zero.`), moduleId, key],
 			);

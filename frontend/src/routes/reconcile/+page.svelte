@@ -10,9 +10,9 @@
 
 	let { data }: PageProps = $props();
 
-	// The list holds bank accounts and credit cards (accounts tagged chequing, savings or credit
-	// card) and any account already reconciled. Another account is pulled in with "Add account"
-	// and stays in the list on this device.
+	// The list and the account dropdown hold bank accounts and credit cards (accounts tagged
+	// chequing, savings or credit card). Another account is pulled in with "Add account" and stays
+	// in the list on this device; one with a reconciliation in progress is always there.
 	const ADDED_KEY = 'ledger:reconcile-accounts';
 	let added = $state<string[]>([]);
 	$effect(() => {
@@ -24,8 +24,17 @@
 		}
 	});
 	const isBankOrCard = (a: Account) => a.kind === 'chequing' || a.kind === 'savings' || a.kind === 'credit_card';
-	let accounts = $derived(data.accounts.filter((a) => isBankOrCard(a) || added.includes(a.code) || data.reconciliations.some((r) => r.account_code === a.code) || a.code === data.preselect));
+	let accounts = $derived(
+		data.accounts.filter((a) => isBankOrCard(a) || added.includes(a.code) || data.reconciliations.some((r) => r.status === 'open' && r.account_code === a.code) || a.code === data.preselect)
+	);
 	let others = $derived(data.accounts.filter((a) => !accounts.includes(a)));
+	// An account made with "+ New account…" in the dropdown joins the list.
+	$effect(() => {
+		if (accountCode && !accounts.some((a) => a.code === accountCode) && data.accounts.some((a) => a.code === accountCode)) {
+			added = [...new Set([...added, accountCode])];
+			localStorage.setItem(ADDED_KEY, JSON.stringify(added));
+		}
+	});
 	let addCode = $state('');
 	function addAccount() {
 		if (!addCode) return;
@@ -152,7 +161,7 @@
 	<div class="toolbar" style="margin:0; align-items:flex-end">
 		<label style="flex:1; min-width:14rem">
 			Account
-			<AccountSelect bind:value={accountCode} {accounts} label="Account" placeholder="Choose an account" required defaults={{ type: 'asset' }} />
+			<AccountSelect bind:value={accountCode} {accounts} label="Account" placeholder="Choose a bank account or credit card" required defaults={{ type: 'asset' }} />
 		</label>
 		<div class="field" style="flex:1; min-width:16rem">
 			<span>Statement</span>
@@ -191,8 +200,8 @@
 	{/if}
 </div>
 <p class="muted small" style="margin-top:0">
-	Bank accounts and credit cards: the accounts tagged chequing, savings or credit card, and any already reconciled. Tag an account on its
-	page under <a href="/accounts">Accounts</a>, or add any other account here.
+	Bank accounts and credit cards: the accounts tagged chequing, savings or credit card. Tag an account on its page under
+	<a href="/accounts">Accounts</a>, or add any other account here.
 </p>
 <div class="table-wrap">
 	{#if accounts.length === 0}
@@ -216,7 +225,7 @@
 							{:else}
 								<button onclick={() => startFor(a)}>Reconcile</button>
 							{/if}
-							{#if added.includes(a.code) && !isBankOrCard(a) && !r}
+							{#if added.includes(a.code) && !isBankOrCard(a) && !r?.open}
 								<button class="link" title="Take this account off the list" onclick={() => removeAccount(a.code)}>Remove</button>
 							{/if}
 						</td>

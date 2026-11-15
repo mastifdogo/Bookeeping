@@ -1063,6 +1063,94 @@ test("reconciliation", async (t) => {
 	expectStatus(await call("POST", "/reconciliations", { account_code: "1000" }), 422);
 });
 
+test("reconciliation: debits and credits, and finishing with a difference posts it to Unreconciled", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "3000", "Equity", "equity", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	expectStatus(await call("POST", "/journal-entries", entry("2026-09-01", "Opening", dr("1000", 100000), cr("3000", 100000))), 201);
+	expectStatus(await call("POST", "/journal-entries", entry("2026-09-12", "Paper", dr("6100", 2500), cr("1000", 2500))), 201);
+	expectStatus(await call("POST", "/journal-entries", entry("2026-09-20", "Cheque not cashed yet", dr("6100", 4000), cr("1000", 4000))), 201);
+
+	// The statement says 965.00: the books are 10.00 short of it (a fee nobody entered).
+	let r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-09-30", statement_balance_cents: 96500 });
+	let d = r.json();
+	const id = d.reconciliation.id;
+	const [opening, paper] = d.lines.map((l: any) => l.transaction_id);
+	r = await call("POST", `/reconciliations/${id}/cleared`, { clear: [opening, paper] });
+	d = r.json();
+	// Debits and credits, ticked and not.
+	assert.deepEqual(d.totals, {
+		cleared: { debit_count: 1, debit_cents: 100000, credit_count: 1, credit_cents: 2500 },
+		uncleared: { debit_count: 0, debit_cents: 0, credit_count: 1, credit_cents: 4000 },
+	});
+	assert.equal(d.difference_cents, -1000);
+	r = await call("POST", `/reconciliations/${id}/finish`);
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /post it to Unreconciled/);
+	expectStatus(await call("POST", `/reconciliations/${id}/finish`, { post_difference: "yes" }), 400);
+
+	// Finishing with post_difference posts the 10.00 against Ledger's own Unreconciled clearing account and ticks it.
+	r = await call("POST", `/reconciliations/${id}/finish`, { post_difference: true });
+	expectStatus(r, 200);
+	d = r.json();
+	assert.deepEqual([d.reconciliation.status, d.difference_cents, d.cleared_balance_cents], ["finished", 0, 96500]);
+	const posted = d.lines.find((l: any) => l.description.startsWith("Reconciliation difference"));
+	assert.deepEqual([posted.entry_date, posted.amount_cents, posted.cleared], ["2026-09-30", -1000, true]);
+	assert.deepEqual(d.totals.cleared, { debit_count: 1, debit_cents: 100000, credit_count: 2, credit_cents: 3500 });
+	// The cheque not on the statement stays unticked for the next one.
+	assert.equal(d.lines.find((l: any) => l.description === "Cheque not cashed yet").cleared, false);
+	const unrec = (await call("GET", "/accounts?include_inactive=true")).json().data.find((a: any) => a.module_id === "ledger");
+	assert.deepEqual([unrec.code, unrec.name, unrec.kind, unrec.module_key, unrec.hidden, unrec.balance_cents], ["CLR-LEDGER-UNRECONCILED", "Unreconciled", "clearing", "unreconciled", true, 1000]);
+
+	// Next statement: two lines the AI read aren't in the books and make up exactly the difference, so each gets its own entry.
+	r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-10-31", statement_balance_cents: 91800 });
+	d = r.json();
+	const id2 = d.reconciliation.id;
+	await call("POST", `/reconciliations/${id2}/cleared`, { clear: [d.lines[0].transaction_id] }); // the cheque cleared in October
+	const reading = {
+		read_at: "2026-11-01T00:00:00Z",
+		model: "test",
+		period_start: "2026-10-01",
+		end_date: "2026-10-31",
+		opening_balance_cents: 96500,
+		closing_balance_cents: 91800,
+		adds_up: true,
+		lines: [
+			{ date: "2026-10-03", description: "CHQ 12", amount_cents: -4000 },
+			{ date: "2026-10-05", description: "SERVICE FEE", amount_cents: -500 },
+			{ date: "2026-11-02", description: "NSF CHARGE", amount_cents: -200 },
+		],
+		matched: [[d.lines[0].transaction_id, 0]],
+		unmatched: [1, 2],
+	};
+	await app.db.query(`UPDATE reconciliations SET reading = $2::jsonb WHERE id = $1`, [id2, JSON.stringify(reading)]);
+	r = await call("POST", `/reconciliations/${id2}/finish`, { post_difference: true });
+	expectStatus(r, 200);
+	d = r.json();
+	const mine = d.lines.filter((l: any) => l.description.startsWith("Not in the books"));
+	// A line dated after the statement is posted on the statement date.
+	assert.deepEqual(
+		mine.map((l: any) => [l.entry_date, l.description, l.amount_cents, l.cleared]),
+		[
+			["2026-10-05", "Not in the books: SERVICE FEE", -500, true],
+			["2026-10-31", "Not in the books: NSF CHARGE", -200, true],
+		],
+	);
+	assert.equal((await call("GET", `/accounts/${unrec.code}`)).json().balance_cents, 1700);
+
+	// Clearing accounts are hidden unless shown; other accounts aren't.
+	r = await call("POST", "/accounts", { code: "1950", name: "Transfers in transit", type: "asset", currency: "CAD", description: "", kind: "clearing" });
+	assert.equal(r.json().hidden, true);
+	assert.equal((await call("GET", "/accounts/1000")).json().hidden, false);
+	r = await call("PATCH", "/accounts/1950", { hidden: false });
+	expectStatus(r, 200);
+	assert.equal(r.json().hidden, false);
+	expectStatus(await call("PATCH", "/accounts/1950", { hidden: "no" }), 400);
+});
+
 test("backups: settings, a mounted share and Google Drive", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;

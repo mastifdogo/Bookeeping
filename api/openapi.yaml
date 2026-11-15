@@ -803,9 +803,25 @@ paths:
     post:
       tags: [Reconciliation]
       operationId: finishReconciliation
-      summary: Finish (the difference must be 0)
+      summary: Finish (the difference must be 0, or posted to Unreconciled)
+      description: |
+        With a difference left, finishing is refused unless post_difference is
+        true: then the difference is posted between the account and Ledger's
+        Unreconciled clearing account (in the account's currency) and ticked.
+        When the AI's statement lines that aren't in the books add up to the
+        difference, each gets its own entry; otherwise one entry for the whole
+        difference.
       parameters:
         - { $ref: '#/components/parameters/ReconciliationId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                post_difference: { type: boolean, default: false }
       responses:
         '200':
           description: Finished
@@ -2647,9 +2663,10 @@ components:
 
     Account:
       type: object
-      required: [code, name, type, currency, description, is_active, balance_cents, kind, module_id, module_key, parent_code, total_balance_cents, created_at, updated_at]
+      required: [code, name, type, currency, description, is_active, balance_cents, kind, module_id, module_key, hidden, parent_code, total_balance_cents, created_at, updated_at]
       properties:
-        module_id: { type: string, nullable: true, description: The module that made the account (a clearing account of its own) }
+        hidden: { type: boolean, description: 'Left out of account lists and pickers (still in reports). Clearing accounts are hidden unless shown.' }
+        module_id: { type: string, nullable: true, description: The module that made the account (a clearing account of its own; "ledger" for Ledger's own) }
         module_key: { type: string, nullable: true, description: That module's own name for it }
         kind: { allOf: [{ $ref: '#/components/schemas/AccountKind' }], nullable: true }
         parent_code: { type: string, nullable: true, description: 'The account this one sits under (same type and currency), or null' }
@@ -2679,6 +2696,7 @@ components:
         description: { type: string, maxLength: 1000, default: '' }
         parent_code: { type: string, nullable: true, description: 'Make it a sub-account of this account (same type and currency, at most 5 levels deep)' }
         kind: { allOf: [{ $ref: '#/components/schemas/AccountKind' }], nullable: true }
+        hidden: { type: boolean, description: 'Hide it from account lists and pickers; defaults to true for a clearing account' }
     AccountUpdate:
       type: object
       additionalProperties: false
@@ -2692,6 +2710,7 @@ components:
         is_active: { type: boolean }
         parent_code: { type: string, nullable: true, description: 'Move it under this account (same type and currency); null makes it top-level' }
         kind: { allOf: [{ $ref: '#/components/schemas/AccountKind' }], nullable: true, description: null removes the tag }
+        hidden: { type: boolean, description: Hide or show the account in lists and pickers }
 
     JournalLineCreate:
       type: object
@@ -3178,7 +3197,7 @@ components:
         cleared: { type: boolean }
     ReconciliationDetail:
       type: object
-      required: [reconciliation, opening_balance_cents, cleared_balance_cents, difference_cents, lines, reading]
+      required: [reconciliation, opening_balance_cents, cleared_balance_cents, difference_cents, lines, totals, reading]
       properties:
         reconciliation: { $ref: '#/components/schemas/Reconciliation' }
         opening_balance_cents:
@@ -3192,10 +3211,25 @@ components:
           type: array
           description: Uncleared lines dated on or before the statement, plus the lines cleared on this statement
           items: { $ref: '#/components/schemas/ReconciliationLine' }
+        totals:
+          type: object
+          description: Debits and credits of the lines ticked on this statement, and of the lines not ticked
+          required: [cleared, uncleared]
+          properties:
+            cleared: { $ref: '#/components/schemas/SideTotals' }
+            uncleared: { $ref: '#/components/schemas/SideTotals' }
         reading:
           allOf: [{ $ref: '#/components/schemas/StatementReading' }]
           nullable: true
           description: What the AI read from the attached statement, if it was asked to
+    SideTotals:
+      type: object
+      required: [debit_count, debit_cents, credit_count, credit_cents]
+      properties:
+        debit_count: { type: integer }
+        debit_cents: { $ref: '#/components/schemas/Cents' }
+        credit_count: { type: integer }
+        credit_cents: { $ref: '#/components/schemas/Cents' }
     StatementReading:
       type: object
       required: [read_at, model, period_start, end_date, opening_balance_cents, closing_balance_cents, adds_up, lines, matched, unmatched]

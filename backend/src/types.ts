@@ -47,6 +47,8 @@ export interface Account {
 	module_id: string | null;
 	/** That module's own name for it. */
 	module_key: string | null;
+	/** Left out of account lists and pickers (still in reports); clearing accounts are hidden unless shown. */
+	hidden: boolean;
 	/** The account this one sits under (same type and currency), or null. */
 	parent_code: string | null;
 	/** balance_cents plus the balances of every sub-account below it. */
@@ -65,6 +67,8 @@ export interface AccountCreate {
 	parent_code?: string | null;
 	/** chequing or savings (asset accounts) or credit_card (liability); null or omitted for none. */
 	kind?: string | null;
+	/** Hide it from account lists and pickers; defaults to true for a clearing account. */
+	hidden?: boolean;
 }
 
 export interface AccountUpdate {
@@ -77,6 +81,8 @@ export interface AccountUpdate {
 	parent_code?: string | null;
 	/** Changes the tag; null removes it. */
 	kind?: string | null;
+	/** Hides or shows the account in lists and pickers. */
+	hidden?: boolean;
 }
 
 export interface JournalLineCreate {

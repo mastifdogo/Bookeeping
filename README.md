@@ -362,9 +362,11 @@ A clearing account is an in-between account: one side of a transaction is
 posted there now and the other side later, so it returns to zero (a card
 sale and its payout, wages worked out and then paid, a transfer in
 transit). Modules make their own when they need one, and you can tag an
-asset or liability account of your own as **Clearing**. The Accounts page
-marks them, says which module made each, and points out any that aren't at
-zero.
+asset or liability account of your own as **Clearing**. Clearing accounts
+are hidden from the Accounts page and the account dropdowns (reports and
+balances still count them); **Settings → Clearing accounts** lists them all,
+with who made each and its balance, and a switch to show one. The Accounts
+page still points out any that aren't at zero.
 
 ### Changing an entry's amounts
 
@@ -407,7 +409,15 @@ file can't be imported twice. Modules read them and add their own through
 **Reconcile** (sidebar) checks an account against a bank or card statement.
 Enter the statement's closing date and balance, then tick each transaction
 that appears on it. When the cleared balance matches (difference 0.00),
-finish. The next statement starts from there. Only the most recent
+finish. The page totals the debits and credits ticked and not ticked. If
+a difference is left, **Finish, difference to Unreconciled** posts it
+between the account and Ledger's own **Unreconciled** clearing account and
+ticks it, so the account matches the statement; when the AI's statement
+lines missing from the books make up exactly the difference, each gets its
+own entry with its date and description. Move those amounts to the right
+accounts later. Transactions in the books but not on the statement (a
+cheque not cashed yet) stay unticked for the next statement. The next
+statement starts from there. Only the most recent
 reconciliation of an account can be undone. Posted entries never change;
 reconciliations only mark lines as cleared.
 
@@ -422,9 +432,11 @@ match a statement line (same amount, close in date). Each ticked line shows
 the statement line it was paired with, and statement lines missing from the
 books are listed. The AI finishes nothing: you check the ticks against the
 statement and press Finish, which takes you back to the Reconcile page.
-The Reconcile page lists bank accounts and credit cards (accounts tagged
-chequing, savings or credit card) and accounts already reconciled; **Add
-account…** pulls any other account into the list. A
+The Reconcile page and its account dropdown list bank accounts and credit
+cards (accounts tagged chequing, savings or credit card); **Add account…**
+pulls any other account into the list. While a reconciliation is in
+progress, the Reconcile tab opens on the most recently started one (**All
+reconciliations** goes back to the list). A
 statement that has been reconciled against is tagged "reconciled" under
 Documents and is no longer offered when starting a reconciliation.
 

@@ -14,6 +14,6 @@ export const load: PageLoad = async ({ fetch, url }) => {
 		api(fetch).GET('/accounts')
 	]);
 	// Statements belong to bank, card and loan accounts.
-	const accounts2 = unwrapLoad(accounts).data.filter((a) => a.type === 'asset' || a.type === 'liability');
+	const accounts2 = unwrapLoad(accounts).data.filter((a) => !a.hidden && (a.type === 'asset' || a.type === 'liability'));
 	return { docs: unwrapLoad(docs), entities: unwrapLoad(entities).data, accounts: accounts2, filter: { kind, origin, year, account, q } };
 };

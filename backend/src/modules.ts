@@ -129,6 +129,8 @@ export function validateManifest(v: unknown): ModuleManifest {
 		return x;
 	};
 	const id = str("id", MODULE_ID_RE, 32, true);
+	// Ledger's own clearing accounts use "ledger" as their module id.
+	if (id === "ledger") err.add("id", "ledger is reserved");
 	const name = str("name", /^[^\u0000-\u001f]{1,60}$/, 60, true);
 	const version = str("version", /^v?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/, 40, true);
 	const description = str("description", /^[^\u0000-\u0008\u000b-\u001f]{0,500}$/, 500, false) ?? "";

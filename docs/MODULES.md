@@ -310,7 +310,11 @@ Call `clearingAccount` each time and use the code it returns: a person can
 renumber the account, and the key (with the currency) is what finds it. One
 account per key and currency. Another module can post the clearing side
 into yours: it finds it in `clearingAccounts()` by `module_id` and
-`module_key`. The Accounts page marks clearing accounts and points out any
+`module_key`. Since Ledger 0.20.1 clearing accounts are hidden from the
+account lists and dropdowns unless a person shows them under Settings →
+Clearing accounts (`hidden` on the account); reports still count them.
+Ledger's own Unreconciled account has `module_id` "ledger" (a reserved
+module id). The Accounts page points out any
 that aren't at zero, so don't leave amounts in one that nothing will clear.
 Entries still balance as always; a clearing account is an ordinary account
 with a purpose, not a way around double entry.
