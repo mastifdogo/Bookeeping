@@ -13,6 +13,33 @@ Release.
 
 Paths below are relative to the Ledger repository root (this checkout).
 
+## Push to `main` without asking
+
+**When work on a module is finished and its checks pass, commit and push it
+to `main` of that module's own repository straight away. Do not ask "shall I
+push?", do not wait for a go-ahead, do not leave it on a branch, and do not
+open a pull request.** The owner of these modules has asked for this as a
+standing rule: every finished change to a module goes to `main`, where the
+release workflow publishes the new version. Asking first is the mistake.
+
+- This applies to every kind of work on a module: a new feature, a fix, an
+  update for a new Ledger version, a docs or settings change.
+- Bump `version` in `ledger-module.json` in the same push, so it releases.
+- After pushing, say what was pushed and the new version. Don't ask
+  afterwards either ("want me to release it?"): it is already released.
+- If your environment gives you a different work branch, push there as it
+  requires and then to `main` as well.
+
+The only reasons not to push:
+
+- the checks fail, or you couldn't run them and the change is risky: fix it
+  or say what is blocking;
+- the user said, in this conversation, not to push;
+- the repository isn't the module's own (never push to Ledger's repository
+  while working on a module: see below);
+- the module has no repository yet: creating one is the user's to do or to
+  name; once it exists, push without asking.
+
 ## When the skill is invoked with no instruction
 
 If the user just tags or runs this skill and says nothing else, the job is:
@@ -33,8 +60,9 @@ If the user just tags or runs this skill and says nothing else, the job is:
    module's `version` (a new feature raises the middle number, a fix or
    small tweak the last).
 4. Run the checks (below). Don't push anything that fails them.
-5. Commit and **push to `main` of that module's repository**. Its release
-   workflow tags and publishes the new version by itself.
+5. Commit and **push to `main` of that module's repository, without
+   asking first**. Its release workflow tags and publishes the new version
+   by itself.
 6. Say what changed, the new version, and anything you chose not to change
    and why. If nothing needed changing, say so and push nothing.
 
@@ -341,10 +369,12 @@ Postings need accounts: create them first through Ledger's API
 (`POST /api/v1/accounts` with `{code, name, type, currency}`) in the served
 instance.
 
-## 6. Publish (only when the user asks)
+## 6. Publish: push to `main`, without asking
 
-Creating repositories, pushing and releasing are outward-facing: confirm
-with the user first, and use the repository they name.
+Pushing is part of finishing the work (see "Push to `main` without asking"
+at the top): once the checks pass, push the module to `main` of its own
+repository and don't ask first. Creating a new repository is the one thing
+to settle with the user: use the repository they name.
 
 **Never push to the Ledger repository (`mastifdogo/Bookeeping`) while
 working on a module.** Push only to the module's own repository. If the
