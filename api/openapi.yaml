@@ -3331,12 +3331,22 @@ components:
         - { type: boolean }
     SettingsField:
       type: object
-      required: [key, label, type, help, required, default, options, min, max, tab]
+      required: [key, label, type, help, required, default, options, min, max, tab, currency, account_types, show_if]
       properties:
         tab: { type: string, nullable: true, description: 'The tab it is shown on (an id from tabs); null: the first tab' }
+        currency: { type: string, nullable: true, description: 'account fields: only accounts in this currency are offered' }
+        account_types: { type: array, items: { type: string }, description: 'account fields: only accounts of these types are offered (empty: any)' }
+        show_if:
+          type: object
+          nullable: true
+          description: Shown only while another field has one of these values
+          required: [key, in]
+          properties:
+            key: { type: string }
+            in: { type: array, items: { $ref: '#/components/schemas/SettingValue' } }
         key: { type: string }
         label: { type: string }
-        type: { type: string, enum: [text, textarea, secret, number, boolean, select] }
+        type: { type: string, enum: [text, textarea, secret, number, boolean, select, account, heading], description: 'account: a picker of accounts, the value is the code; heading: a title between groups of fields, with no value' }
         help: { type: string }
         required: { type: boolean }
         default: { $ref: '#/components/schemas/SettingValue' }

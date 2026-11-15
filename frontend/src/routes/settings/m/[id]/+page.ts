@@ -11,5 +11,7 @@ export const load: PageLoad = async ({ fetch, params, parent }) => {
 		: null;
 	// What the module's "Import from CSV" takes, if it has one.
 	const imp = await api(fetch).GET('/modules/{moduleId}/import', { params: { path: { moduleId: params.id } } });
-	return { id: params.id, mod, settings, importInfo: imp.data?.available ? imp.data : null };
+	// Account fields offer the organization's accounts.
+	const accounts = settings?.fields.some((f) => f.type === 'account') ? ((await api(fetch).GET('/accounts')).data?.data ?? []) : [];
+	return { id: params.id, mod, settings, accounts, importInfo: imp.data?.available ? imp.data : null };
 };

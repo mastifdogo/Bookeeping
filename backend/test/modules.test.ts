@@ -284,6 +284,36 @@ test("manifest settings are validated", () => {
 		{ id: "templates", label: "templates", help: "", page: "templates.html" },
 	]);
 	assert.deepEqual(tabbed.fields.map((f) => [f.key, f.tab]), [["prefix", null], ["receivable_account", "accounts"]]);
+	// Account pickers, headings between groups, and fields shown only when another has a value.
+	const rich = validateManifest({
+		...base,
+		settings: {
+			fields: [
+				{ key: "send_with", type: "select", options: ["mailbox", "smtp"], default: "mailbox" },
+				{ key: "h_smtp", type: "heading", label: "Your mail server", show: undefined },
+				{ key: "smtp_host", show_if: { key: "send_with", equals: "smtp" } },
+				{ key: "bank_account", type: "account", currency: "CAD", account_types: ["asset", "liability"] },
+			].map(({ show: _s, ...f }) => f),
+		},
+	}).settings!;
+	assert.deepEqual(rich.fields.map((f) => [f.key, f.type, f.currency, f.account_types, f.show_if]), [
+		["send_with", "select", null, [], null],
+		["h_smtp", "heading", null, [], null],
+		["smtp_host", "text", null, [], { key: "send_with", in: ["smtp"] }],
+		["bank_account", "account", "CAD", ["asset", "liability"], null],
+	]);
+	for (const fields of [
+		[{ key: "a", type: "account", currency: "dollars" }],
+		[{ key: "a", type: "account", account_types: ["bank"] }],
+		[{ key: "a", currency: "CAD" }], // only for account fields
+		[{ key: "a", type: "heading", default: "x" }],
+		[{ key: "a", show_if: { key: "missing", equals: 1 } }],
+		[{ key: "a", show_if: { key: "a", equals: 1 } }],
+		[{ key: "a", show_if: { key: "b" } }, { key: "b" }],
+		[{ key: "a", show_if: { key: "s", equals: "x" } }, { key: "s", type: "secret" }],
+	]) {
+		assert.throws(() => validateManifest({ ...base, settings: { fields } }), /validation failed/, JSON.stringify(fields));
+	}
 	for (const settings of [
 		{ tabs: [{ id: "a" }, { id: "a" }], fields: [{ key: "x" }] },
 		{ tabs: [{ id: "Bad Id" }], fields: [{ key: "x" }] },

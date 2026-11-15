@@ -612,7 +612,10 @@ values with `ctx.settings`.
 | Field member | |
 |---|---|
 | `key` | Lowercase letters, digits and `_`, up to 40, starting with a letter. |
-| `type` | `text` (one line, 500 chars), `textarea` (10,000), `secret` (2,000; never shown again after saving), `number` (`min`/`max`), `boolean`, `select` (`options`: strings or `{ "value", "label" }`). Default `text`. |
+| `type` | `text` (one line, 500 chars), `textarea` (10,000), `secret` (2,000; never shown again after saving), `number` (`min`/`max`), `boolean`, `select` (`options`: strings or `{ "value", "label" }`), `account`, `heading`. Default `text`. |
+| `account` type | Ledger 0.19.8. A picker of the organization's accounts; the value is the account's code. `currency` (`"CAD"`) and `account_types` (`["asset", "liability"]`) narrow what is offered, and a newly chosen account must match them. Use it for every account a module asks for, with a key containing `account`. |
+| `heading` type | Ledger 0.19.8. A title (`label`, optional `help`) between groups of fields. It holds no value. |
+| `show_if` | Ledger 0.19.8. `{ "key": "<another field>", "equals": value }` or `{ "key", "in": [values] }`: the field (or heading) shows only while that field has one of the values. A hidden `required` field isn't asked for, and keeps what was saved. |
 | `label`, `help` | Shown in the form (60 / 300 characters). |
 | `required` | The form can't be saved without a value. |
 | `default` | Used until the user sets a value (not for secrets). |
@@ -643,6 +646,13 @@ page into tabs of its own:
 | `id` | Lowercase letters, digits and `-`, up to 32, starting with a letter. Fields name it in `"tab"`. |
 | `label`, `help` | The tab's name (40 characters) and a line shown under the tabs (300). |
 | `page` | Optional file in the module's `ui` directory shown on the tab, below its fields if it has any. |
+
+Ledger lays the fields out two or three across where there is room (long
+text, tick boxes and headings take the whole width), sizes a tab's `page`
+to its content, and puts a module's "Import from CSV" on a tab of its own
+after the module's tabs (0.19.8). Keep labels short ("Receivables", not
+"Receivable account code (CAD)") and let a heading or the tab carry the
+context.
 
 A field without `"tab"` goes on the first tab. Each tab saves its own
 fields; the others keep their values. A tab must have at least one field or

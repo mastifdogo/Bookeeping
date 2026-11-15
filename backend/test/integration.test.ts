@@ -1591,6 +1591,51 @@ test("An account's code can be changed, and modules keep pointing at the same ac
 	assert.equal((await call("GET", "/accounts/1200")).json().balance_cents, 0);
 });
 
+test("Module settings: account pickers, headings and fields that depend on another", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "1010", "US account", "asset", "USD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	await loadModules(t, app, {
+		shop: {
+			manifest: {
+				settings: {
+					fields: [
+						{ key: "h_books", type: "heading", label: "Books" },
+						{ key: "bank_account", label: "Bank", type: "account", currency: "CAD", account_types: ["asset"] },
+						{ key: "send_with", type: "select", options: ["mailbox", "smtp"], default: "mailbox" },
+						{ key: "smtp_host", required: true, show_if: { key: "send_with", equals: "smtp" } },
+					],
+				},
+			},
+			code: `export default function (ctx) { ctx.route("GET", "/settings", () => ctx.settings.get()); }`,
+		},
+	});
+	const put = (values: unknown) => call("PUT", "/modules/shop/settings", { values });
+	let r = await call("GET", "/modules/shop/settings");
+	expectStatus(r, 200);
+	assert.deepEqual(Object.keys(r.json().values), ["bank_account", "send_with", "smtp_host"], "a heading holds no value");
+	// An account field takes one of the organization's accounts, of the right currency and type.
+	for (const [code, why] of [["9999", /no account 9999/], ["1010", /in USD, not CAD/], ["4000", /revenue account; choose asset/], ["not a code", /account's code/]] as const) {
+		r = await put({ bank_account: code });
+		expectStatus(r, 422);
+		assert.match(JSON.stringify(r.json()), why);
+	}
+	expectStatus(await put({ bank_account: "1000" }), 200);
+	expectStatus(await put({ h_books: "x" }), 422);
+	// A required field that isn't shown isn't asked for; once it is shown, it is.
+	expectStatus(await put({ send_with: "smtp" }), 422);
+	expectStatus(await put({ send_with: "smtp", smtp_host: "mail.example.com" }), 200);
+	assert.deepEqual((await call("GET", "/m/shop/settings")).json(), { bank_account: "1000", send_with: "smtp", smtp_host: "mail.example.com" });
+	// Emptying the picker clears the setting, and a renumbered account follows.
+	expectStatus(await call("PATCH", "/accounts/1000", { code: "1001" }), 200);
+	assert.equal((await call("GET", "/m/shop/settings")).json().bank_account, "1001");
+	expectStatus(await put({ bank_account: "" }), 200);
+	assert.equal((await call("GET", "/m/shop/settings")).json().bank_account, null);
+});
+
 test("A posted entry's amounts can be changed, and every change is logged", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;

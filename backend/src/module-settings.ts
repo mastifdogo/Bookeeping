@@ -6,8 +6,10 @@ import type { Queryable } from "./db.ts";
 import { queryRow } from "./db.ts";
 import { ValidationError } from "./errors.ts";
 
-export type FieldType = "text" | "textarea" | "secret" | "number" | "boolean" | "select";
-const FIELD_TYPES: readonly FieldType[] = ["text", "textarea", "secret", "number", "boolean", "select"];
+export type FieldType = "text" | "textarea" | "secret" | "number" | "boolean" | "select" | "account" | "heading";
+const FIELD_TYPES: readonly FieldType[] = ["text", "textarea", "secret", "number", "boolean", "select", "account", "heading"];
+const ACCOUNT_TYPES = ["asset", "liability", "equity", "revenue", "expense"] as const;
+const CODE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 
 export interface SettingsField {
 	key: string;
@@ -23,6 +25,12 @@ export interface SettingsField {
 	max: number | null;
 	/** The tab it is shown on (an id from settings.tabs); null: the first tab. */
 	tab: string | null;
+	/** account: only accounts in this currency are offered (null: any). */
+	currency: string | null;
+	/** account: only accounts of these types are offered (empty: any). */
+	account_types: string[];
+	/** Shown only while another field has one of these values; null: always. */
+	show_if: { key: string; in: SettingValue[] } | null;
 }
 
 /** A tab on the module's settings page: some of the fields, a page of the module's own, or both. */
@@ -92,7 +100,7 @@ export function parseSettingsSpec(v: unknown, err: ValidationError, hasUi: boole
 		const p = `settings.fields[${i}]`;
 		const f = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null) as Record<string, unknown> | null;
 		if (!f) return bad(`${p} must be an object`);
-		const allowed = ["key", "label", "type", "help", "required", "default", "options", "min", "max", "tab"];
+		const allowed = ["key", "label", "type", "help", "required", "default", "options", "min", "max", "tab", "currency", "account_types", "show_if"];
 		const extra = Object.keys(f).find((k) => !allowed.includes(k));
 		if (extra) return bad(`${p}: unknown field ${JSON.stringify(extra)}`);
 		if (typeof f.key !== "string" || !KEY_RE.test(f.key)) return bad(`${p}.key must be lowercase letters, digits or _ (up to 40), starting with a letter`);
@@ -129,14 +137,38 @@ export function parseSettingsSpec(v: unknown, err: ValidationError, hasUi: boole
 		}
 		const tab = f.tab === undefined || f.tab === null ? null : f.tab;
 		if (tab !== null && (typeof tab !== "string" || !tabs.some((t) => t.id === tab))) return bad(`${p}.tab must be the id of one of settings.tabs`);
-		const field: SettingsField = { key: f.key, label, type, help, required: f.required === true, default: null, options, min, max, tab };
+		// account: a picker of the organization's accounts; the value is the account's code.
+		const currency = f.currency === undefined || f.currency === null ? null : f.currency;
+		if (currency !== null && (type !== "account" || typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency))) return bad(`${p}.currency is a currency code such as CAD, for account fields only`);
+		const accountTypes = f.account_types === undefined || f.account_types === null ? [] : f.account_types;
+		if (!Array.isArray(accountTypes) || (accountTypes.length > 0 && type !== "account") || accountTypes.some((t) => !(ACCOUNT_TYPES as readonly unknown[]).includes(t))) {
+			return bad(`${p}.account_types lists any of ${ACCOUNT_TYPES.join(", ")}, for account fields only`);
+		}
+		// heading: a title between groups of fields; it holds no value.
+		if (type === "heading" && (f.required !== undefined || f.default !== undefined)) return bad(`${p}: a heading has only key, label, help, tab and show_if`);
+		let showIf: SettingsField["show_if"] = null;
+		if (f.show_if !== undefined && f.show_if !== null) {
+			const c = (typeof f.show_if === "object" && !Array.isArray(f.show_if) ? f.show_if : null) as Record<string, unknown> | null;
+			const values = c && Array.isArray(c.in) ? c.in : c && c.equals !== undefined ? [c.equals] : null;
+			if (!c || typeof c.key !== "string" || !values || values.length === 0 || values.length > 20 || values.some((x) => !["string", "number", "boolean"].includes(typeof x)) || Object.keys(c).some((k) => !["key", "in", "equals"].includes(k))) {
+				return bad(`${p}.show_if must be {"key": "<another field>", "equals": value} or {"key", "in": [values]}`);
+			}
+			showIf = { key: c.key, in: values as SettingValue[] };
+		}
+		const field: SettingsField = { key: f.key, label, type, help, required: f.required === true, default: null, options, min, max, tab, currency, account_types: accountTypes as string[], show_if: showIf };
 		if (f.default !== undefined && f.default !== null) {
 			if (type === "secret") return bad(`${p}: secret fields can't have a default`);
+			if (type === "heading") return bad(`${p}: a heading has no default`);
 			const e = new ValidationError();
 			field.default = checkValue(field, f.default, e);
 			if (e.details.length) return bad(`${p}.default ${e.details[0]!.message}`);
 		}
 		fields.push(field);
+	}
+	for (const f of fields) {
+		if (!f.show_if) continue;
+		const other = fields.find((x) => x.key === f.show_if!.key);
+		if (!other || other === f || other.type === "heading" || other.type === "secret") return bad(`settings.fields: ${f.key}.show_if.key must be another field of this module (not a secret or a heading)`);
 	}
 	// A tab with nothing on it would be an empty page.
 	const first = tabs[0]?.id;
@@ -162,6 +194,10 @@ function checkValue(f: SettingsField, v: unknown, err: ValidationError): Setting
 		}
 		case "select":
 			return typeof v === "string" && f.options.some((o) => o.value === v) ? v : fail("must be one of the choices");
+		case "heading":
+			return fail("is a heading, not a setting");
+		case "account":
+			return typeof v === "string" && (v === "" || CODE_RE.test(v)) ? v : fail("must be an account's code");
 		default: {
 			if (typeof v !== "string") return fail("must be text");
 			if (v.length > TEXT_MAX[f.type]!) return fail(`must be at most ${TEXT_MAX[f.type]} characters`);
@@ -170,6 +206,9 @@ function checkValue(f: SettingsField, v: unknown, err: ValidationError): Setting
 		}
 	}
 }
+
+/** The fields that hold a value (everything but headings). */
+const valueFields = (spec: SettingsSpec) => spec.fields.filter((f) => f.type !== "heading");
 
 async function stored(db: Queryable, moduleId: string): Promise<Record<string, SettingValue>> {
 	const r = await queryRow<{ values: Record<string, SettingValue> }>(db, `SELECT "values" FROM module_settings WHERE module_id = $1`, [moduleId]);
@@ -180,7 +219,7 @@ async function stored(db: Queryable, moduleId: string): Promise<Record<string, S
 export async function moduleValues(db: Queryable, moduleId: string, spec: SettingsSpec): Promise<Record<string, SettingValue>> {
 	const s = await stored(db, moduleId);
 	const out: Record<string, SettingValue> = {};
-	for (const f of spec.fields) out[f.key] = s[f.key] !== undefined && s[f.key] !== null ? s[f.key]! : f.default;
+	for (const f of valueFields(spec)) out[f.key] = s[f.key] !== undefined && s[f.key] !== null ? s[f.key]! : f.default;
 	return out;
 }
 
@@ -188,7 +227,7 @@ export async function moduleValues(db: Queryable, moduleId: string, spec: Settin
 export async function publicSettings(db: Queryable, moduleId: string, spec: SettingsSpec) {
 	const values = await moduleValues(db, moduleId, spec);
 	const secrets_set: Record<string, boolean> = {};
-	for (const f of spec.fields) {
+	for (const f of valueFields(spec)) {
 		if (f.type === "secret") {
 			secrets_set[f.key] = typeof values[f.key] === "string" && values[f.key] !== "";
 			values[f.key] = null;
@@ -216,9 +255,10 @@ export async function saveSettings(db: Queryable, moduleId: string, spec: Settin
 	}
 	const current = await stored(db, moduleId);
 	const next: Record<string, SettingValue> = {};
-	for (const f of spec.fields) if (current[f.key] !== undefined) next[f.key] = current[f.key]!;
+	const accounts: { f: SettingsField; code: string }[] = [];
+	for (const f of valueFields(spec)) if (current[f.key] !== undefined) next[f.key] = current[f.key]!;
 	for (const [k, v] of Object.entries(change as Record<string, unknown>)) {
-		const f = spec.fields.find((x) => x.key === k);
+		const f = valueFields(spec).find((x) => x.key === k);
 		if (!f) {
 			err.add(k, "is not a setting of this module");
 			continue;
@@ -230,11 +270,23 @@ export async function saveSettings(db: Queryable, moduleId: string, spec: Settin
 		const val = checkValue(f, v, err);
 		if (val === null) continue;
 		if (f.type === "secret" && val === "") delete next[k];
+		else if (f.type === "account" && val === "") delete next[k];
 		else next[k] = val;
+		if (f.type === "account" && val !== "" && val !== current[k]) accounts.push({ f, code: val as string });
 	}
-	for (const f of spec.fields) {
+	// A newly chosen account must be one of this organization's, of the kind the field asks for.
+	for (const { f, code } of accounts) {
+		const a = await queryRow<{ type: string; currency: string; is_active: boolean }>(db, `SELECT type::text AS type, currency::text AS currency, is_active FROM accounts WHERE code = $1`, [code]);
+		if (!a) err.add(f.key, `there is no account ${code}`);
+		else if (!a.is_active) err.add(f.key, `account ${code} is inactive`);
+		else if (f.currency && a.currency !== f.currency) err.add(f.key, `account ${code} is in ${a.currency}, not ${f.currency}`);
+		else if (f.account_types.length > 0 && !f.account_types.includes(a.type)) err.add(f.key, `account ${code} is ${/^[aeiou]/.test(a.type) ? "an" : "a"} ${a.type} account; choose ${f.account_types.join(" or ")}`);
+	}
+	for (const f of valueFields(spec)) {
 		const v = next[f.key] ?? f.default;
-		if (f.required && (v === null || v === "")) err.add(f.key, "is required");
+		// A field that isn't shown (show_if) can't be asked for.
+		const shown = !f.show_if || f.show_if.in.includes((next[f.show_if.key] ?? spec.fields.find((x) => x.key === f.show_if!.key)?.default ?? null) as SettingValue);
+		if (f.required && shown && (v === null || v === "")) err.add(f.key, "is required");
 	}
 	err.throwIfAny();
 	await db.query(

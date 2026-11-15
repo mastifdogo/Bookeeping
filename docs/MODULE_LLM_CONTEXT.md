@@ -215,6 +215,14 @@ Settings, validates and stores it. Don't build your own settings screen.
   `{ value, label }`). At most 50 fields.
 - Optional `settings.page`: a file in `ui/` shown in an iframe below the
   form, only for things a form can't do.
+- Ledger ≥ 0.19.8 field kinds for a tidy page: `"type": "account"` (a
+  picker of accounts; value is the code; optional `"currency": "CAD"`,
+  `"account_types": ["asset"]`; use it for EVERY account setting, never a
+  text box for a code), `"type": "heading"` (`label`, `help`; a title between
+  groups, no value), and `"show_if": { "key": "other_field", "equals": v }`
+  (or `"in": [...]`) to show a field or heading only when it applies (e.g.
+  server details only when "own server" is chosen). Short labels; put the
+  explanation in the heading's or tab's `help`.
 - Optional `settings.tabs` (Ledger ≥ 0.19.6) splits the module's settings
   page into its own tabs: `[{ "id": "accounts", "label": "Accounts",
   "help"?: "…", "page"?: "file-in-ui.html" }]` (≤ 12; id lowercase, digits,

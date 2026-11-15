@@ -2407,10 +2407,22 @@ export interface components {
         SettingsField: {
             /** @description The tab it is shown on (an id from tabs); null: the first tab */
             tab: string | null;
+            /** @description account fields: only accounts in this currency are offered */
+            currency: string | null;
+            /** @description account fields: only accounts of these types are offered (empty: any) */
+            account_types: string[];
+            /** @description Shown only while another field has one of these values */
+            show_if: {
+                key: string;
+                in: components["schemas"]["SettingValue"][];
+            } | null;
             key: string;
             label: string;
-            /** @enum {string} */
-            type: "text" | "textarea" | "secret" | "number" | "boolean" | "select";
+            /**
+             * @description account: a picker of accounts, the value is the code; heading: a title between groups of fields, with no value
+             * @enum {string}
+             */
+            type: "text" | "textarea" | "secret" | "number" | "boolean" | "select" | "account" | "heading";
             help: string;
             required: boolean;
             default: components["schemas"]["SettingValue"];

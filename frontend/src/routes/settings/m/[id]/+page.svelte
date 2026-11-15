@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import ModuleImport from '#lib/components/ModuleImport.svelte';
+	import AccountSelect from '#lib/components/AccountSelect.svelte';
 	import { api, unwrap, type ModuleSettings } from '#lib/api/client.ts';
 	import { goto, invalidate } from '$app/navigation';
 	import { page } from '$app/state';
@@ -49,15 +50,57 @@
 		}
 	}
 
-	// Tabs the module declared for its settings page; the open one is in the address (?tab=).
-	let tabs = $derived(settings?.tabs ?? []);
+	// Tabs: the ones the module declared (or one "Settings" tab for a module that declared none),
+	// then "Import" when the module takes a CSV. The open one is in the address (?tab=).
+	const IMPORT = '_import';
+	type Tab = { id: string; label: string; help: string; page: string | null };
+	let own = $derived<Tab[]>(
+		settings?.tabs.length ? settings.tabs : settings && (settings.fields.length > 0 || settings.page) ? [{ id: '_settings', label: 'Settings', help: '', page: null }] : []
+	);
+	let tabs = $derived<Tab[]>([...own, ...(data.importInfo ? [{ id: IMPORT, label: 'Import', help: '', page: null }] : [])]);
 	let tab = $derived(tabs.find((t) => t.id === page.url.searchParams.get('tab')) ?? tabs[0] ?? null);
-	// The fields on the open tab (all of them when the module has no tabs).
-	let shownFields = $derived(!settings ? [] : tabs.length === 0 ? settings.fields : settings.fields.filter((f) => (f.tab ?? tabs[0]!.id) === tab!.id));
+	// The open tab's fields. A field that depends on another (show_if) shows only while that one has the right value.
+	let tabFields = $derived(!settings || !tab || tab.id === IMPORT ? [] : settings.fields.filter((f) => (f.tab ?? own[0]!.id) === tab!.id || own[0]!.id === '_settings'));
+	const visible = (f: ModuleSettings['fields'][number]) => !f.show_if || f.show_if.in.includes((form[f.show_if.key] ?? null) as never);
+	let shownFields = $derived(tabFields.filter(visible));
 	// Pages of the module's own shown on the open tab.
 	let shownPages = $derived(
-		!settings ? [] : [...(tab?.page ? [tab.page] : []), ...(settings.page && (tabs.length === 0 || tab?.id === tabs[0]!.id) ? [settings.page] : [])]
+		!settings || !tab || tab.id === IMPORT ? [] : [...(tab.page ? [tab.page] : []), ...(settings.page && tab.id === own[0]?.id ? [settings.page] : [])]
 	);
+	// Accounts an account field offers: active ones, of its currency and types.
+	const accountsFor = (f: ModuleSettings['fields'][number]) =>
+		data.accounts.filter((a) => (a.is_active || a.code === form[f.key]) && (!f.currency || a.currency === f.currency) && (f.account_types.length === 0 || f.account_types.includes(a.type)));
+
+	// A page of the module's is as tall as what it shows (it is on Ledger's own address, so it can be measured).
+	function fitHeight(frame: HTMLIFrameElement) {
+		let watch: ResizeObserver | undefined;
+		const fit = () => {
+			try {
+				const doc = frame.contentDocument;
+				if (doc?.documentElement) frame.style.height = `${Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0) + 2}px`;
+			} catch {
+				// not measurable: the height in the stylesheet stays
+			}
+		};
+		const onLoad = () => {
+			fit();
+			watch?.disconnect();
+			try {
+				const body = frame.contentDocument?.body;
+				if (body) {
+					watch = new ResizeObserver(fit);
+					watch.observe(body);
+				}
+			} catch {
+				// as above
+			}
+		};
+		frame.addEventListener('load', onLoad);
+		return () => {
+			frame.removeEventListener('load', onLoad);
+			watch?.disconnect();
+		};
+	}
 	function openTab(id: string) {
 		saved = false;
 		error = null;
@@ -70,7 +113,7 @@
 	function reset(s: ModuleSettings | null) {
 		settings = s;
 		if (!s) return;
-		form = Object.fromEntries(s.fields.map((f) => [f.key, f.type === 'secret' ? '' : (s.values[f.key] ?? (f.type === 'boolean' ? false : ''))]));
+		form = Object.fromEntries(s.fields.filter((f) => f.type !== 'heading').map((f) => [f.key, f.type === 'secret' ? '' : (s.values[f.key] ?? (f.type === 'boolean' ? false : ''))]));
 		clearSecret = {};
 	}
 
@@ -80,15 +123,16 @@
 		saved = false;
 		const values: Record<string, Value> = {};
 		if (!settings) return;
-		// Only the open tab's fields are sent; the others keep their saved values.
+		// Only the open tab's fields are sent; the others, and those not shown, keep their saved values.
 		for (const f of shownFields) {
+			if (f.type === 'heading') continue;
 			const v = form[f.key];
 			if (f.type === 'secret') {
 				if (clearSecret[f.key]) values[f.key] = '';
 				else if (v) values[f.key] = v;
 			} else if (f.type === 'number') {
 				values[f.key] = v === '' || v === null ? null : Number(v);
-			} else if ((f.type === 'text' || f.type === 'textarea') && v === '') {
+			} else if ((f.type === 'text' || f.type === 'textarea' || f.type === 'account') && v === '') {
 				values[f.key] = null;
 			} else {
 				values[f.key] = v;
@@ -123,8 +167,6 @@
 	{#if !settings}<p class="muted small" style="margin-bottom:0">This module has no settings of its own.</p>{/if}
 </div>
 
-{#if data.importInfo}<ModuleImport moduleId={data.id} moduleName={mod.name} info={data.importInfo} />{/if}
-
 {#if tabs.length > 1}
 	<div class="subtabs" role="tablist" aria-label="{mod.name} settings">
 		{#each tabs as t (t.id)}
@@ -134,8 +176,10 @@
 {/if}
 {#if tab?.help}<p class="muted small" style="margin-top:0">{tab.help}</p>{/if}
 
+{#if tab?.id === IMPORT && data.importInfo}<ModuleImport moduleId={data.id} moduleName={mod.name} info={data.importInfo} />{/if}
+
 {#if settings && shownFields.length > 0}
-	<form class="card" style="max-width:640px" onsubmit={save}>
+	<form class="card" onsubmit={save}>
 		{#if (page.data.user?.organizations.length ?? 0) > 1}
 			<p class="muted small" style="margin-top:0">
 				Settings for <strong>{page.data.user?.organization.name}</strong>. Each organization keeps its own; switch books in
@@ -146,40 +190,59 @@
 		<ErrorNotice {error} />
 		<div class="fields">
 			{#each shownFields as f (f.key)}
-				{#if f.type === 'boolean'}
-					<label class="inline">
-						<input type="checkbox" checked={form[f.key] === true} onchange={(e) => (form[f.key] = e.currentTarget.checked)} />
-						{f.label}
-					</label>
+				{#if f.type === 'heading'}
+					<div class="wide heading">
+						<h3>{f.label}</h3>
+						{#if f.help}<p class="muted small">{f.help}</p>{/if}
+					</div>
+				{:else if f.type === 'boolean'}
+					<div class="wide">
+						<label class="inline">
+							<input type="checkbox" checked={form[f.key] === true} onchange={(e) => (form[f.key] = e.currentTarget.checked)} />
+							{f.label}
+						</label>
+						{#if f.help}<p class="muted small help">{f.help}</p>{/if}
+					</div>
 				{:else}
-					<label>
-						<span>{f.label}{#if f.required}<span aria-hidden="true"> *</span>{/if}</span>
-						{#if f.type === 'textarea'}
-							<textarea rows="5" bind:value={form[f.key]} placeholder={f.default != null ? String(f.default) : ''}></textarea>
-						{:else if f.type === 'select'}
-							<select bind:value={form[f.key]}>
-								{#if !f.required && f.default == null}<option value="">—</option>{/if}
-								{#each f.options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
-							</select>
-						{:else if f.type === 'number'}
-							<input type="number" step="any" min={f.min} max={f.max} bind:value={form[f.key]} placeholder={f.default != null ? String(f.default) : ''} />
-						{:else if f.type === 'secret'}
-							<input
-								type="password"
-								autocomplete="new-password"
-								bind:value={form[f.key]}
-								disabled={clearSecret[f.key]}
-								placeholder={settings.secrets_set[f.key] ? '•••••••• (saved; type to replace)' : 'Not set'}
-							/>
-						{:else}
-							<input bind:value={form[f.key]} placeholder={f.default != null ? String(f.default) : ''} />
+					<div class:wide={f.type === 'textarea'}>
+						<label>
+							<span>{f.label}{#if f.required}<span aria-hidden="true"> *</span>{/if}</span>
+							{#if f.type === 'textarea'}
+								<textarea rows="5" bind:value={form[f.key]} placeholder={f.default != null ? String(f.default) : ''}></textarea>
+							{:else if f.type === 'select'}
+								<select bind:value={form[f.key]}>
+									{#if !f.required && f.default == null}<option value="">—</option>{/if}
+									{#each f.options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+								</select>
+							{:else if f.type === 'account'}
+								<AccountSelect
+									bind:value={form[f.key] as string}
+									accounts={accountsFor(f)}
+									label={f.label}
+									placeholder={f.required ? 'Choose account…' : '(none)'}
+									required={f.required}
+									defaults={{ ...(f.account_types[0] ? { type: f.account_types[0] as never } : {}), ...(f.currency ? { currency: f.currency as never } : {}) }}
+								/>
+							{:else if f.type === 'number'}
+								<input type="number" step="any" min={f.min} max={f.max} bind:value={form[f.key]} placeholder={f.default != null ? String(f.default) : ''} />
+							{:else if f.type === 'secret'}
+								<input
+									type="password"
+									autocomplete="new-password"
+									bind:value={form[f.key]}
+									disabled={clearSecret[f.key]}
+									placeholder={settings.secrets_set[f.key] ? '•••••••• (saved; type to replace)' : 'Not set'}
+								/>
+							{:else}
+								<input bind:value={form[f.key]} placeholder={f.default != null ? String(f.default) : ''} />
+							{/if}
+						</label>
+						{#if f.type === 'secret' && settings.secrets_set[f.key]}
+							<label class="inline small"><input type="checkbox" bind:checked={clearSecret[f.key]} /> Remove the saved value</label>
 						{/if}
-					</label>
-					{#if f.type === 'secret' && settings.secrets_set[f.key]}
-						<label class="inline small"><input type="checkbox" bind:checked={clearSecret[f.key]} /> Remove the saved value</label>
-					{/if}
+						{#if f.help}<p class="muted small help">{f.help}</p>{/if}
+					</div>
 				{/if}
-				{#if f.help}<p class="muted small help">{f.help}</p>{/if}
 			{/each}
 		</div>
 		<p style="margin-bottom:0"><button class="primary" disabled={busy}>Save</button></p>
@@ -187,7 +250,7 @@
 {/if}
 
 {#each shownPages as src (src)}
-	<iframe class="card module-page" {src} title="Module settings{tab ? `: ${tab.label}` : ''}" {@attach forwardSearchKeys}></iframe>
+	<iframe class="card module-page" {src} title="Module settings{tab ? `: ${tab.label}` : ''}" {@attach forwardSearchKeys} {@attach fitHeight}></iframe>
 {/each}
 
 {#if navItem?.hidden}
@@ -239,18 +302,37 @@
 		min-height: 420px;
 		padding: 0;
 	}
+	/* Two columns where there is room; long text, tick boxes and headings take the whole width. */
 	.fields {
-		display: flex;
-		flex-direction: column;
-		gap: 0.6rem;
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+		gap: 0.8rem 1.25rem;
+		max-width: 56rem;
+		align-items: start;
+	}
+	.fields .wide {
+		grid-column: 1 / -1;
+	}
+	.fields .heading h3 {
+		margin: 0.6rem 0 0;
+		font-size: 1rem;
+		padding-bottom: 0.25rem;
+		border-bottom: 1px solid var(--border);
+	}
+	.fields .heading:first-child h3 {
+		margin-top: 0;
+	}
+	.fields .heading p {
+		margin: 0.3rem 0 0;
 	}
 	.help {
-		margin: -0.35rem 0 0.2rem;
+		margin: 0.25rem 0 0;
 	}
 	.module-page {
 		display: block;
 		width: 100%;
-		min-height: 420px;
+		height: 420px;
+		min-height: 6rem;
 		padding: 0;
 		margin-top: 1rem;
 	}
