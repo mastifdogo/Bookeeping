@@ -3331,8 +3331,9 @@ components:
         - { type: boolean }
     SettingsField:
       type: object
-      required: [key, label, type, help, required, default, options, min, max]
+      required: [key, label, type, help, required, default, options, min, max, tab]
       properties:
+        tab: { type: string, nullable: true, description: 'The tab it is shown on (an id from tabs); null: the first tab' }
         key: { type: string }
         label: { type: string }
         type: { type: string, enum: [text, textarea, secret, number, boolean, select] }
@@ -3411,8 +3412,19 @@ components:
             errors: { type: array, items: { $ref: '#/components/schemas/ModuleImportProblem' } }
     ModuleSettings:
       type: object
-      required: [fields, values, secrets_set, page]
+      required: [fields, values, secrets_set, page, tabs]
       properties:
+        tabs:
+          type: array
+          description: Tabs the module splits its settings page into; empty means one page
+          items:
+            type: object
+            required: [id, label, help, page]
+            properties:
+              id: { type: string }
+              label: { type: string }
+              help: { type: string }
+              page: { type: string, nullable: true, description: URL of a page from the module shown on this tab }
         fields:
           type: array
           items: { $ref: '#/components/schemas/SettingsField' }

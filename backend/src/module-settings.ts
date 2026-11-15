@@ -21,18 +21,33 @@ export interface SettingsField {
 	/** number: bounds. */
 	min: number | null;
 	max: number | null;
+	/** The tab it is shown on (an id from settings.tabs); null: the first tab. */
+	tab: string | null;
+}
+
+/** A tab on the module's settings page: some of the fields, a page of the module's own, or both. */
+export interface SettingsTab {
+	id: string;
+	label: string;
+	help: string;
+	/** A file inside the module's ui directory, shown on this tab (below its fields, if it has any). */
+	page: string | null;
 }
 
 export interface SettingsSpec {
 	fields: SettingsField[];
-	/** Optional extra page inside the module's ui directory, shown below the form. */
+	/** Optional extra page inside the module's ui directory, shown below the form (on the first tab, when there are tabs). */
 	page: string | null;
+	/** Tabs the module splits its settings page into; empty: one page, as before. */
+	tabs: SettingsTab[];
 }
 
 export type SettingValue = string | number | boolean | null;
 
 const KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const MAX_FIELDS = 50;
+const MAX_TABS = 12;
+const TAB_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const PAGE_RE = /^(?!\/)(?!.*(?:^|\/)\.)[A-Za-z0-9_.\/-]{1,200}$/;
 const TEXT_MAX: Record<string, number> = { text: 500, textarea: 10_000, secret: 2000 };
 
@@ -45,7 +60,27 @@ export function parseSettingsSpec(v: unknown, err: ValidationError, hasUi: boole
 	};
 	if (typeof v !== "object" || Array.isArray(v)) return bad('must be {"fields": [...], "page": "..."}');
 	const o = v as Record<string, unknown>;
-	for (const k of Object.keys(o)) if (k !== "fields" && k !== "page") return bad(`unknown field ${JSON.stringify(k)}`);
+	for (const k of Object.keys(o)) if (k !== "fields" && k !== "page" && k !== "tabs") return bad(`unknown field ${JSON.stringify(k)}`);
+	const tabList = o.tabs === undefined || o.tabs === null ? [] : o.tabs;
+	if (!Array.isArray(tabList) || tabList.length > MAX_TABS) return bad(`tabs must be a list of at most ${MAX_TABS}`);
+	const tabs: SettingsTab[] = [];
+	for (const [i, raw] of tabList.entries()) {
+		const p = `settings.tabs[${i}]`;
+		const t = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null) as Record<string, unknown> | null;
+		if (!t) return bad(`${p} must be an object`);
+		const extra = Object.keys(t).find((k) => !["id", "label", "help", "page"].includes(k));
+		if (extra) return bad(`${p}: unknown field ${JSON.stringify(extra)}`);
+		if (typeof t.id !== "string" || !TAB_ID_RE.test(t.id)) return bad(`${p}.id must be lowercase letters, digits or - (up to 32), starting with a letter`);
+		if (tabs.some((x) => x.id === t.id)) return bad(`${p}.id ${t.id} is used twice`);
+		const label = t.label ?? t.id;
+		if (typeof label !== "string" || !/^[^\u0000-\u001f]{1,40}$/.test(label)) return bad(`${p}.label must be 1-40 characters`);
+		const help = t.help ?? "";
+		if (typeof help !== "string" || help.length > 300) return bad(`${p}.help must be at most 300 characters`);
+		const tp = t.page === undefined || t.page === null ? null : t.page;
+		if (tp !== null && (typeof tp !== "string" || !PAGE_RE.test(tp))) return bad(`${p}.page must be a file inside the ui directory`);
+		if (tp !== null && !hasUi) return bad(`${p}.page needs ui`);
+		tabs.push({ id: t.id, label, help, page: tp });
+	}
 	const page = o.page === undefined || o.page === null ? null : o.page;
 	if (page !== null && (typeof page !== "string" || !PAGE_RE.test(page))) return bad("page must be a file inside the ui directory");
 	if (page !== null && !hasUi) return bad("page needs ui");
@@ -57,7 +92,7 @@ export function parseSettingsSpec(v: unknown, err: ValidationError, hasUi: boole
 		const p = `settings.fields[${i}]`;
 		const f = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null) as Record<string, unknown> | null;
 		if (!f) return bad(`${p} must be an object`);
-		const allowed = ["key", "label", "type", "help", "required", "default", "options", "min", "max"];
+		const allowed = ["key", "label", "type", "help", "required", "default", "options", "min", "max", "tab"];
 		const extra = Object.keys(f).find((k) => !allowed.includes(k));
 		if (extra) return bad(`${p}: unknown field ${JSON.stringify(extra)}`);
 		if (typeof f.key !== "string" || !KEY_RE.test(f.key)) return bad(`${p}.key must be lowercase letters, digits or _ (up to 40), starting with a letter`);
@@ -92,7 +127,9 @@ export function parseSettingsSpec(v: unknown, err: ValidationError, hasUi: boole
 		} else if (f.options !== undefined) {
 			return bad(`${p}.options is for select fields only`);
 		}
-		const field: SettingsField = { key: f.key, label, type, help, required: f.required === true, default: null, options, min, max };
+		const tab = f.tab === undefined || f.tab === null ? null : f.tab;
+		if (tab !== null && (typeof tab !== "string" || !tabs.some((t) => t.id === tab))) return bad(`${p}.tab must be the id of one of settings.tabs`);
+		const field: SettingsField = { key: f.key, label, type, help, required: f.required === true, default: null, options, min, max, tab };
 		if (f.default !== undefined && f.default !== null) {
 			if (type === "secret") return bad(`${p}: secret fields can't have a default`);
 			const e = new ValidationError();
@@ -101,7 +138,11 @@ export function parseSettingsSpec(v: unknown, err: ValidationError, hasUi: boole
 		}
 		fields.push(field);
 	}
-	return { fields, page };
+	// A tab with nothing on it would be an empty page.
+	const first = tabs[0]?.id;
+	const empty = tabs.find((t) => t.page === null && !fields.some((f) => (f.tab ?? first) === t.id) && !(t.id === first && page !== null));
+	if (empty) return bad(`tab ${JSON.stringify(empty.id)} has no fields and no page`);
+	return { fields, page, tabs };
 }
 
 /** Validates one value for a field; adds a problem to err and returns null when invalid. */
@@ -153,7 +194,13 @@ export async function publicSettings(db: Queryable, moduleId: string, spec: Sett
 			values[f.key] = null;
 		}
 	}
-	return { fields: spec.fields, values, secrets_set, page: spec.page ? `/m/${moduleId}/${spec.page}` : null };
+	return {
+		fields: spec.fields,
+		values,
+		secrets_set,
+		page: spec.page ? `/m/${moduleId}/${spec.page}` : null,
+		tabs: spec.tabs.map((t) => ({ id: t.id, label: t.label, help: t.help, page: t.page ? `/m/${moduleId}/${t.page}` : null })),
+	};
 }
 
 /**

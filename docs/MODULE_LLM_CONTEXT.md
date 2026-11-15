@@ -215,6 +215,15 @@ Settings, validates and stores it. Don't build your own settings screen.
   `{ value, label }`). At most 50 fields.
 - Optional `settings.page`: a file in `ui/` shown in an iframe below the
   form, only for things a form can't do.
+- Optional `settings.tabs` (Ledger ≥ 0.19.6) splits the module's settings
+  page into its own tabs: `[{ "id": "accounts", "label": "Accounts",
+  "help"?: "…", "page"?: "file-in-ui.html" }]` (≤ 12; id lowercase, digits,
+  `-`). A field joins a tab with `"tab": "<id>"`; without it, the first tab.
+  Each tab needs a field or a `page`, and saves only its own fields. Link to
+  one with `/settings/m/<id>?tab=<tab id>` (`target="_top"`). Use tabs once
+  a module has more than about eight settings or distinct groups (general,
+  accounts, email, templates); don't build your own tab strip inside
+  `settings.page`.
 
 ```js
 const s = await ctx.settings.get();        // { company_name: "...", payment_days: 30, smtp_password: "..." } (defaults filled in; may be null/"" if unset)

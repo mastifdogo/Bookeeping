@@ -172,10 +172,10 @@ function makeContext(app: App, m: LoadedModule) {
 		 * the one ctx.orgs.forEach is visiting.
 		 */
 		settings: {
-			get: () => moduleValues(app.db, id, m.manifest.settings ?? { fields: [], page: null }),
+			get: () => moduleValues(app.db, id, m.manifest.settings ?? { fields: [], page: null, tabs: [] }),
 			/** Saves some values (validated like the form); other keys keep theirs. */
 			set: async (values: Record<string, SettingValue>) => {
-				await saveSettings(app.db, id, m.manifest.settings ?? { fields: [], page: null }, values, null);
+				await saveSettings(app.db, id, m.manifest.settings ?? { fields: [], page: null, tabs: [] }, values, null);
 				await notifySettings(app, m);
 			},
 			/** Called with the new values after they change (the user saved the form, or set()), inside that organization. */

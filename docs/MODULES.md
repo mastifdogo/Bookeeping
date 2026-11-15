@@ -621,6 +621,36 @@ values with `ctx.settings`.
 below the form, for settings a simple form can't express (e.g. connecting an
 account). At most 50 fields.
 
+**Tabs** (Ledger 0.19.6). A module with many settings splits its settings
+page into tabs of its own:
+
+```json
+"settings": {
+  "tabs": [
+    { "id": "general", "label": "General" },
+    { "id": "accounts", "label": "Accounts", "help": "Where invoices and payments are posted." },
+    { "id": "templates", "label": "Templates", "page": "settings-templates.html" }
+  ],
+  "fields": [
+    { "key": "company_name", "label": "Company name" },
+    { "key": "receivable_account", "label": "Receivables account", "tab": "accounts", "default": "1200" }
+  ]
+}
+```
+
+| Tab member | |
+|---|---|
+| `id` | Lowercase letters, digits and `-`, up to 32, starting with a letter. Fields name it in `"tab"`. |
+| `label`, `help` | The tab's name (40 characters) and a line shown under the tabs (300). |
+| `page` | Optional file in the module's `ui` directory shown on the tab, below its fields if it has any. |
+
+A field without `"tab"` goes on the first tab. Each tab saves its own
+fields; the others keep their values. A tab must have at least one field or
+a page. Up to 12 tabs; with one tab or none, no tab strip is shown. The open
+tab is in the address (`?tab=accounts`), so a module's page can link
+straight to it: `/settings/m/<id>?tab=accounts` (open it in the top window:
+`<a target="_top">`).
+
 ```js
 const { api_key, model } = await ctx.settings.get(); // defaults filled in; secrets included
 await ctx.settings.set({ model: "large" });         // validated like the form

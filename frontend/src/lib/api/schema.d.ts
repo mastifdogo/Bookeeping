@@ -2405,6 +2405,8 @@ export interface components {
         };
         SettingValue: (string | number | boolean) | null;
         SettingsField: {
+            /** @description The tab it is shown on (an id from tabs); null: the first tab */
+            tab: string | null;
             key: string;
             label: string;
             /** @enum {string} */
@@ -2479,6 +2481,14 @@ export interface components {
             } | null;
         };
         ModuleSettings: {
+            /** @description Tabs the module splits its settings page into; empty means one page */
+            tabs: {
+                id: string;
+                label: string;
+                help: string;
+                /** @description URL of a page from the module shown on this tab */
+                page: string | null;
+            }[];
             fields: components["schemas"]["SettingsField"][];
             values: {
                 [key: string]: components["schemas"]["SettingValue"];

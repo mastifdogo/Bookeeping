@@ -267,6 +267,34 @@ test("manifest settings are validated", () => {
 		],
 	);
 	assert.equal(validateManifest(base).settings, null);
+	assert.deepEqual(m.settings!.tabs, []);
+
+	// Tabs: fields name the tab they go on (the first when they name none); a tab can show a page of the module's.
+	const tabbed = validateManifest({
+		...base,
+		ui: "ui",
+		settings: {
+			tabs: [{ id: "general", label: "General" }, { id: "accounts", label: "Accounts", help: "Where things are posted." }, { id: "templates", page: "templates.html" }],
+			fields: [{ key: "prefix" }, { key: "receivable_account", tab: "accounts" }],
+		},
+	}).settings!;
+	assert.deepEqual(tabbed.tabs, [
+		{ id: "general", label: "General", help: "", page: null },
+		{ id: "accounts", label: "Accounts", help: "Where things are posted.", page: null },
+		{ id: "templates", label: "templates", help: "", page: "templates.html" },
+	]);
+	assert.deepEqual(tabbed.fields.map((f) => [f.key, f.tab]), [["prefix", null], ["receivable_account", "accounts"]]);
+	for (const settings of [
+		{ tabs: [{ id: "a" }, { id: "a" }], fields: [{ key: "x" }] },
+		{ tabs: [{ id: "Bad Id" }], fields: [{ key: "x" }] },
+		{ tabs: [{ id: "a" }], fields: [{ key: "x", tab: "b" }] },
+		{ tabs: [{ id: "a" }, { id: "empty" }], fields: [{ key: "x" }] }, // a tab with nothing on it
+		{ tabs: [{ id: "a", page: "p.html" }] }, // needs ui
+		{ tabs: [{ id: "a", extra: 1 }], fields: [{ key: "x" }] },
+		{ tabs: "nope" },
+	]) {
+		assert.throws(() => validateManifest({ ...base, settings }), /validation failed/, JSON.stringify(settings));
+	}
 	for (const settings of [
 		{ fields: [{ key: "Bad Key" }] },
 		{ fields: [{ key: "a" }, { key: "a" }] },

@@ -80,7 +80,12 @@ Decide, and state briefly to the user:
   **settings** (e.g. `receivable_account`, default `1200`), never hard-coded.
 - **Settings**: everything the user configures (API keys as `secret`
   fields, account codes, options) goes in the manifest's `settings.fields`.
-  Ledger renders the form on the module's Settings tab. Values are per
+  Ledger renders the form on the module's Settings tab. A module with many
+  settings, or distinct groups of them, splits that page into tabs of its
+  own with `settings.tabs` (Ledger 0.19.6): each field names its tab
+  (`"tab": "accounts"`), and a tab can show a page from `ui/` (`"page"`)
+  for what a form can't do. Don't build a tab strip of your own inside a
+  settings page. Values are per
   organization (Ledger 0.11.1): read them with `ctx.settings.get()` where
   they're used, never cache one copy for the whole server.
 - **Dashboard**: what deserves a notification or a to-do (`ctx.dashboard`).

@@ -49,6 +49,24 @@
 		}
 	}
 
+	// Tabs the module declared for its settings page; the open one is in the address (?tab=).
+	let tabs = $derived(settings?.tabs ?? []);
+	let tab = $derived(tabs.find((t) => t.id === page.url.searchParams.get('tab')) ?? tabs[0] ?? null);
+	// The fields on the open tab (all of them when the module has no tabs).
+	let shownFields = $derived(!settings ? [] : tabs.length === 0 ? settings.fields : settings.fields.filter((f) => (f.tab ?? tabs[0]!.id) === tab!.id));
+	// Pages of the module's own shown on the open tab.
+	let shownPages = $derived(
+		!settings ? [] : [...(tab?.page ? [tab.page] : []), ...(settings.page && (tabs.length === 0 || tab?.id === tabs[0]!.id) ? [settings.page] : [])]
+	);
+	function openTab(id: string) {
+		saved = false;
+		error = null;
+		const q = new URLSearchParams(page.url.search);
+		if (id === tabs[0]?.id) q.delete('tab');
+		else q.set('tab', id);
+		goto(`?${q}`, { reset: false });
+	}
+
 	function reset(s: ModuleSettings | null) {
 		settings = s;
 		if (!s) return;
@@ -62,7 +80,8 @@
 		saved = false;
 		const values: Record<string, Value> = {};
 		if (!settings) return;
-		for (const f of settings.fields) {
+		// Only the open tab's fields are sent; the others keep their saved values.
+		for (const f of shownFields) {
 			const v = form[f.key];
 			if (f.type === 'secret') {
 				if (clearSecret[f.key]) values[f.key] = '';
@@ -106,7 +125,16 @@
 
 {#if data.importInfo}<ModuleImport moduleId={data.id} moduleName={mod.name} info={data.importInfo} />{/if}
 
-{#if settings && settings.fields.length > 0}
+{#if tabs.length > 1}
+	<div class="subtabs" role="tablist" aria-label="{mod.name} settings">
+		{#each tabs as t (t.id)}
+			<button type="button" role="tab" aria-selected={t.id === tab?.id} class:on={t.id === tab?.id} onclick={() => openTab(t.id)}>{t.label}</button>
+		{/each}
+	</div>
+{/if}
+{#if tab?.help}<p class="muted small" style="margin-top:0">{tab.help}</p>{/if}
+
+{#if settings && shownFields.length > 0}
 	<form class="card" style="max-width:640px" onsubmit={save}>
 		{#if (page.data.user?.organizations.length ?? 0) > 1}
 			<p class="muted small" style="margin-top:0">
@@ -117,7 +145,7 @@
 		{#if saved}<div class="notice ok">Saved.</div>{/if}
 		<ErrorNotice {error} />
 		<div class="fields">
-			{#each settings.fields as f (f.key)}
+			{#each shownFields as f (f.key)}
 				{#if f.type === 'boolean'}
 					<label class="inline">
 						<input type="checkbox" checked={form[f.key] === true} onchange={(e) => (form[f.key] = e.currentTarget.checked)} />
@@ -158,9 +186,9 @@
 	</form>
 {/if}
 
-{#if settings?.page}
-	<iframe class="card module-page" src={settings.page} title="Module settings" {@attach forwardSearchKeys}></iframe>
-{/if}
+{#each shownPages as src (src)}
+	<iframe class="card module-page" {src} title="Module settings{tab ? `: ${tab.label}` : ''}" {@attach forwardSearchKeys}></iframe>
+{/each}
 
 {#if navItem?.hidden}
 	<h2>{navItem.label}</h2>
@@ -171,6 +199,26 @@
 {/if}
 
 <style>
+	.subtabs {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		border-bottom: 1px solid var(--border);
+		margin-bottom: 1rem;
+	}
+	.subtabs button {
+		border: none;
+		border-bottom: 2px solid transparent;
+		border-radius: 0;
+		background: none;
+		padding: 0.4rem 0.8rem;
+		color: var(--muted);
+	}
+	.subtabs button.on {
+		color: var(--text);
+		font-weight: 600;
+		border-bottom-color: var(--accent);
+	}
 	.about .head {
 		display: flex;
 		align-items: center;
