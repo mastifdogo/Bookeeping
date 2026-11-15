@@ -780,7 +780,7 @@ async function handleGetAccount(c: Ctx): Promise<void> {
 
 async function handleUpdateAccount(c: Ctx): Promise<void> {
 	const input = await decodeBody(c, true, decodeAccountUpdate);
-	writeJSON(c.res, 200, await updateAccount(c.app, c.params.accountCode!, input));
+	writeJSON(c.res, 200, await updateAccount(c.app, c.params.accountCode!, input, c.user!.id));
 }
 
 async function handleAccountLedger(c: Ctx): Promise<void> {

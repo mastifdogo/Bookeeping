@@ -63,6 +63,8 @@ export interface AccountCreate {
 }
 
 export interface AccountUpdate {
+	/** A new code for the account (renumbering). */
+	code?: string;
 	name?: string;
 	description?: string;
 	is_active?: boolean;

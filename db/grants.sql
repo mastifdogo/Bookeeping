@@ -29,6 +29,7 @@ GRANT SELECT, INSERT, UPDATE          ON organizations                          
 GRANT SELECT, INSERT, UPDATE, DELETE  ON memberships                             TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON journal_entry_links                     TO :"app_role";
 GRANT SELECT, INSERT, UPDATE          ON entities                                TO :"app_role";
+GRANT SELECT, INSERT                  ON account_code_changes                    TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON documents                               TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON document_marks                          TO :"app_role";
 -- Read-only, so pg_dump (run as this role for backups) can include it.

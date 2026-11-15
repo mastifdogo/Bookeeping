@@ -114,9 +114,11 @@ export function decodeAccountCreate(v: unknown): AccountCreate {
 }
 
 export function decodeAccountUpdate(v: unknown): AccountUpdate {
-	const o = object(v, "AccountUpdate", ["name", "description", "is_active", "parent_code", "kind"]);
+	const o = object(v, "AccountUpdate", ["code", "name", "description", "is_active", "parent_code", "kind"]);
 	const p = "AccountUpdate.";
 	const out: AccountUpdate = {};
+	const code = str(o, "code", p);
+	if (code !== undefined) out.code = code;
 	const name = str(o, "name", p);
 	const description = str(o, "description", p);
 	const isActive = bool(o, "is_active", p);

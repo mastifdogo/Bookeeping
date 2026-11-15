@@ -1790,6 +1790,8 @@ export interface components {
             kind?: components["schemas"]["AccountKind"] | null;
         };
         AccountUpdate: {
+            /** @description A new code for the account. Its postings stay with it; the code is also rewritten where modules keep it. */
+            code?: components["schemas"]["AccountCode"];
             name?: string;
             description?: string;
             is_active?: boolean;

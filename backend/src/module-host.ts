@@ -76,6 +76,7 @@ export interface LoadedModule {
 	/** ctx.files.onReceive listeners. */
 	fileListeners: ((file: FileSummary) => unknown)[];
 	documentListeners: ((doc: DocumentInfo) => unknown)[];
+	accountCodeListeners: ((change: { old_code: string; new_code: string }) => unknown)[];
 	/** ctx.search.provide functions. */
 	searchProviders: SearchProvider[];
 	/** ctx.settings.onChange listeners. */
@@ -322,6 +323,16 @@ function makeContext(app: App, m: LoadedModule) {
 		ledger: {
 			listAccounts: (opts: { includeInactive?: boolean } = {}) => listAccounts(app, opts.includeInactive ?? false),
 			getAccount: (code: string) => getAccount(app, code),
+			/**
+			 * Called with { old_code, new_code } after someone changes an account's code.
+			 * Ledger has already rewritten the code in this module's settings (text values
+			 * under a key with "account" in it) and tables (columns named account_code,
+			 * *_account_code or *_account); use this for anywhere else the module keeps one.
+			 */
+			onAccountCodeChanged(fn: (change: { old_code: string; new_code: string }) => unknown) {
+				if (typeof fn !== "function") throw new Error("ledger.onAccountCodeChanged: expected a function");
+				m.accountCodeListeners.push(fn);
+			},
 			createAccount: (a: AccountCreate) => createAccount(app, { code: a.code, name: a.name, type: a.type, currency: a.currency, description: a.description ?? "", parent_code: a.parent_code ?? null, kind: a.kind ?? null }),
 			accountLedger: (code: string, opts: { from?: string; to?: string } = {}) => getAccountLedger(app, code, opts.from ?? null, opts.to ?? null),
 			listJournalEntries: (f: { from?: string; to?: string; accountCode?: string; limit?: number; offset?: number } = {}) =>
@@ -402,6 +413,7 @@ export class ModuleHost {
 			searchProviders: [],
 			fileListeners: [],
 			documentListeners: [],
+			accountCodeListeners: [],
 			importer: null,
 		};
 		this.modules.set(m.manifest.id, m);

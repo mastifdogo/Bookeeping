@@ -18,6 +18,7 @@
 	});
 
 	let editing = $state(false);
+	let code = $state('');
 	let name = $state('');
 	let description = $state('');
 	let parent = $state('');
@@ -39,6 +40,7 @@
 	}
 
 	function startEdit() {
+		code = account.code;
 		name = account.name;
 		description = account.description;
 		parent = account.parent_code ?? '';
@@ -52,13 +54,15 @@
 		editing = true;
 	}
 
-	async function update(body: { name?: string; description?: string; is_active?: boolean; parent_code?: string | null; kind?: AccountKind | null }) {
+	async function update(body: { code?: string; name?: string; description?: string; is_active?: boolean; parent_code?: string | null; kind?: AccountKind | null }) {
 		busy = true;
 		error = null;
 		try {
-			unwrap(await api().PATCH('/accounts/{accountCode}', { params: { path: { accountCode: account.code } }, body }));
+			const saved = unwrap(await api().PATCH('/accounts/{accountCode}', { params: { path: { accountCode: account.code } }, body }));
 			editing = false;
-			await invalidateAll();
+			// A new code is a new address for this page.
+			if (saved.code !== account.code) await goto(`/accounts/${encodeURIComponent(saved.code)}`, { replaceState: true });
+			else await invalidateAll();
 		} catch (err) {
 			error = err;
 		} finally {
@@ -105,9 +109,21 @@
 		class="card toolbar"
 		onsubmit={(e) => {
 			e.preventDefault();
-			update({ name, description, ...(parent !== (account.parent_code ?? '') ? { parent_code: parent || null } : {}), ...(kind !== (account.kind ?? '') ? { kind: kind || null } : {}) });
+			update({ ...(code.trim() !== account.code ? { code: code.trim() } : {}), name, description, ...(parent !== (account.parent_code ?? '') ? { parent_code: parent || null } : {}), ...(kind !== (account.kind ?? '') ? { kind: kind || null } : {}) });
 		}}
 	>
+		<label>
+			Code
+			<input
+				bind:value={code}
+				required
+				maxlength="32"
+				pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
+				size="8"
+				class="mono"
+				title="Letters, digits, dots, dashes and underscores. Entries stay with the account; modules that use this code are updated to the new one."
+			/>
+		</label>
 		<label style="flex:1">Name <input bind:value={name} required maxlength="200" /></label>
 		<label style="flex:2">Description <input bind:value={description} maxlength="1000" /></label>
 		{#if kinds.length}

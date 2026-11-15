@@ -276,6 +276,25 @@ no connection for that kind of request is set up, 403 when the module isn't allo
 provider fails, 422 when the model declines. The messages say where to fix
 it. `maxTokens` is capped by the admin's limit.
 
+## Account codes can change
+
+Since Ledger 0.20.0 a person can give an account a new code. Journal lines
+are unaffected, and Ledger rewrites the old code to the new one where
+modules keep it, in the same transaction:
+
+- in a module's **tables**: text columns named `account_code`, or ending in
+  `_account_code` or `_account` (`receivable_account`, `bank_account_code`);
+- in a module's **settings**: text values under a key that contains
+  `account` (`receivable_account`, `default_expense_account`).
+
+So name them that way, and keep account codes nowhere else (not inside JSON
+columns, not concatenated into other text, not in memory across requests).
+For anything the convention can't reach:
+
+```js
+ctx.ledger.onAccountCodeChanged(({ old_code, new_code }) => { /* fix up what Ledger couldn't see */ });
+```
+
 ## Documents (`ctx.documents`)
 
 The organization's PDFs in one place (Ledger 0.19.0): receipts, statements

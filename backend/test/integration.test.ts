@@ -44,7 +44,8 @@ test("ledger end to end", async (t) => {
 	expectStatus(await call("POST", "/accounts", { code: "1000", name: "Dup", type: "asset", currency: "CAD" }), 409);
 	expectStatus(await call("POST", "/accounts", { code: "2000", name: "Euro", type: "asset", currency: "EUR" }), 422);
 	expectStatus(await call("PATCH", "/accounts/9000", { is_active: false }), 200);
-	expectStatus(await call("PATCH", "/accounts/9000", { code: "9001" }), 400);
+	expectStatus(await call("PATCH", "/accounts/9000", { code: "9001" }), 200); // renumbering is allowed
+	expectStatus(await call("PATCH", "/accounts/9001", { code: "9000" }), 200);
 	expectStatus(await call("GET", "/accounts/nope"), 404);
 
 	let r = await call("GET", "/currencies");
@@ -162,7 +163,6 @@ test("ledger end to end", async (t) => {
 			"UPDATE journal_entries SET description = 'changed'",
 			"DELETE FROM journal_entries",
 			"TRUNCATE transactions CASCADE",
-			"UPDATE accounts SET code = 'X1000' WHERE code = '1000'",
 			"UPDATE accounts SET currency = 'USD' WHERE code = '1000'",
 		]) {
 			await assert.rejects(app.db.query(stmt), Error, stmt);
@@ -1542,6 +1542,53 @@ test("LLM API settings from before 0.18.2: openai meant any compatible server", 
 	expectStatus(r, 200);
 	assert.equal(JSON.parse(await readFile(file, "utf8")).version, 2);
 	assert.deepEqual((await call("GET", "/integrations/llm")).json().config.connections.map((c: any) => c.provider), ["compatible", "openai"]);
+});
+
+test("An account's code can be changed, and modules keep pointing at the same account", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "1200", "Receivables", "asset", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	await app.db.query(`CREATE SCHEMA mod_sales; CREATE TABLE mod_sales.rules (id serial PRIMARY KEY, account_code text NOT NULL, income_account text, label text);`);
+	await loadModules(t, app, {
+		sales: {
+			manifest: { settings: { fields: [{ key: "receivable_account", label: "Receivable account", type: "text", default: "1200" }, { key: "invoice_prefix", label: "Prefix", type: "text", default: "1200" }] } },
+			code: `export default async function (ctx) {
+				const heard = [];
+				ctx.ledger.onAccountCodeChanged((c) => heard.push(c));
+				ctx.route("POST", "/rule", async (req) => (await ctx.db.query(\`INSERT INTO \${ctx.schema}.rules (account_code, income_account, label) VALUES ($1, $2, $3)\`, [req.body.a, req.body.b, req.body.c]), {}));
+				ctx.route("GET", "/state", async () => ({ rules: (await ctx.db.query(\`SELECT account_code, income_account, label FROM \${ctx.schema}.rules ORDER BY id\`)).rows, settings: await ctx.settings.get(), heard }));
+				ctx.route("POST", "/invoice", async (req) => ctx.ledger.createJournalEntry({ entry_date: "2026-05-01", description: "Invoice", lines: [
+					{ account_code: (await ctx.settings.get()).receivable_account, debit_cents: 5000, credit_cents: 0 }, { account_code: "4000", debit_cents: 0, credit_cents: 5000 } ] }, req.user));
+			}`,
+		},
+	});
+	expectStatus(await call("PUT", "/modules/sales/settings", { values: { receivable_account: "1200", invoice_prefix: "1200" } }), 200);
+	expectStatus(await call("POST", "/m/sales/rule", { a: "1200", b: "4000", c: "1200" }), 200);
+	expectStatus(await call("POST", "/m/sales/invoice"), 200);
+
+	for (const bad of ["", "has space", "x".repeat(33), "1000"]) expectStatus(await call("PATCH", "/accounts/1200", { code: bad }), 422);
+	expectStatus(await call("PATCH", "/accounts/9999", { code: "1210" }), 404);
+	let r = await call("PATCH", "/accounts/1200", { code: "1210", name: "Accounts receivable" });
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().code, r.json().name, r.json().balance_cents], ["1210", "Accounts receivable", 5000]);
+	expectStatus(await call("GET", "/accounts/1200"), 404);
+	// The books didn't move: the posting is still on the account, under its new code.
+	r = await call("GET", "/accounts/1210/ledger");
+	assert.equal(r.json().lines.length, 1);
+	// The module's table and settings follow, but only where the value is an account code by name.
+	const state = (await call("GET", "/m/sales/state")).json();
+	assert.deepEqual(state.rules, [{ account_code: "1210", income_account: "4000", label: "1200" }]);
+	assert.deepEqual([state.settings.receivable_account, state.settings.invoice_prefix], ["1210", "1200"]);
+	assert.deepEqual(state.heard, [{ old_code: "1200", new_code: "1210" }]);
+	// So the module keeps posting to the same account.
+	expectStatus(await call("POST", "/m/sales/invoice"), 200);
+	assert.equal((await call("GET", "/accounts/1210")).json().balance_cents, 10000);
+	// The old code is free for a new account.
+	await createAccount(ta, "1200", "Something else", "asset", "CAD");
+	assert.equal((await call("GET", "/accounts/1200")).json().balance_cents, 0);
 });
 
 test("Documents: PDFs of receipts, statements and invoices, shared with modules", async (t) => {

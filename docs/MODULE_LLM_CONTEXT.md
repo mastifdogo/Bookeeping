@@ -367,6 +367,17 @@ POST from the UI, passing `req.user`); users can edit or reject it.
 Background jobs and `onReceive` handlers may call the AI and store
 suggestions, but never act on them. No "auto-approve" setting.
 
+### Account codes can change (Ledger ≥ 0.20.0)
+
+A person can renumber an account. Ledger then rewrites the old code where a
+module keeps it: text **columns** named `account_code`, `*_account_code` or
+`*_account` in the module's tables, and text **settings** whose key contains
+`account`. Always name them so, never store a code inside JSON or other
+text, never cache codes across requests, and never copy an account's name
+or code where it could go stale (join or call `ctx.ledger.getAccount`).
+`ctx.ledger.onAccountCodeChanged(({ old_code, new_code }) => …)` is for
+anything else.
+
 ### ctx.documents (Ledger ≥ 0.19.0)
 
 **This is the PDF store: every PDF a module receives, makes or reads goes

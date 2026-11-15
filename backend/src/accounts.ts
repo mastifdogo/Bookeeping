@@ -1,5 +1,6 @@
 import type { App } from "./app.ts";
 import { withTx, queryRow, queryRows } from "./db.ts";
+import { log } from "./log.ts";
 import { NotFoundError, ValidationError } from "./errors.ts";
 import { splitAmount } from "./money.ts";
 import { checkText, trimSpace } from "./text.ts";
@@ -174,10 +175,84 @@ export async function listAccounts(app: App, includeInactive: boolean): Promise<
 	return rows.map(toAccount);
 }
 
-export async function updateAccount(app: App, code: string, input: AccountUpdate): Promise<Account> {
+/** Columns of module tables that hold an account code, by the documented naming: account_code, or ending in _account_code or _account. */
+const CODE_COLUMN = /^(account_code|[a-z0-9_]*_account_code|[a-z0-9_]*_account)$/;
+
+/**
+ * Gives an account a new code. Journal lines point at the account itself, so
+ * the books don't change. The code is also rewritten where modules keep it:
+ * in their tables (columns named account_code, *_account_code or *_account)
+ * and in their settings (text values under a key with "account" in it), so
+ * a module set to post to the old code keeps posting to the same account.
+ * All of it happens together or not at all.
+ */
+export async function changeAccountCode(app: App, code: string, newCode: string, userId: number | null): Promise<{ old_code: string; new_code: string; modules: string[] }> {
 	const v = new ValidationError();
+	const next = trimSpace(newCode);
+	if (!ACCOUNT_CODE_RE.test(next)) v.add("code", "must be 1-32 letters, digits, dots, dashes or underscores, starting with a letter or digit");
+	v.throwIfAny();
+	const touched = new Set<string>();
+	await withTx(app.db, {}, async (tx) => {
+		const cur = await queryRow<{ id: bigint; code: string }>(tx, `SELECT id, code FROM accounts WHERE code = $1 FOR UPDATE`, [code]);
+		if (!cur) throw new NotFoundError();
+		if (cur.code === next) return;
+		const taken = await queryRow<{ name: string }>(tx, `SELECT name FROM accounts WHERE code = $1`, [next]);
+		if (taken) {
+			v.add("code", `${next} is already the code of "${taken.name}"`);
+			v.throwIfAny();
+		}
+		await tx.query(`UPDATE accounts SET code = $2 WHERE id = $1`, [cur.id, next]);
+		await tx.query(`INSERT INTO account_code_changes (account_id, old_code, new_code, changed_by) VALUES ($1, $2, $3, $4)`, [cur.id, cur.code, next, userId]);
+
+		// Module tables.
+		const cols = await queryRows<{ table_schema: string; table_name: string; column_name: string }>(
+			tx,
+			`SELECT c.table_schema, c.table_name, c.column_name
+			   FROM information_schema.columns c JOIN information_schema.tables t USING (table_schema, table_name)
+			  WHERE c.table_schema ~ '^mod_[a-z0-9_]+$' AND t.table_type = 'BASE TABLE' AND c.data_type IN ('text', 'character varying')`,
+		);
+		const ident = (s: string) => `"${s.replace(/"/g, '""')}"`;
+		for (const c of cols.filter((x) => CODE_COLUMN.test(x.column_name))) {
+			const r = await tx.query(`UPDATE ${ident(c.table_schema)}.${ident(c.table_name)} SET ${ident(c.column_name)} = $2 WHERE ${ident(c.column_name)} = $1`, [cur.code, next]);
+			if ((r.rowCount ?? 0) > 0) touched.add(c.table_schema.slice(4).replace(/_/g, "-"));
+		}
+		// Module settings: account codes are text settings such as receivable_account.
+		const settings = await queryRows<{ module_id: string; values: Record<string, unknown> }>(tx, `SELECT module_id, "values" FROM module_settings FOR UPDATE`);
+		for (const s of settings) {
+			let changed = false;
+			for (const [k, val] of Object.entries(s.values)) {
+				if (val === cur.code && /account/i.test(k)) {
+					s.values[k] = next;
+					changed = true;
+				}
+			}
+			if (changed) {
+				await tx.query(`UPDATE module_settings SET "values" = $2::jsonb, updated_at = now() WHERE module_id = $1`, [s.module_id, JSON.stringify(s.values)]);
+				touched.add(s.module_id);
+			}
+		}
+	});
+	return { old_code: code, new_code: next, modules: [...touched].sort() };
+}
+
+export async function updateAccount(app: App, code: string, input: AccountUpdate, userId: number | null = null): Promise<Account> {
+	const v = new ValidationError();
+	if (input.code !== undefined) {
+		const rest = input.name !== undefined || input.description !== undefined || input.is_active !== undefined || input.parent_code !== undefined || input.kind !== undefined;
+		const done = await changeAccountCode(app, code, input.code, userId);
+		code = done.new_code;
+		for (const m of app.modules.modules.values()) {
+			if (m.error) continue;
+			for (const fn of m.accountCodeListeners) {
+				Promise.resolve()
+					.then(() => fn({ old_code: done.old_code, new_code: done.new_code }))
+					.catch((err: Error) => log.error("module account-code listener failed", { module: m.manifest.id, err: err.message }));
+			}
+		}
+		if (!rest) return getAccount(app, code);
+	}
 	if (input.name === undefined && input.description === undefined && input.is_active === undefined && input.parent_code === undefined && input.kind === undefined) {
-		v.add("", "at least one of name, description, is_active, parent_code, kind is required");
+		v.add("", "at least one of code, name, description, is_active, parent_code, kind is required");
 	}
 	if (input.name !== undefined) checkText(v, "name", input.name, 1, 200);
 	if (input.description !== undefined) checkText(v, "description", input.description, 0, 1000);

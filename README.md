@@ -355,6 +355,17 @@ the largest expenses this month. Below that are **notifications** and
 installed or fails). Dismiss a notification with ✕; tick a to-do to mark it
 done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)).
 
+### Renumbering accounts
+
+An account's code can be changed on its page (**Edit**). Its entries,
+reconciliations and documents stay with it, since they point at the account
+and not at its code. Modules that keep the old code (in their settings or
+their own tables) are updated in the same step, so a module set to post to
+`1200` posts to the same account under its new code. Each change is
+recorded. The old code is then free for another account. CSV files exported
+earlier still carry the old code: change it there before importing them
+again.
+
 ### Documents
 
 **Documents** (sidebar) keeps the PDFs behind the books: receipts,

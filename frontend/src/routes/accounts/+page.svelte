@@ -170,7 +170,7 @@
 			<button class="primary" disabled={saving}>{saving ? 'Saving…' : 'Create'}</button>
 		</div>
 		<p class="muted small" style="margin-bottom:0">
-			The code and currency cannot be changed later. A tag (chequing, savings, credit card) marks bank and card accounts, so forms and
+			The currency cannot be changed later; the code can, on the account's page. A tag (chequing, savings, credit card) marks bank and card accounts, so forms and
 			modules can offer them first.
 		</p>
 	</form>

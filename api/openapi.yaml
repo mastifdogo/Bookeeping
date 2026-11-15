@@ -2638,6 +2638,9 @@ components:
       additionalProperties: false
       minProperties: 1
       properties:
+        code:
+          allOf: [{ $ref: '#/components/schemas/AccountCode' }]
+          description: A new code for the account. Its postings stay with it; the code is also rewritten where modules keep it.
         name: { type: string, minLength: 1, maxLength: 200 }
         description: { type: string, maxLength: 1000 }
         is_active: { type: boolean }
