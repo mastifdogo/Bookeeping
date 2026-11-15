@@ -95,7 +95,7 @@ Decide, and state briefly to the user:
   yet. Pictures (receipts, photos) go in `images: [{ media_type, data }]`
   (Ledger 0.11.2): they reach the connection set up for images, which may be
   a different model than the one for text; check `status().images.configured`.
-- **Account codes can change** (Ledger 0.20.0): people can renumber
+- **Account codes can change** (Ledger 0.19.3): people can renumber
   accounts. Ledger rewrites the old code in a module's tables and settings
   only where it can recognise one: text columns named `account_code`,
   `*_account_code` or `*_account`, and text settings whose key contains

@@ -367,7 +367,7 @@ POST from the UI, passing `req.user`); users can edit or reject it.
 Background jobs and `onReceive` handlers may call the AI and store
 suggestions, but never act on them. No "auto-approve" setting.
 
-### Account codes can change (Ledger ≥ 0.20.0)
+### Account codes can change (Ledger ≥ 0.19.3)
 
 A person can renumber an account. Ledger then rewrites the old code where a
 module keeps it: text **columns** named `account_code`, `*_account_code` or

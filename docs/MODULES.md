@@ -278,7 +278,7 @@ it. `maxTokens` is capped by the admin's limit.
 
 ## Account codes can change
 
-Since Ledger 0.20.0 a person can give an account a new code. Journal lines
+Since Ledger 0.19.3 a person can give an account a new code. Journal lines
 are unaffected, and Ledger rewrites the old code to the new one where
 modules keep it, in the same transaction:
 
