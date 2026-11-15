@@ -14,7 +14,7 @@ import type { App } from "./app.ts";
 import { HttpError } from "./errors.ts";
 import { log } from "./log.ts";
 import { compatible, scanInstalled, type InstalledModule, type ModuleManifest } from "./modules.ts";
-import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts } from "./accounts.ts";
+import { createAccount, ensureClearingAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listClearingAccounts } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { createEntity, ensureEntity, findEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
@@ -334,6 +334,16 @@ function makeContext(app: App, m: LoadedModule) {
 				m.accountCodeListeners.push(fn);
 			},
 			createAccount: (a: AccountCreate) => createAccount(app, { code: a.code, name: a.name, type: a.type, currency: a.currency, description: a.description ?? "", parent_code: a.parent_code ?? null, kind: a.kind ?? null }),
+			/**
+			 * This module's own clearing account, made the first time it is asked for:
+			 * { key, name, currency, type?: "asset" | "liability", description? } → the account.
+			 * Post one side of a transaction to it and the other side later; it should
+			 * come back to zero. Always look it up with this (by key), never by a saved
+			 * code: a person can renumber it.
+			 */
+			clearingAccount: (a: { key: string; name: string; currency: string; type?: string; description?: string }) => ensureClearingAccount(app, id, m.manifest.name, a),
+			/** Every clearing account, whichever module made it (module_id, module_key), with its balance. */
+			clearingAccounts: () => listClearingAccounts(app),
 			accountLedger: (code: string, opts: { from?: string; to?: string } = {}) => getAccountLedger(app, code, opts.from ?? null, opts.to ?? null),
 			listJournalEntries: (f: { from?: string; to?: string; accountCode?: string; limit?: number; offset?: number } = {}) =>
 				listJournalEntries(app, {

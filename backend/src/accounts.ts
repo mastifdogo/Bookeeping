@@ -1,7 +1,7 @@
 import type { App } from "./app.ts";
 import { withTx, queryRow, queryRows } from "./db.ts";
 import { log } from "./log.ts";
-import { NotFoundError, ValidationError } from "./errors.ts";
+import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
 import { splitAmount } from "./money.ts";
 import { checkText, trimSpace } from "./text.ts";
 import { today } from "./date.ts";
@@ -24,7 +24,7 @@ import {
 } from "./types.ts";
 
 const ACCOUNT_SELECT = `
-	SELECT a.id, a.code, a.name, a.type, a.currency, a.description, a.is_active, a.kind,
+	SELECT a.id, a.code, a.name, a.type, a.currency, a.description, a.is_active, a.kind, a.module_id, a.module_key,
 	       COALESCE((SELECT sum(t.amount) FROM transactions t WHERE t.account_id = a.id), 0)::bigint AS balance,
 	       (SELECT p.code FROM accounts p WHERE p.id = a.parent_id) AS parent_code,
 	       COALESCE((WITH RECURSIVE sub AS (SELECT a.id UNION ALL SELECT c.id FROM accounts c JOIN sub ON c.parent_id = sub.id)
@@ -42,6 +42,8 @@ interface AccountRow {
 	is_active: boolean;
 	balance: bigint;
 	kind: AccountKind | null;
+	module_id: string | null;
+	module_key: string | null;
 	parent_code: string | null;
 	total_balance: bigint;
 	created_at: Date;
@@ -61,6 +63,8 @@ function toAccount(r: AccountRow): Account {
 		is_active: r.is_active,
 		balance_cents: r.balance,
 		kind: r.kind,
+		module_id: r.module_id,
+		module_key: r.module_key,
 		parent_code: r.parent_code,
 		total_balance_cents: r.total_balance,
 		created_at: r.created_at,
@@ -99,8 +103,8 @@ function checkKind(v: ValidationError, kind: string | null | undefined, type: st
 		return null;
 	}
 	const k = kind as AccountKind;
-	if (KIND_TYPE[k] !== type) {
-		v.add("kind", `${k.replace("_", " ")} accounts are ${KIND_TYPE[k]} accounts; this one is ${type}`);
+	if (!KIND_TYPE[k].includes(type as AccountType)) {
+		v.add("kind", `${k.replace("_", " ")} accounts are ${KIND_TYPE[k].join(" or ")} accounts; this one is ${type}`);
 		return null;
 	}
 	return k;
@@ -397,4 +401,53 @@ export async function getTrialBalance(app: App, asOf: string | null, currency: C
 		tb.rows.push(row);
 	}
 	return tb;
+}
+
+/**
+ * A module's own clearing account: found by the module and its key (and
+ * currency), whatever code it has now, and made the first time it is asked
+ * for. One side of a transaction is posted there and the other side later,
+ * so the account comes back to zero.
+ */
+export async function ensureClearingAccount(
+	app: App,
+	moduleId: string,
+	moduleName: string,
+	input: { key: string; name: string; currency: string; type?: string; description?: string },
+): Promise<Account> {
+	const v = new ValidationError();
+	const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+	const key = typeof o.key === "string" ? o.key : "";
+	if (!/^[a-z][a-z0-9_-]{0,39}$/.test(key)) v.add("key", "must be lowercase letters, digits, _ or - (up to 40), starting with a letter");
+	const type = o.type === undefined ? "asset" : o.type;
+	if (type !== "asset" && type !== "liability") v.add("type", "a clearing account is an asset or a liability account");
+	if (typeof o.name !== "string") v.add("name", "is required");
+	else checkText(v, "name", o.name, 1, 200);
+	if (!isCurrency(o.currency as string)) v.add("currency", "must be CAD or USD");
+	if (o.description !== undefined && typeof o.description !== "string") v.add("description", "must be text");
+	v.throwIfAny();
+	const find = () => queryRow<AccountRow>(app.db, ACCOUNT_SELECT + ` WHERE a.module_id = $1 AND a.module_key = $2 AND a.currency = $3`, [moduleId, key, o.currency]);
+	const found = await find();
+	if (found) return toAccount(found);
+	// A code that says what it is; a person can change it afterwards.
+	const base = `CLR-${moduleId}-${key}`.toUpperCase().replace(/[^A-Z0-9._-]/g, "-").slice(0, 26);
+	for (let n = 0; n < 50; n++) {
+		const code = n === 0 ? `${base}${o.currency === "CAD" ? "" : `-${o.currency}`}`.slice(0, 32) : `${base}-${n + 1}`.slice(0, 32);
+		{
+			const r = await app.db.query(
+				`INSERT INTO accounts (code, name, type, currency, description, kind, module_id, module_key) VALUES ($1, $2, $3, $4, $5, 'clearing', $6, $7)
+				 ON CONFLICT DO NOTHING`,
+				[code, trimSpace(o.name as string), type, o.currency, trimSpace((o.description as string | undefined) ?? `Clearing account of ${moduleName}: what is posted here is cleared again later, so its balance returns to zero.`), moduleId, key],
+			);
+			const made = await find();
+			if (made) return toAccount(made);
+			if ((r.rowCount ?? 0) === 0) continue; // the code is taken: try the next
+		}
+	}
+	throw new ConflictError(`could not find a free code for the clearing account ${key}`);
+}
+
+/** Every clearing account (whoever made it), with what is sitting in it, for modules and the Accounts page. */
+export async function listClearingAccounts(app: App): Promise<Account[]> {
+	return (await queryRows<AccountRow>(app.db, ACCOUNT_SELECT + ` WHERE a.kind = 'clearing' ORDER BY a.code`)).map(toAccount);
 }

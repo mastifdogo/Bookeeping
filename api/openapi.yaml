@@ -2647,8 +2647,10 @@ components:
 
     Account:
       type: object
-      required: [code, name, type, currency, description, is_active, balance_cents, kind, parent_code, total_balance_cents, created_at, updated_at]
+      required: [code, name, type, currency, description, is_active, balance_cents, kind, module_id, module_key, parent_code, total_balance_cents, created_at, updated_at]
       properties:
+        module_id: { type: string, nullable: true, description: The module that made the account (a clearing account of its own) }
+        module_key: { type: string, nullable: true, description: That module's own name for it }
         kind: { allOf: [{ $ref: '#/components/schemas/AccountKind' }], nullable: true }
         parent_code: { type: string, nullable: true, description: 'The account this one sits under (same type and currency), or null' }
         total_balance_cents:
@@ -2733,8 +2735,8 @@ components:
         is_active: { type: boolean }
     AccountKind:
       type: string
-      enum: [chequing, savings, credit_card]
-      description: What a bank-type account is. chequing and savings are asset accounts, credit_card a liability.
+      enum: [chequing, savings, credit_card, clearing]
+      description: What a bank-type account is (chequing and savings are asset accounts, credit_card a liability), or clearing for an in-between asset or liability account whose balance should return to zero.
     JournalEntryCreate:
       type: object
       required: [entry_date, description, lines]

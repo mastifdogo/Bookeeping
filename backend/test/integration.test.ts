@@ -1591,6 +1591,53 @@ test("An account's code can be changed, and modules keep pointing at the same ac
 	assert.equal((await call("GET", "/accounts/1200")).json().balance_cents, 0);
 });
 
+test("Clearing accounts: a module's own in-between accounts", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	await loadModules(t, app, {
+		shop: `export default function (ctx) {
+			const clearing = (cur = "CAD") => ctx.ledger.clearingAccount({ key: "card_payouts", name: "Card payouts in transit", currency: cur });
+			ctx.route("POST", "/clearing", (req) => ctx.ledger.clearingAccount(req.body));
+			// A card sale: the money isn't in the bank yet, so it waits in the clearing account.
+			ctx.route("POST", "/sale", async (req) => ctx.ledger.createJournalEntry({ entry_date: "2026-06-01", description: "Card sale", lines: [
+				{ account_code: (await clearing()).code, debit_cents: 12000, credit_cents: 0 }, { account_code: "4000", debit_cents: 0, credit_cents: 12000 } ] }, req.user));
+			// The payout arrives: the other side clears it.
+			ctx.route("POST", "/payout", async (req) => ctx.ledger.createJournalEntry({ entry_date: "2026-06-03", description: "Card payout", lines: [
+				{ account_code: "1000", debit_cents: 12000, credit_cents: 0 }, { account_code: (await clearing()).code, debit_cents: 0, credit_cents: 12000 } ] }, req.user));
+			ctx.route("GET", "/all", async () => (await ctx.ledger.clearingAccounts()).map((a) => [a.code, a.module_id, a.module_key, a.currency, a.balance_cents]));
+		}`,
+		bank: `export default function (ctx) { ctx.route("POST", "/clearing", (req) => ctx.ledger.clearingAccount(req.body)); ctx.route("GET", "/all", async () => (await ctx.ledger.clearingAccounts()).map((a) => a.code)); }`,
+	});
+	for (const bad of [{ key: "Bad Key", name: "x", currency: "CAD" }, { key: "k", name: "", currency: "CAD" }, { key: "k", name: "x", currency: "EUR" }, { key: "k", name: "x", currency: "CAD", type: "expense" }]) {
+		expectStatus(await call("POST", "/m/shop/clearing", bad), 422);
+	}
+	// Made the first time it is asked for, and the same one every time after.
+	let r = await call("POST", "/m/shop/sale");
+	expectStatus(r, 200);
+	let acc = (await call("GET", "/accounts/CLR-SHOP-CARD_PAYOUTS")).json();
+	assert.deepEqual([acc.kind, acc.type, acc.name, acc.module_id, acc.module_key, acc.balance_cents], ["clearing", "asset", "Card payouts in transit", "shop", "card_payouts", 12000]);
+	assert.match(acc.description, /Clearing account of SHOP/);
+	// A person renumbers it; the module still finds it by its key.
+	expectStatus(await call("PATCH", "/accounts/CLR-SHOP-CARD_PAYOUTS", { code: "1090" }), 200);
+	expectStatus(await call("POST", "/m/shop/payout"), 200);
+	acc = (await call("GET", "/accounts/1090")).json();
+	assert.equal(acc.balance_cents, 0, "cleared");
+	assert.equal((await call("GET", "/accounts")).json().data.filter((a: any) => a.kind === "clearing").length, 1);
+	// One per currency; another module's same key is its own account; every module can see them all.
+	r = await call("POST", "/m/shop/clearing", { key: "card_payouts", name: "Card payouts in transit (USD)", currency: "USD", type: "liability" });
+	assert.deepEqual([r.json().code, r.json().type, r.json().currency], ["CLR-SHOP-CARD_PAYOUTS-USD", "liability", "USD"]);
+	r = await call("POST", "/m/bank/clearing", { key: "card_payouts", name: "Bank feed clearing", currency: "CAD" });
+	assert.equal(r.json().code, "CLR-BANK-CARD_PAYOUTS");
+	assert.deepEqual((await call("GET", "/m/shop/all")).json(), [["1090", "shop", "card_payouts", "CAD", 0], ["CLR-BANK-CARD_PAYOUTS", "bank", "card_payouts", "CAD", 0], ["CLR-SHOP-CARD_PAYOUTS-USD", "shop", "card_payouts", "USD", 0]]);
+	// A person can tag an account of their own as clearing too, on an asset or liability account only.
+	expectStatus(await call("POST", "/accounts", { code: "1095", name: "Suspense", type: "asset", currency: "CAD", kind: "clearing" }), 201);
+	expectStatus(await call("POST", "/accounts", { code: "5095", name: "Wrong", type: "expense", currency: "CAD", kind: "clearing" }), 422);
+	assert.equal((await call("GET", "/m/bank/all")).json().length, 4);
+});
+
 test("Module settings: account pickers, headings and fields that depend on another", async (t) => {
 	const ta = await setupTestApp(t);
 	if (!ta) return;

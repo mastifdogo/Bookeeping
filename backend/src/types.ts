@@ -26,10 +26,11 @@ export interface CurrencyInfo {
 	minor_units: number;
 }
 
-export const ACCOUNT_KINDS = ["chequing", "savings", "credit_card"] as const;
+export const ACCOUNT_KINDS = ["chequing", "savings", "credit_card", "clearing"] as const;
 export type AccountKind = (typeof ACCOUNT_KINDS)[number];
 /** The account type each tag belongs to. */
-export const KIND_TYPE: Record<AccountKind, AccountType> = { chequing: "asset", savings: "asset", credit_card: "liability" };
+/** The account types each tag goes with. */
+export const KIND_TYPE: Record<AccountKind, AccountType[]> = { chequing: ["asset"], savings: ["asset"], credit_card: ["liability"], clearing: ["asset", "liability"] };
 
 export interface Account {
 	code: string;
@@ -40,8 +41,12 @@ export interface Account {
 	is_active: boolean;
 	/** The account's own postings (debit-positive). */
 	balance_cents: bigint;
-	/** What a bank-type account is, or null. */
+	/** What a bank-type account is, "clearing" for an in-between account, or null. */
 	kind: AccountKind | null;
+	/** The module that made the account (a clearing account of its own), or null. */
+	module_id: string | null;
+	/** That module's own name for it. */
+	module_key: string | null;
 	/** The account this one sits under (same type and currency), or null. */
 	parent_code: string | null;
 	/** balance_cents plus the balances of every sub-account below it. */

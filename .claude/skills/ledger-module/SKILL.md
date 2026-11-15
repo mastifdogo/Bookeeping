@@ -100,6 +100,15 @@ Decide, and state briefly to the user:
   yet. Pictures (receipts, photos) go in `images: [{ media_type, data }]`
   (Ledger 0.11.2): they reach the connection set up for images, which may be
   a different model than the one for text; check `status().images.configured`.
+- **Clearing accounts** (Ledger 0.20.0): when the two sides of something
+  are posted at different times or by different modules (a sale and its
+  payout, wages accrued and paid, a transfer in transit), post through the
+  module's own clearing account: `await ctx.ledger.clearingAccount({ key,
+  name, currency })` returns it (made on first use). Call it each time and
+  use the code it returns; never store the code or create the account with a
+  hard-coded one. Each entry still balances, and whatever goes in must have
+  something that clears it: the Accounts page shows clearing accounts that
+  aren't at zero. Other modules' are in `ctx.ledger.clearingAccounts()`.
 - **A tidy settings page** (Ledger 0.19.8): every account the module asks
   for is a `"type": "account"` field (a picker; add `currency` and
   `account_types`), never a text box for a code. Group fields with

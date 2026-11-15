@@ -356,6 +356,16 @@ the largest expenses this month. Below that are **notifications** and
 installed or fails). Dismiss a notification with ✕; tick a to-do to mark it
 done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)).
 
+### Clearing accounts
+
+A clearing account is an in-between account: one side of a transaction is
+posted there now and the other side later, so it returns to zero (a card
+sale and its payout, wages worked out and then paid, a transfer in
+transit). Modules make their own when they need one, and you can tag an
+asset or liability account of your own as **Clearing**. The Accounts page
+marks them, says which module made each, and points out any that aren't at
+zero.
+
 ### Changing an entry's amounts
 
 An entry's page has **Change amounts…**: type new debit and credit figures

@@ -27,7 +27,7 @@
 
 	// Paid from: tagged bank and card accounts first, then other asset and liability accounts.
 	let payAccounts = $derived(
-		[...data.accounts.filter((a) => a.kind), ...data.accounts.filter((a) => !a.kind && (a.type === 'asset' || a.type === 'liability'))].map((a) => ({
+		[...data.accounts.filter((a) => a.kind && a.kind !== 'clearing'), ...data.accounts.filter((a) => (!a.kind || a.kind === 'clearing') && (a.type === 'asset' || a.type === 'liability'))].map((a) => ({
 			...a,
 			name: a.kind ? `${a.name} (${kindLabel(a.kind)})` : a.name
 		}))

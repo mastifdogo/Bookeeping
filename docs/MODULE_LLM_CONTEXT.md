@@ -387,6 +387,24 @@ POST from the UI, passing `req.user`); users can edit or reject it.
 Background jobs and `onReceive` handlers may call the AI and store
 suggestions, but never act on them. No "auto-approve" setting.
 
+### Clearing accounts (Ledger ≥ 0.20.0)
+
+An in-between account for when the two sides of something are posted at
+different times or by different modules (a sale and its payout, wages
+accrued and paid, a transfer in transit). Its balance should return to zero.
+
+```js
+const c = await ctx.ledger.clearingAccount({ key: "card_payouts", name: "Card payouts in transit", currency: "CAD", type?: "asset" | "liability" });
+// → the Account (kind "clearing", module_id, module_key); made on first call, the same one after. One per key + currency.
+const all = await ctx.ledger.clearingAccounts(); // every module's: find another module's by module_id + module_key
+```
+
+Always call `clearingAccount` and use `c.code` at the time of posting; never
+store the code (people can renumber it). Post one side to it in one balanced
+entry and the clearing side in a later balanced entry. Don't use one as a
+dumping ground: whatever goes in must have something that will clear it.
+Never create the account with `createAccount` and a hard-coded code.
+
 ### Account codes can change (Ledger ≥ 0.19.3)
 
 A person can renumber an account. Ledger then rewrites the old code where a

@@ -15,7 +15,10 @@ export type Entity = Schemas['Entity'];
 export const ACCOUNT_KINDS: { value: AccountKind; label: string; type: Schemas['AccountType'] }[] = [
 	{ value: 'chequing', label: 'Chequing', type: 'asset' },
 	{ value: 'savings', label: 'Savings', type: 'asset' },
-	{ value: 'credit_card', label: 'Credit card', type: 'liability' }
+	{ value: 'credit_card', label: 'Credit card', type: 'liability' },
+	// An in-between account: what is posted to it is cleared again later, so it returns to zero.
+	{ value: 'clearing', label: 'Clearing', type: 'asset' },
+	{ value: 'clearing', label: 'Clearing', type: 'liability' }
 ];
 export const kindLabel = (k: AccountKind | null | undefined) => ACCOUNT_KINDS.find((x) => x.value === k)?.label ?? '';
 export type AccountType = Schemas['AccountType'];

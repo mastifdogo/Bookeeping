@@ -1784,6 +1784,10 @@ export interface components {
             };
         };
         Account: {
+            /** @description The module that made the account (a clearing account of its own) */
+            module_id: string | null;
+            /** @description That module's own name for it */
+            module_key: string | null;
             kind: components["schemas"]["AccountKind"] | null;
             /** @description The account this one sits under (same type and currency), or null */
             parent_code: string | null;
@@ -1863,10 +1867,10 @@ export interface components {
             is_active?: boolean;
         };
         /**
-         * @description What a bank-type account is. chequing and savings are asset accounts, credit_card a liability.
+         * @description What a bank-type account is (chequing and savings are asset accounts, credit_card a liability), or clearing for an in-between asset or liability account whose balance should return to zero.
          * @enum {string}
          */
-        AccountKind: "chequing" | "savings" | "credit_card";
+        AccountKind: "chequing" | "savings" | "credit_card" | "clearing";
         JournalEntryCreate: {
             /** @description The vendor or customer the entry is with */
             entity_id?: number | null;

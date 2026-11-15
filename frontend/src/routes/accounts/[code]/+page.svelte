@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
+	import { page } from '$app/state';
 	import Amount from '#lib/components/Amount.svelte';
 	import { openRow } from '#lib/rows.ts';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
@@ -69,6 +70,7 @@
 			busy = false;
 		}
 	}
+	const moduleName = (id: string) => page.data.modules?.find((m: { id: string }) => m.id === id)?.label ?? id;
 </script>
 
 <p class="small"><a href="/accounts">← Accounts</a></p>
@@ -90,6 +92,14 @@
 	</button>
 </div>
 {#if account.description && !editing}<p class="muted">{account.description}</p>{/if}
+{#if account.kind === 'clearing'}
+	<p class="small clearing" class:off={account.balance_cents !== 0}>
+		{#if account.module_id}Made by the {moduleName(account.module_id)} module. {/if}
+		{#if account.balance_cents === 0}Cleared: everything posted here has been matched by a posting the other way.{:else}
+			<strong><Amount cents={naturalBalance(account.type, account.balance_cents)} currency={account.currency} /> not cleared yet.</strong>
+			What is posted to a clearing account is meant to be cleared by a later posting the other way.{/if}
+	</p>
+{/if}
 {#if parentAccount || children.length}
 	<p class="small">
 		{#if parentAccount}Sub-account of <a href="/accounts/{encodeURIComponent(parentAccount.code)}"><span class="mono">{parentAccount.code}</span> {parentAccount.name}</a>.{/if}
@@ -195,3 +205,9 @@
 		</tfoot>
 	</table>
 </div>
+
+<style>
+	.clearing.off {
+		color: var(--warn);
+	}
+</style>

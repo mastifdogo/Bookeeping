@@ -276,6 +276,45 @@ no connection for that kind of request is set up, 403 when the module isn't allo
 provider fails, 422 when the model declines. The messages say where to fix
 it. `maxTokens` is capped by the admin's limit.
 
+## Clearing accounts
+
+Ledger 0.20.0. A clearing account is an in-between account: one side of a
+transaction is posted to it now and the other side later, so its balance
+returns to zero. Use one when the two halves of something happen at
+different times or are recorded by different parts of the system: a card
+sale today and its payout on Thursday, wages calculated by one module and
+paid from the bank by another, a transfer leaving one account before it
+arrives in the other.
+
+A module asks for its own with a key; Ledger makes it the first time
+(an asset account unless `type: "liability"`, tagged *Clearing*, with a code
+like `CLR-SALES-CARD_PAYOUTS`) and returns the same account every time after:
+
+```js
+const clearing = await ctx.ledger.clearingAccount({ key: "card_payouts", name: "Card payouts in transit", currency: "CAD" });
+
+// The sale: the money isn't in the bank yet
+await ctx.ledger.createJournalEntry({ entry_date, description: "Card sale", lines: [
+	{ account_code: clearing.code, debit_cents: 12000, credit_cents: 0 },
+	{ account_code: revenue, debit_cents: 0, credit_cents: 12000 } ] }, req.user);
+
+// The payout, later (this module, another module, or a person): the other side clears it
+await ctx.ledger.createJournalEntry({ entry_date, description: "Card payout", lines: [
+	{ account_code: bank, debit_cents: 12000, credit_cents: 0 },
+	{ account_code: clearing.code, debit_cents: 0, credit_cents: 12000 } ] }, req.user);
+
+const all = await ctx.ledger.clearingAccounts(); // every module's, with module_id, module_key and balance_cents
+```
+
+Call `clearingAccount` each time and use the code it returns: a person can
+renumber the account, and the key (with the currency) is what finds it. One
+account per key and currency. Another module can post the clearing side
+into yours: it finds it in `clearingAccounts()` by `module_id` and
+`module_key`. The Accounts page marks clearing accounts and points out any
+that aren't at zero, so don't leave amounts in one that nothing will clear.
+Entries still balance as always; a clearing account is an ordinary account
+with a purpose, not a way around double entry.
+
 ## Entry amounts can change
 
 Since Ledger 0.19.5 a person can change the amounts of a posted entry on its

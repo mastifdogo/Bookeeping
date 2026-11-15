@@ -121,6 +121,8 @@
 	function toggleInactive(e: Event) {
 		goto((e.currentTarget as HTMLInputElement).checked ? '?inactive=1' : '?', { reset: false });
 	}
+	// Clearing accounts should sit at zero: the ones that don't are pointed out.
+	let uncleared = $derived(data.accounts.filter((a) => a.kind === 'clearing' && a.is_active && a.balance_cents !== 0));
 </script>
 
 <div class="toolbar">
@@ -176,6 +178,14 @@
 	</form>
 {/if}
 
+{#if uncleared.length > 0}
+	<div class="notice warn-note">
+		<strong>Clearing accounts with a balance.</strong> What is posted to a clearing account is meant to be cleared again, so it returns to
+		zero:
+		{#each uncleared as a, i (a.code)}{i ? ', ' : ' '}<a href="/accounts/{encodeURIComponent(a.code)}"><span class="mono">{a.code}</span> {a.name}</a>
+			(<Amount cents={naturalBalance(a.type, a.balance_cents)} currency={a.currency} />){/each}.
+	</div>
+{/if}
 <div class="table-wrap">
 	{#if data.accounts.length === 0}
 		<div class="empty">No accounts yet.</div>
@@ -198,7 +208,7 @@
 						<td class="mono"><a href="/accounts/{encodeURIComponent(a.code)}">{a.code}</a></td>
 						<td style:padding-left={depth ? `${0.6 + depth * 1.25}rem` : undefined}>
 							{#if depth}<span class="muted" aria-hidden="true">↳ </span>{/if}{a.name}
-							{#if a.kind}<span class="badge">{kindLabel(a.kind)}</span>{/if}
+							{#if a.kind}<span class="badge" class:warn={a.kind === 'clearing' && a.balance_cents !== 0}>{kindLabel(a.kind)}{a.kind === 'clearing' && a.balance_cents !== 0 ? ': not cleared' : ''}</span>{/if}
 							{#if !tree && a.parent_code}<span class="muted small">(under {a.parent_code})</span>{/if}
 							{#if a.description}<div class="muted small">{a.description}</div>{/if}
 						</td>
@@ -223,6 +233,10 @@
 </p>
 
 <style>
+	.warn-note {
+		background: var(--warn-bg);
+		color: var(--text);
+	}
 	button.sort {
 		all: unset;
 		cursor: pointer;
