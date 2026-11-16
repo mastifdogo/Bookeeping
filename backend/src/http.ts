@@ -1,8 +1,9 @@
 // HTTP layer. Paths match api/openapi.yaml under /api/v1; everything else
 // serves the built SvelteKit frontend.
 
+import { MAX_CENTS } from "./money.ts";
 import { closeSession, consoleOpen, emit, installConsole, listen, onSessionClose, withConsoleContext } from "./console.ts";
-import { listRootActions, previewAccountDelete, requireRoot, reverseRootAction, rootDeleteAccount, rootDeleteUser, rootRenameUser, rootUpdateAccount } from "./root.ts";
+import { leaveRootMode, listRootActions, previewAccountDelete, requireRoot, reverseRootAction, RootNotIntactError, rootDeleteAccount, rootDeleteEntry, rootDeleteLine, rootDeleteUser, rootProblems, rootRenameUser, rootUpdateAccount, rootUpdateLine } from "./root.ts";
 import { moveUnreconciledLine, unreconciledSummary } from "./unreconciled.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
@@ -214,6 +215,7 @@ const UNIQUE_MESSAGES: Record<string, string> = {
 function writeErr(c: Ctx, err: unknown): void {
 	const { res } = c;
 	if (err instanceof ValidationError) return writeError(res, 422, "validation_failed", "request validation failed", err.details);
+	if (err instanceof RootNotIntactError) return writeError(res, err.status, err.code, err.message, err.problems.slice(0, 100).map((p) => ({ field: "books", message: p })));
 	if (err instanceof HttpError) return writeError(res, err.status, err.code, err.message);
 	if (err instanceof UnauthorizedError) return writeError(res, 401, "unauthorized", "login required");
 	if (err instanceof BadCredentialsError) return writeError(res, 401, "unauthorized", err.message);
@@ -439,6 +441,9 @@ async function handleLogin(c: Ctx): Promise<void> {
 async function handleLogout(c: Ctx): Promise<void> {
 	const token = sessionToken(c.req);
 	if (token !== "") {
+		// Logging out of root mode with the books broken reverses that root session.
+		const u = await sessionUser(c.app, token).catch(() => null);
+		if (u?.root) await leaveRootMode(c.app, u, true).catch((err: Error) => log.error("root: leaving root mode at logout failed", { err: err.message }));
 		await logout(c.app, token);
 		closeSession(hashToken(token).toString("hex"));
 	}
@@ -779,8 +784,10 @@ function objectBody(fields: string[]) {
 }
 
 async function handleSetRoot(c: Ctx): Promise<void> {
-	const b = await decodeBody(c, true, objectBody(["on"]));
-	if (typeof b.on !== "boolean") throw new HttpError(400, "invalid JSON: on must be true or false", "bad_request");
+	const b = await decodeBody(c, true, objectBody(["on", "reverse"]));
+	if (typeof b.on !== "boolean" || (b.reverse !== undefined && typeof b.reverse !== "boolean")) throw new HttpError(400, "invalid JSON: on and reverse must be true or false", "bad_request");
+	// Root mode is only left with the books intact; `reverse` undoes this root session when they aren't.
+	if (!b.on && c.user!.root) await leaveRootMode(c.app, c.user!, b.reverse === true);
 	await setRootMode(c.app, c.user!, c.token, b.on);
 	if (!b.on) closeSession(hashToken(c.token).toString("hex"));
 	c.user = await sessionUser(c.app, c.token);
@@ -814,6 +821,44 @@ async function handleRootUpdateUser(c: Ctx): Promise<void> {
 async function handleRootDeleteUser(c: Ctx): Promise<void> {
 	requireRoot(c.user!, true);
 	writeJSON(c.res, 200, await rootDeleteUser(c.app, c.params.username!, c.user!));
+}
+
+async function handleRootCheck(c: Ctx): Promise<void> {
+	requireRoot(c.user!);
+	const problems = await rootProblems(c.app);
+	writeJSON(c.res, 200, { intact: problems.length === 0, problems });
+}
+
+async function handleRootDeleteEntry(c: Ctx): Promise<void> {
+	requireRoot(c.user!);
+	writeJSON(c.res, 200, await rootDeleteEntry(c.app, pathId(c, "entryId"), c.user!));
+}
+
+function lineNumberParam(c: Ctx): number {
+	const n = Number(c.params.lineNumber);
+	if (!Number.isSafeInteger(n) || n < 1) throw new NotFoundError();
+	return n;
+}
+
+async function handleRootDeleteLine(c: Ctx): Promise<void> {
+	requireRoot(c.user!);
+	writeJSON(c.res, 200, await rootDeleteLine(c.app, pathId(c, "entryId"), lineNumberParam(c), c.user!));
+}
+
+async function handleRootUpdateLine(c: Ctx): Promise<void> {
+	requireRoot(c.user!);
+	const b = await decodeBody(c, true, objectBody(["account_code", "debit_cents", "credit_cents"]));
+	const cents = (k: string): bigint | undefined => {
+		const v = b[k];
+		if (v === undefined) return undefined;
+		// Numbers in a request body keep their source text (decode.ts), so cents never pass through a float.
+		const src = typeof v === "object" && v !== null ? (v as { source?: unknown }).source : typeof v === "number" ? String(v) : null;
+		const n = typeof src === "string" && /^\d{1,18}$/.test(src) ? BigInt(src) : null;
+		if (n === null || n < 0n || n > MAX_CENTS) throw new HttpError(400, `invalid JSON: ${k} must be a whole number of cents`, "bad_request");
+		return n;
+	};
+	if (b.account_code !== undefined && typeof b.account_code !== "string") throw new HttpError(400, "invalid JSON: account_code must be text", "bad_request");
+	writeJSON(c.res, 200, await rootUpdateLine(c.app, pathId(c, "entryId"), lineNumberParam(c), { account_code: b.account_code as string | undefined, debit_cents: cents("debit_cents"), credit_cents: cents("credit_cents") }, c.user!));
 }
 
 async function handleListRootActions(c: Ctx): Promise<void> {
@@ -2190,6 +2235,10 @@ const ROUTES: Route[] = [
 	route("POST", "/auth/root", "viewer", handleSetRoot),
 	route("GET", "/root-actions", "admin", handleListRootActions),
 	route("GET", "/root/console", "admin", handleRootConsole),
+	route("GET", "/root/check", "admin", handleRootCheck),
+	route("DELETE", "/journal-entries/:entryId/root", "admin", handleRootDeleteEntry),
+	route("DELETE", "/journal-entries/:entryId/lines/:lineNumber/root", "admin", handleRootDeleteLine),
+	route("PATCH", "/journal-entries/:entryId/lines/:lineNumber/root", "admin", handleRootUpdateLine),
 	route("POST", "/root-actions/:scope/:actionId/reverse", "admin", handleReverseRootAction),
 	route("PUT", "/users/:username/organizations/:orgId", "users", handlePutMembership),
 	route("DELETE", "/users/:username/organizations/:orgId", "users", handleDeleteMembership),

@@ -16,7 +16,12 @@
 		'account.update': 'Account changed',
 		'account.delete': 'Account deleted',
 		'user.update': 'User renamed',
-		'user.delete': 'User deleted'
+		'user.delete': 'User deleted',
+		'entry.delete': 'Entry deleted',
+		'line.delete': 'Line deleted',
+		'line.update': 'Line changed',
+		'module.delete': 'Module record deleted',
+		'module.update': 'Module record changed'
 	};
 
 	async function reverse(a: Action) {
@@ -37,7 +42,8 @@
 </script>
 
 <p class="muted" style="margin-top:0">
-	Everything done in root mode: accounts deleted or changed, users renamed or deleted. Each keeps what it changed or deleted, so
+	Everything done in root mode: accounts, entries, lines and module records deleted or changed, users renamed or deleted. Each keeps
+	what it changed or deleted, so
 	<strong>Reverse</strong> puts it back. Reversing needs root mode on (Settings → Account).
 </p>
 <ErrorNotice {error} />

@@ -10,6 +10,7 @@
 //
 // Pass --password-stdin to add/passwd to read the password from stdin.
 
+import { sweepRootSessions } from "./root.ts";
 import { runBackupCommand } from "./backup.ts";
 import { createServer } from "node:http";
 import { mkdirSync } from "node:fs";
@@ -68,6 +69,11 @@ async function serve(): Promise<void> {
 		});
 	});
 	log.info("listening", { addr: cfg.httpAddr, csv_dir: cfg.csvDir });
+
+	// Root sessions that ended without leaving root mode (a login that timed out): reversed if they left the books broken.
+	const sweep = () => sweepRootSessions(app).catch((err: Error) => log.warn("root: checking abandoned root sessions failed", { err: err.message }));
+	void sweep();
+	setInterval(sweep, 10 * 60_000).unref();
 
 	let stopping = false;
 	const shutdown = () => {

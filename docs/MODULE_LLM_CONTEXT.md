@@ -399,6 +399,24 @@ const c = await ctx.ledger.clearingAccount({ key: "card_payouts", name: "Card pa
 const all = await ctx.ledger.clearingAccounts(); // every module's: find another module's by module_id + module_key
 ```
 
+### Root mode (Ledger 0.22.0)
+
+```js
+req.user.root                                  // true while the admin asking has root mode on
+await ctx.root.remove(req, "invoices", id, "Sales: deleted invoice 12");        // delete one row of the module's own table (needs an id column)
+await ctx.root.update(req, "invoices", id, { status: "draft" }, "summary?");   // change any columns but id
+ctx.root.onCheck(async () => ["invoice 12 is sent but has no lines"]);          // problems that keep root mode from being left; [] when sound
+```
+
+In root mode the module lets the admin delete or change ANY of its records,
+also the ones it normally protects, and always through `ctx.root` (403
+without root), never its own DELETE/UPDATE: Ledger keeps the row and puts it
+back when the action or the whole root session is reversed. Delete rows that
+hang off a row first (cascaded rows are not kept). Don't post or reverse
+journal entries on a root delete. In root mode an entry may be unbalanced or
+have one line for a while, and entries, accounts and users can disappear and
+come back with the same ids: never fail on that.
+
 Always call `clearingAccount` and use `c.code` at the time of posting; never
 store the code (people can renumber it). Post one side to it in one balanced
 entry and the clearing side in a later balanced entry. Don't use one as a

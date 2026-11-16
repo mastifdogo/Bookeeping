@@ -334,14 +334,63 @@ balance, a bill marked paid), read it from the entry
 (`ctx.ledger.linkedEntries(ref)`) instead of trusting the module's own copy,
 and show a difference to the user rather than overwriting either side.
 
-## Root mode can delete things
+## Root mode
 
-Since Ledger 0.21.0 an admin in root mode can delete an account with every
-journal entry posted to it, and delete users; each can be reversed from the
+Since Ledger 0.21.0 an admin can turn on root mode: they can delete an
+account with every journal entry posted to it, and delete users. Since
+0.22.0 they can delete any entry or line and move a line to any account, so
+an entry may be unbalanced, or have one line, for a while; root mode can
+only be left once the books are intact again, or everything done in that
+root session is reversed. Each root action can also be reversed from the
 root log, which puts back the same ids. A module may therefore find that an
 account code, an entry id or a user it kept no longer exists (and later
-exists again). Treat a missing account or entry as gone, not as an error
-that stops the module, and don't delete your own records because of it.
+exists again), or that an entry it posted has other lines than it posted.
+Treat a missing account or entry as gone, not as an error that stops the
+module, and don't delete your own records because of it.
+
+**Modules give root the same power over their own records** (Ledger
+0.22.0). `req.user.root` is true while the person asking has root mode on.
+When it is, the module's page offers to delete or change any of its records,
+including ones it normally protects (a sent invoice, a paid bill, a posted
+pay run), and does it through `ctx.root`, never with its own DELETE or
+UPDATE, so Ledger keeps the row and can put it back:
+
+```js
+ctx.route("DELETE", "/invoices/:id", async (req) => {
+	if (!req.user.root) { /* the normal rules: refuse a sent invoice, ... */ }
+	// Rows that hang off it first (ON DELETE CASCADE rows are not kept otherwise), then the row itself.
+	for (const l of (await ctx.db.query(`SELECT id FROM ${ctx.schema}.invoice_lines WHERE invoice_id = $1`, [req.params.id])).rows) {
+		await ctx.root.remove(req, "invoice_lines", l.id);
+	}
+	return ctx.root.remove(req, "invoices", req.params.id, `Sales: deleted invoice ${req.params.id}`);
+});
+ctx.route("PATCH", "/invoices/:id/root", (req) => ctx.root.update(req, "invoices", req.params.id, req.body)); // any columns but id
+
+// What must be put right before root mode can be left: a list of sentences, [] when all is sound.
+ctx.root.onCheck(async () => {
+	const r = await ctx.db.query(`SELECT i.number FROM ${ctx.schema}.invoices i WHERE i.status = 'sent' AND NOT EXISTS (SELECT 1 FROM ${ctx.schema}.invoice_lines l WHERE l.invoice_id = i.id)`);
+	return r.rows.map((x) => `invoice ${x.number} is sent but has no lines`);
+});
+```
+
+- `ctx.root.remove(req, table, id, summary?)` and
+  `ctx.root.update(req, table, id, { column: value, ... }, summary?)` work
+  on one row of one of the module's own tables that has an `id` column.
+  They answer 403 unless `req.user.root`, write the root log entry (shown
+  under Settings → Root log with the summary) and return it.
+- Reversing, one action or a whole root session, puts the row back exactly;
+  the module does nothing for it. Because rows can come back, never reuse
+  ids, and don't keep counters that a returning row would contradict.
+- Root never posts or deletes journal entries through the module: deleting a
+  module record leaves the entries it posted in the books (the admin deletes
+  those on the entry's page), so don't post a reversing entry on a root
+  delete.
+- `ctx.root.onCheck(fn)` is asked whenever root mode is about to be left,
+  once per set of books. Report only what is truly broken (a record that
+  can't work), not what is merely unusual.
+- Mark root-only controls plainly (red, "Root") and show them only when
+  `GET` data from the server says the user is in root mode; the server
+  decides, not the page.
 
 ## Account codes can change
 

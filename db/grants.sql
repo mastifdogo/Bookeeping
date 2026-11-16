@@ -44,6 +44,7 @@ GRANT DELETE                          ON journal_entries, transactions, accounts
                                          transaction_changes, transaction_moves, journal_entry_date_changes,
                                          account_code_changes                    TO :"app_role";
 GRANT UPDATE (created_by)             ON journal_entries                         TO :"app_role";
+GRANT UPDATE (currency)               ON transactions                            TO :"app_role";
 GRANT UPDATE (imported_by)            ON csv_imports                             TO :"app_role";
 GRANT UPDATE (changed_by)             ON transaction_changes, transaction_moves, journal_entry_date_changes, account_code_changes TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON documents                               TO :"app_role";

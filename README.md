@@ -393,9 +393,26 @@ step aside for a few actions:
   entries, in every account they touch, with their reversals), its
   reconciliations and the change logs that point at them. Sub-accounts move
   to the top level.
+- On a journal entry's page: **Delete entry…** (whole, with its reversal),
+  and on each line **Delete line** and **Change…**, which moves the line to
+  any account (in any currency) or changes its amount. An entry may be left
+  unbalanced, or with a single line, while you work; the page marks it "not
+  intact".
+- In modules: modules let root delete and change their own records the same
+  way (`ctx.root`), kept in the same log.
 - Under Settings → Users (admins of the main books): **Rename** or
   **Delete** a user. A deleted user is removed from every set of books;
   entries and changes they made stay, with no name on them.
+
+**Leaving root mode needs the books intact**: every entry has at least two
+lines and its debits equal its credits in each currency, and no module
+reports a problem with its records. Turning root mode off checks this
+(**Check the books** shows the list at any time). If something is wrong you
+choose: stay and fix it, or reverse everything done in that root session
+(each time root mode is turned on is one root session) and leave. Logging
+out of root mode with the books broken reverses the session without asking,
+and so does a login that times out or a server restart (checked at start
+and every ten minutes).
 
 In root mode a **▤ Console** button opens a console beside the page (drag
 the divider to resize it). It shows live, read-only, each request the page

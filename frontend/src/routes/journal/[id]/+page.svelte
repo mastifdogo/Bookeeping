@@ -133,6 +133,65 @@
 		}
 	}
 
+	// Root mode: delete the entry or a line, or change a line's account or amount. The entry may be left
+	// unbalanced; leaving root mode checks the books. Everything is logged under Settings → Root log.
+	let root = $derived(page.data.user?.root === true);
+	let rootLine = $state<number | null>(null);
+	let rootAccount = $state('');
+	let rootDebit = $state('');
+	let rootCredit = $state('');
+	function startRootLine(l: (typeof e.lines)[number]) {
+		error = null;
+		amending = redating = reversing = false;
+		moving = null;
+		rootLine = l.line_number;
+		rootAccount = l.account_code;
+		rootDebit = l.debit_cents ? centsToInput(l.debit_cents) : '';
+		rootCredit = l.credit_cents ? centsToInput(l.credit_cents) : '';
+	}
+	async function rootAct(fn: () => Promise<unknown>, after?: () => Promise<unknown>) {
+		busy = true;
+		error = null;
+		try {
+			await fn();
+			rootLine = null;
+			await (after ? after() : invalidateAll());
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+	const rootSaveLine = (ev: SubmitEvent) => {
+		ev.preventDefault();
+		const l = e.lines.find((x) => x.line_number === rootLine);
+		const d = cents(rootDebit);
+		const c = cents(rootCredit);
+		if (!l || d === null || c === null || d > 0 === c > 0) {
+			error = new Error('Give a debit or a credit, not both and not neither.');
+			return;
+		}
+		const body = { ...(rootAccount !== l.account_code ? { account_code: rootAccount } : {}), ...(d !== l.debit_cents || c !== l.credit_cents ? { debit_cents: d, credit_cents: c } : {}) };
+		return rootAct(async () => unwrap(await api().PATCH('/journal-entries/{entryId}/lines/{lineNumber}/root', { params: { path: { entryId: e.id, lineNumber: l.line_number } }, body })));
+	};
+	const rootDeleteLine = (n: number) =>
+		confirm(`ROOT: delete line ${n} of entry #${e.id}?\n\nThe entry may no longer balance; root mode can only be left once the books are intact. It can be reversed under Settings → Root log.`) &&
+		rootAct(async () => unwrap(await api().DELETE('/journal-entries/{entryId}/lines/{lineNumber}/root', { params: { path: { entryId: e.id, lineNumber: n } } })));
+	const rootDeleteEntry = () =>
+		confirm(`ROOT: delete entry #${e.id} whole${e.reverses_id || e.reversed_by_id ? ', together with its reversal' : ''}?\n\nIt can be reversed under Settings → Root log.`) &&
+		rootAct(
+			async () => unwrap(await api().DELETE('/journal-entries/{entryId}/root', { params: { path: { entryId: e.id } } })),
+			() => goto('/journal')
+		);
+	// What the entry is out by, per currency, and too few lines (only possible in root mode).
+	let broken = $derived.by(() => {
+		const sums = new Map<string, number>();
+		for (const l of e.lines) sums.set(l.currency, (sums.get(l.currency) ?? 0) + l.debit_cents - l.credit_cents);
+		const out = [...sums].filter(([, v]) => v !== 0).map(([c, v]) => `out by ${formatCents(Math.abs(v))} ${c}`);
+		if (e.lines.length < 2) out.unshift(e.lines.length === 0 ? 'no lines' : 'only one line');
+		return out;
+	});
+
 	// One log of what changed after posting: amounts, the date and lines moved to another account.
 	type LogRow = { key: string; at: string; by: string | null; what: string; was: string; now: string; why: string };
 	const money = (c: number) => formatCents(c);
@@ -196,12 +255,14 @@
 	{#if e.amended}<span class="badge warn" title="Its amounts were changed after it was posted; see the changes below">amounts changed</span>{/if}
 	{#if e.date_changes?.length}<span class="badge warn" title="Its date was changed after it was posted; see the changes below">date changed</span>{/if}
 	{#if e.lines.some((l) => l.unreconciled)}<span class="badge danger">unreconciled</span>{/if}
+	{#if broken.length > 0}<span class="badge danger" title="Root mode can only be left once every entry balances and has at least two lines">not intact: {broken.join(', ')}</span>{/if}
 	<span class="spacer"></span>
 	{#if canEdit}<button onclick={() => (redating ? (redating = false) : startRedate())}>{redating ? 'Cancel' : 'Change date…'}</button>{/if}
 	{#if !e.reverses_id && !e.reversed_by_id && canEdit}
 		<button onclick={() => (amending ? (amending = false) : startAmend())}>{amending ? 'Cancel' : 'Change amounts…'}</button>
 		<button class="danger" onclick={() => ((amending = false), (reversing = !reversing))}>Reverse…</button>
 	{/if}
+	{#if root}<button class="danger" disabled={busy} onclick={rootDeleteEntry} title="Root: delete this entry whole">Delete entry…</button>{/if}
 </div>
 
 <ErrorNotice {error} />
@@ -225,6 +286,23 @@
 		<label style="flex:1; min-width:12rem">Why (optional) <input bind:value={moveReason} maxlength="500" placeholder="e.g. cleared on the October statement" /></label>
 		<button class="primary" disabled={busy || !moveTo}>Move</button>
 		<button type="button" onclick={() => (moving = null)}>Cancel</button>
+	</form>
+{/if}
+
+{#if root && rootLine !== null}
+	<form class="card toolbar root-tools" onsubmit={rootSaveLine}>
+		<strong>Root: line {rootLine}</strong>
+		<label>
+			Account
+			<select bind:value={rootAccount} aria-label="Account for the line">
+				{#each data.accounts as a (a.code)}<option value={a.code}>{a.code} — {a.name} ({a.currency})</option>{/each}
+			</select>
+		</label>
+		<label>Debit <input class="amt" inputmode="decimal" bind:value={rootDebit} oninput={() => rootDebit.trim() && (rootCredit = '')} /></label>
+		<label>Credit <input class="amt" inputmode="decimal" bind:value={rootCredit} oninput={() => rootCredit.trim() && (rootDebit = '')} /></label>
+		<button class="primary" disabled={busy}>Save line</button>
+		<button type="button" onclick={() => (rootLine = null)}>Cancel</button>
+		<span class="muted small" style="flex-basis:100%">The entry doesn't have to balance while you work; root mode can only be left once the books are intact.</span>
 	</form>
 {/if}
 
@@ -297,6 +375,10 @@
 						{#if l.unreconciled && canEdit && !amending}
 							<button type="button" class="link small" onclick={() => ((moving = l.line_number), (moveTo = ''), (moveReason = ''))}>Move…</button>
 						{/if}
+						{#if root && !amending}
+							<button type="button" class="link small rootlink" disabled={busy} onclick={() => startRootLine(l)}>Change…</button>
+							<button type="button" class="link small rootlink" disabled={busy} onclick={() => rootDeleteLine(l.line_number)}>Delete line</button>
+						{/if}
 					</td>
 					<td>{l.memo}</td>
 					<td>{l.currency}</td>
@@ -353,6 +435,12 @@
 		text-align: right;
 	}
 	.amend .off {
+		color: var(--danger);
+	}
+	.root-tools {
+		border-color: var(--danger);
+	}
+	button.rootlink {
 		color: var(--danger);
 	}
 	button.link {

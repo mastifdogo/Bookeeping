@@ -1239,6 +1239,63 @@ export interface paths {
         patch: operations["rootRenameUser"];
         trace?: never;
     };
+    "/journal-entries/{entryId}/root": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a journal entry whole, with its reversal (root mode; logged, reversible) */
+        delete: operations["rootDeleteEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/journal-entries/{entryId}/lines/{lineNumber}/root": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                lineNumber: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete one line of an entry (root mode; the entry may be left unbalanced until root mode is left) */
+        delete: operations["rootDeleteLine"];
+        options?: never;
+        head?: never;
+        /** Change a line's account (any account) or amount (root mode; the entry need not balance until root mode is left) */
+        patch: operations["rootUpdateLine"];
+        trace?: never;
+    };
+    "/root/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether the books are intact, and what is wrong if not (root mode) */
+        get: operations["rootCheck"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/root-actions": {
         parameters: {
             query?: never;
@@ -1285,7 +1342,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Turn root mode on or off for this session (admins only to turn it on) */
+        /**
+         * Turn root mode on or off for this session (admins only to turn it on)
+         * @description Root mode can only be left with the books intact: every entry has at
+         *     least two lines and balances in each currency, and no module reports a
+         *     problem. Otherwise turning it off answers 409 `root_not_intact` with
+         *     the problems in `details`, unless `reverse` is true: then everything
+         *     done in this root session is reversed first.
+         */
         post: operations["setRootMode"];
         delete?: never;
         options?: never;
@@ -1858,7 +1922,7 @@ export interface components {
             /** @enum {string} */
             scope: "books" | "users";
             /** @enum {string} */
-            action: "account.update" | "account.delete" | "user.update" | "user.delete";
+            action: "account.update" | "account.delete" | "user.update" | "user.delete" | "entry.delete" | "line.delete" | "line.update" | "module.delete" | "module.update";
             target: string;
             summary: string;
             done_by: string;
@@ -1987,7 +2051,7 @@ export interface components {
                  * @description Stable machine-readable code
                  * @enum {string}
                  */
-                code: "bad_request" | "validation_failed" | "not_found" | "conflict" | "unauthorized" | "forbidden" | "payload_too_large" | "too_many_requests" | "internal_error";
+                code: "bad_request" | "validation_failed" | "not_found" | "conflict" | "unauthorized" | "forbidden" | "payload_too_large" | "too_many_requests" | "root_not_intact" | "password_change_required" | "internal_error";
                 message: string;
                 details?: {
                     /**
@@ -5374,6 +5438,122 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    rootDeleteEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Done; the logged root action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootAction"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    rootDeleteLine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                lineNumber: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Done; the logged root action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootAction"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    rootUpdateLine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                lineNumber: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    account_code?: components["schemas"]["AccountCode"];
+                    debit_cents?: components["schemas"]["Cents"];
+                    credit_cents?: components["schemas"]["Cents"];
+                };
+            };
+        };
+        responses: {
+            /** @description Done; the logged root action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootAction"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    rootCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        intact: boolean;
+                        problems: string[];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
     listRootActions: {
         parameters: {
             query?: never;
@@ -5437,6 +5617,8 @@ export interface operations {
             content: {
                 "application/json": {
                     on: boolean;
+                    /** @default false */
+                    reverse?: boolean;
                 };
             };
         };

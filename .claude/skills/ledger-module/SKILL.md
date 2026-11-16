@@ -152,10 +152,26 @@ Decide, and state briefly to the user:
   Since 0.20.2 an entry's date can change too (`date_changes`), and a
   finished reconciliation moves a bank account's unticked lines to Ledger's
   Unreconciled clearing account until a person moves them on (`moves`).
-- **Root mode** (Ledger 0.21.0): an admin can delete an account with every
-  entry posted to it, or a user, and reverse it later from the root log
-  (same ids come back). Treat a missing account, entry or user as gone for
-  now; don't fail or delete the module's own records because of it.
+- **Root mode** (Ledger 0.21.0, wider in 0.22.0): an admin in root mode
+  can delete any account, entry, line or user and move a line to any
+  account; entries may be unbalanced until root mode is left, and anything
+  can be reversed later (same ids come back). Treat a missing account,
+  entry or user as gone for now; don't fail or delete the module's own
+  records because of it.
+- **Root can do the same to the module's records** (Ledger 0.22.0; needs
+  `"ledger": ">=0.22.0"`). When `req.user.root` is true, let the admin
+  delete or change any record of the module, including ones the module
+  normally protects (sent, paid, posted). Do it only through
+  `ctx.root.remove(req, table, id, summary)` and
+  `ctx.root.update(req, table, id, { column: value }, summary)`, never with
+  the module's own DELETE or UPDATE: Ledger keeps the row, logs it under
+  Settings → Root log and puts it back when the action or the whole root
+  session is reversed. Remove rows that hang off a row first (cascaded rows
+  are not kept). Don't post or reverse journal entries on a root delete.
+  Register `ctx.root.onCheck(async () => [...])` returning plain sentences
+  for records that are truly broken (root mode can't be left until it
+  returns `[]`). Show root controls only when the server says the user is
+  in root mode, marked "Root" in red. Details: docs/MODULES.md, "Root mode".
 - **Account codes can change** (Ledger 0.19.3): people can renumber
   accounts. Ledger rewrites the old code in a module's tables and settings
   only where it can recognise one: text columns named `account_code`,

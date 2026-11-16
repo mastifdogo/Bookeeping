@@ -1,6 +1,6 @@
 // Users, bcrypt passwords and server-side sessions.
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { App } from "./app.ts";
 import { withTx, queryRow, queryRows } from "./db.ts";
@@ -85,6 +85,7 @@ interface SessionRow extends UserRow {
 	org_role: Role | null;
 	must_change_password: boolean;
 	root: boolean;
+	root_session: string | null;
 }
 
 function toUser(r: SessionRow): User {
@@ -99,6 +100,7 @@ function toUser(r: SessionRow): User {
 		server_admin: r.role === "admin",
 		must_change_password: r.must_change_password === true,
 		root: r.root === true,
+		root_session: r.root === true ? r.root_session : null,
 		org: { id: Number(r.org_id), name: r.org_name, kind: r.org_kind, db_name: r.org_db },
 	};
 }
@@ -107,7 +109,7 @@ function toUser(r: SessionRow): User {
 const SESSION_SELECT = `
 	SELECT u.id, u.username, u.role, u.is_active, u.created_at, u.last_login_at, u.must_change_password, s.last_seen_at,
 	       o.id AS org_id, o.name AS org_name, o.kind AS org_kind, o.db_name AS org_db, o.status AS org_status,
-	       m.role AS org_role, s.root
+	       m.role AS org_role, s.root, s.root_session
 	  FROM sessions s
 	  JOIN users u ON u.id = s.user_id
 	  JOIN organizations o ON o.id = s.org_id
@@ -272,7 +274,8 @@ export async function sessionUser(app: App, token: string): Promise<User> {
  */
 export async function setRootMode(app: App, user: User, token: string, on: boolean): Promise<void> {
 	if (on && user.role !== "admin") throw new HttpError(403, "only admins can turn on root mode", "forbidden");
-	await app.main.query(`UPDATE sessions SET root = $2 WHERE token_hash = $1`, [hashToken(token), on]);
+	// Each time it is turned on is a root session of its own (what is done in it can be reversed together).
+	await app.main.query(`UPDATE sessions SET root = $2, root_session = CASE WHEN $2 THEN COALESCE(root_session, $3) END WHERE token_hash = $1`, [hashToken(token), on, randomUUID()]);
 }
 
 export async function logout(app: App, token: string): Promise<void> {

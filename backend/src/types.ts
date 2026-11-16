@@ -283,6 +283,8 @@ export interface User {
 	must_change_password: boolean;
 	/** Root mode is on for this session (an admin's; see root.ts). */
 	root: boolean;
+	/** The root session's id while root mode is on (see root.ts). */
+	root_session: string | null;
 	/** The organization this session works in. */
 	org: { id: number; name: string; kind: "business" | "personal"; db_name: string };
 }

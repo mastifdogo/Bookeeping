@@ -7,6 +7,7 @@
 // A module that fails to load is reported on the Modules page and skipped;
 // the rest of Ledger keeps running.
 
+import { rootModuleDelete, rootModuleUpdate } from "./root.ts";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -44,7 +45,7 @@ export interface ModuleRequest {
 	/** Parsed JSON body (undefined when there is none). */
 	body: unknown;
 	/** The logged-in user, their role ("admin", "bookkeeper" or "viewer") in the organization the request works in, and that organization. */
-	user: { username: string; role: string; organization: { id: number; name: string; kind: string } };
+	user: { username: string; role: string; root: boolean; organization: { id: number; name: string; kind: string } };
 }
 
 /** Return this from a handler to choose the status code. */
@@ -77,6 +78,8 @@ export interface LoadedModule {
 	fileListeners: ((file: FileSummary) => unknown)[];
 	documentListeners: ((doc: DocumentInfo) => unknown)[];
 	accountCodeListeners: ((change: { old_code: string; new_code: string }) => unknown)[];
+	/** ctx.root.onCheck functions: what in the module's records keeps root mode from being left. */
+	rootChecks: (() => unknown)[];
 	/** ctx.search.provide functions. */
 	searchProviders: SearchProvider[];
 	/** ctx.settings.onChange listeners. */
@@ -128,9 +131,17 @@ const cur = (c: string | null | undefined): Currency | null => (c && isCurrency(
 // JSON, but the host can still attribute entries to the right person.
 const userIds = new WeakMap<object, number>();
 function moduleUser(u: User): ModuleRequest["user"] {
-	const pub = { username: publicUser(u).username, role: u.role, organization: { id: u.org.id, name: u.org.name, kind: u.org.kind } };
+	const pub = { username: publicUser(u).username, role: u.role, root: u.root && u.role === "admin", organization: { id: u.org.id, name: u.org.name, kind: u.org.kind } };
 	userIds.set(pub, u.id);
+	fullUsers.set(pub, u);
 	return pub;
+}
+const fullUsers = new WeakMap<object, User>();
+/** The logged-in user behind a request handed to a module (for ctx.root). */
+function rootUser(req: unknown): User {
+	const u = req && typeof req === "object" ? fullUsers.get((req as { user?: object }).user ?? {}) : undefined;
+	if (!u) throw new HttpError(400, "ctx.root needs the request (req) the handler was given");
+	return u;
 }
 function actorOf(u: unknown): number | null {
 	return u && typeof u === "object" ? (userIds.get(u) ?? null) : null;
@@ -157,6 +168,24 @@ function makeContext(app: App, m: LoadedModule) {
 			query: async (sql: string, params: unknown[] = []) => {
 				const r = await app.db.query(sql, params);
 				return { rows: r.rows as Record<string, unknown>[], rowCount: r.rowCount ?? 0 };
+			},
+		},
+		/**
+		 * Root mode (Ledger 0.22.0): while an admin has root mode on (req.user.root),
+		 * the module lets them delete or change any of its records. Do it through
+		 * these, so Ledger keeps the row as it was and can put it back when the
+		 * action, or the whole root session, is reversed. The table is one of the
+		 * module's own with an `id` column. Rows that go with a deleted row
+		 * (ON DELETE CASCADE) are not kept: remove those first, one by one.
+		 */
+		root: {
+			remove: (req: unknown, table: string, rowId: unknown, summary?: string) => rootModuleDelete(app, { id, name: m.manifest.name, schema: `mod_${id.replaceAll("-", "_")}` }, table, rowId, rootUser(req), summary),
+			update: (req: unknown, table: string, rowId: unknown, set: Record<string, unknown>, summary?: string) =>
+				rootModuleUpdate(app, { id, name: m.manifest.name, schema: `mod_${id.replaceAll("-", "_")}` }, table, rowId, set, rootUser(req), summary),
+			/** fn returns a list of problems (text) that must be fixed before root mode can be left; [] when the module's records are sound. */
+			onCheck(fn: () => unknown) {
+				if (typeof fn !== "function") throw new Error("root.onCheck: needs a function");
+				m.rootChecks.push(fn);
 			},
 		},
 		route(method: Method, routePath: string, handler: Handler) {
@@ -424,6 +453,7 @@ export class ModuleHost {
 			fileListeners: [],
 			documentListeners: [],
 			accountCodeListeners: [],
+			rootChecks: [],
 			importer: null,
 		};
 		this.modules.set(m.manifest.id, m);

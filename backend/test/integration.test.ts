@@ -3985,12 +3985,132 @@ test("root console: a live stream of this session's requests and their SQL, secr
 	await new Promise((r) => setTimeout(r, 100));
 	assert.ok(c.events.some((e) => e.kind === "sql-error" && /duplicate key/.test(e.text)));
 	// Turning root mode off closes the console.
-	const n = c.events.length;
 	await call("POST", "/auth/root", { on: false });
+	await new Promise((r) => setTimeout(r, 100));
+	const n = c.events.length;
 	await call("GET", "/accounts");
 	await new Promise((r) => setTimeout(r, 100));
-	assert.ok(c.events.length <= n + 4, "nothing more after root mode is off");
+	assert.equal(c.events.length, n, "nothing more after root mode is off");
 	} finally {
 		c.close();
 	}
+});
+
+test("root mode: delete anything, unbalanced entries while working, and leaving it needs the books intact", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "1100", "USD account", "asset", "USD");
+	await createAccount(ta, "3000", "Equity", "equity", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	const post = async (date: string, what: string, ...lines: Line[]) => {
+		const r = await call("POST", "/journal-entries", entry(date, what, ...lines));
+		expectStatus(r, 201);
+		return r.json();
+	};
+	const e1 = await post("2026-01-01", "Opening", dr("1000", 100000), cr("3000", 100000));
+	const e2 = await post("2026-01-05", "Paper", dr("6100", 2500), cr("1000", 2500));
+	const e3 = await post("2026-01-07", "Toner", dr("6100", 700), cr("1000", 700));
+	// A module with records of its own, changed and deleted through ctx.root, and a check of its own.
+	await app.db.query(`CREATE SCHEMA mod_notes; CREATE TABLE mod_notes.notes (id serial PRIMARY KEY, body text NOT NULL, entry_id bigint); INSERT INTO mod_notes.notes (body, entry_id) VALUES ('keep', 1), ('about toner', ${e3.id});`);
+	await loadModules(t, app, {
+		notes: `export default function (ctx) {
+			ctx.route("GET", "/notes", async () => (await ctx.db.query("SELECT id, body FROM mod_notes.notes ORDER BY id")).rows);
+			ctx.route("DELETE", "/notes/:id", (req) => ctx.root.remove(req, "notes", req.params.id, "Deleted a note"));
+			ctx.route("GET", "/root", (req) => ({ root: req.user.root }));
+			ctx.route("PATCH", "/notes/:id", (req) => ctx.root.update(req, "notes", req.params.id, req.body));
+			ctx.root.onCheck(async () => (await ctx.db.query("SELECT n.id FROM mod_notes.notes n WHERE n.entry_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM journal_entries e WHERE e.id = n.entry_id)")).rows.map((r) => "note " + r.id + " points at an entry that is gone"));
+		}`,
+	});
+	const balances = async () => Object.fromEntries((await call("GET", "/accounts")).json().data.map((a: any) => [a.code, a.balance_cents]));
+	const before = await balances();
+
+	// Not in root mode: nothing of this.
+	expectStatus(await call("DELETE", `/journal-entries/${e2.id}/root`), 403);
+	expectStatus(await call("DELETE", `/journal-entries/${e2.id}/lines/2/root`), 403);
+	expectStatus(await call("DELETE", "/m/notes/notes/1"), 403);
+	expectStatus(await call("PATCH", "/m/notes/notes/1", { body: "x" }), 403);
+
+	assert.equal((await call("GET", "/m/notes/root")).json().root, false);
+	await call("POST", "/auth/root", { on: true });
+	assert.equal((await call("GET", "/m/notes/root")).json().root, true);
+	// One line of an entry goes: the entry is left with a single line.
+	let r = await call("DELETE", `/journal-entries/${e2.id}/lines/2/root`);
+	expectStatus(r, 200);
+	assert.match(r.json().summary, /Deleted line 2 of entry #\d+: 1000 Chequing, 25\.00 Cr/);
+	assert.equal((await call("GET", `/journal-entries/${e2.id}`)).json().lines.length, 1);
+	// A line moves to any account, even one in another currency, and its amount changes: the entry no longer balances.
+	r = await call("PATCH", `/journal-entries/${e1.id}/lines/1/root`, { account_code: "1100", debit_cents: 90000, credit_cents: 0 });
+	expectStatus(r, 200);
+	assert.deepEqual((await call("GET", `/journal-entries/${e1.id}`)).json().lines.map((l: any) => [l.account_code, l.currency, l.debit_cents]), [["1100", "USD", 90000], ["3000", "CAD", 0]]);
+	// A whole entry goes, and the module's records change.
+	expectStatus(await call("DELETE", `/journal-entries/${e3.id}/root`), 200);
+	expectStatus(await call("GET", `/journal-entries/${e3.id}`), 404);
+	r = await call("PATCH", "/m/notes/notes/1", { body: "changed" });
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().action, r.json().target], ["module.update", "notes:notes:1"]);
+	expectStatus(await call("PATCH", "/m/notes/notes/1", { nope: 1 }), 422);
+
+	// The books aren't intact: root mode can't simply be left.
+	r = await call("GET", "/root/check");
+	assert.equal(r.json().intact, false);
+	assert.deepEqual(r.json().problems.sort(), [
+		`NOTES: note 2 points at an entry that is gone`,
+		`entry #${e1.id} doesn't balance in CAD: debits and credits differ by 1000.00`,
+		`entry #${e1.id} doesn't balance in USD: debits and credits differ by 900.00`,
+		`entry #${e2.id} has only one line`,
+	].sort());
+	r = await call("POST", "/auth/root", { on: false });
+	expectStatus(r, 409);
+	assert.equal(r.json().error.code, "root_not_intact");
+	assert.equal(r.json().error.details.length, 4);
+	assert.equal((await call("GET", "/auth/me")).json().root, true);
+
+	// Leaving with `reverse` undoes everything done in this root session.
+	r = await call("POST", "/auth/root", { on: false, reverse: true });
+	expectStatus(r, 200);
+	assert.equal(r.json().root, false);
+	assert.deepEqual(await balances(), before);
+	assert.deepEqual((await call("GET", "/journal-entries")).json().data.map((x: any) => x.id).sort(), [e1.id, e2.id, e3.id].sort());
+	assert.deepEqual((await call("GET", `/journal-entries/${e1.id}`)).json().lines.map((l: any) => [l.account_code, l.currency, l.debit_cents]), [["1000", "CAD", 100000], ["3000", "CAD", 0]]);
+	assert.deepEqual((await call("GET", "/m/notes/notes")).json(), [{ id: 1, body: "keep" }, { id: 2, body: "about toner" }]);
+	const log = (await call("GET", "/root-actions")).json().data;
+	assert.deepEqual(log.map((x: any) => [x.action, x.reversed_by]).sort(), [["entry.delete", "tester"], ["line.delete", "tester"], ["line.update", "tester"], ["module.update", "tester"]].sort());
+
+	// A root session that puts things right itself is left normally, and what it did stays.
+	await call("POST", "/auth/root", { on: true });
+	expectStatus(await call("PATCH", `/journal-entries/${e2.id}/lines/1/root`, { debit_cents: 3000, credit_cents: 0 }), 200);
+	expectStatus(await call("POST", "/auth/root", { on: false }), 409);
+	expectStatus(await call("PATCH", `/journal-entries/${e2.id}/lines/2/root`, { debit_cents: 0, credit_cents: 3000 }), 200);
+	expectStatus(await call("DELETE", "/m/notes/notes/1"), 200);
+	expectStatus(await call("POST", "/auth/root", { on: false }), 200);
+	assert.equal((await balances())["6100"], 3700);
+	assert.deepEqual((await call("GET", "/m/notes/notes")).json().map((n: any) => n.id), [2]);
+	// The deleted note can still be put back from the root log.
+	await call("POST", "/auth/root", { on: true });
+	const noteGone = (await call("GET", "/root-actions")).json().data.find((x: any) => x.action === "module.delete");
+	expectStatus(await call("POST", `/root-actions/books/${noteGone.id}/reverse`), 200);
+	assert.deepEqual((await call("GET", "/m/notes/notes")).json().map((n: any) => n.id), [1, 2]);
+	expectStatus(await call("POST", "/auth/root", { on: false }), 200);
+
+	// Logging out of root mode with the books broken reverses that root session.
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "tester", password: "correct horse battery" } });
+	const other = `${SESSION_COOKIE}=${sessionFrom(r).value}`;
+	expectStatus(await request("POST", "/api/v1/auth/root", { body: { on: true }, cookie: other }), 200);
+	expectStatus(await request("DELETE", `/api/v1/journal-entries/${e1.id}/lines/2/root`, { cookie: other }), 200);
+	assert.equal((await call("GET", `/journal-entries/${e1.id}`)).json().lines.length, 1);
+	expectStatus(await request("POST", "/api/v1/auth/logout", { cookie: other }), 204);
+	assert.equal((await call("GET", `/journal-entries/${e1.id}`)).json().lines.length, 2);
+
+	// A root session whose login is gone (it timed out) is reversed when it left the books broken.
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "tester", password: "correct horse battery" } });
+	const third = `${SESSION_COOKIE}=${sessionFrom(r).value}`;
+	await request("POST", "/api/v1/auth/root", { body: { on: true }, cookie: third });
+	expectStatus(await request("DELETE", `/api/v1/journal-entries/${e1.id}/lines/1/root`, { cookie: third }), 200);
+	await app.main.query(`DELETE FROM sessions WHERE root`);
+	const { sweepRootSessions } = await import("../src/root.ts");
+	await sweepRootSessions(app);
+	assert.equal((await call("GET", `/journal-entries/${e1.id}`)).json().lines.length, 2);
+	assert.deepEqual(await balances(), { ...before, "6100": 3700, "1000": before["1000"] - 500 });
 });

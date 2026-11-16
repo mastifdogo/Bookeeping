@@ -13,7 +13,8 @@ import type { App } from "./app.ts";
 import { queryRow, queryRows, withTx, type Queryable } from "./db.ts";
 import { ConflictError, HttpError, NotFoundError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
-import { listOrganizations, MAIN_ORG } from "./orgs.ts";
+import { formatCents } from "./money.ts";
+import { inOrg, listOrganizations, MAIN_ORG } from "./orgs.ts";
 import { ACCOUNT_TYPES, isCurrency, type AccountType, type User } from "./types.ts";
 import { syncUnreconciledLater } from "./unreconciled.ts";
 
@@ -21,7 +22,7 @@ export type RootAction = {
 	id: number;
 	/** "books": the current organization's accounts; "users": people who log in. */
 	scope: "books" | "users";
-	action: "account.update" | "account.delete" | "user.update" | "user.delete";
+	action: "account.update" | "account.delete" | "user.update" | "user.delete" | "entry.delete" | "line.delete" | "line.update" | "module.delete" | "module.update";
 	target: string;
 	summary: string;
 	done_by: string;
@@ -38,14 +39,18 @@ export function requireRoot(user: User, serverAdmin = false): void {
 
 const asRoot = (tx: Queryable) => tx.query(`SELECT set_config('ledger.root', 'on', true)`);
 
-async function begin(tx: Queryable, action: RootAction["action"], target: string, summary: string, by: string, undo: Record<string, unknown> = {}): Promise<bigint> {
+/** Who is acting: their name and the root session it belongs to. */
+type Who = { username: string; root_session?: string | null };
+
+async function begin(tx: Queryable, action: RootAction["action"], target: string, summary: string, who: Who, undo: Record<string, unknown> = {}): Promise<bigint> {
 	await asRoot(tx);
-	const r = await queryRow<{ id: bigint }>(tx, `INSERT INTO root_actions (action, target, summary, undo, done_by) VALUES ($1, $2, $3, $4::jsonb, $5) RETURNING id`, [
+	const r = await queryRow<{ id: bigint }>(tx, `INSERT INTO root_actions (action, target, summary, undo, done_by, session) VALUES ($1, $2, $3, $4::jsonb, $5, $6) RETURNING id`, [
 		action,
 		target,
 		summary.slice(0, 1000),
 		JSON.stringify(undo),
-		by,
+		who.username,
+		who.root_session ?? null,
 	]);
 	return r!.id;
 }
@@ -125,7 +130,7 @@ export async function rootDeleteAccount(app: App, code: string, user: User): Pro
 			"account.delete",
 			code,
 			`Deleted account ${p.code} ${p.name}` + (e.length ? ` and ${e.length} journal entr${e.length === 1 ? "y" : "ies"} (${p.lines} lines)` : "") + (p.reconciliations ? `, ${p.reconciliations} reconciliation${p.reconciliations === 1 ? "" : "s"}` : ""),
-			user.username,
+			user,
 		);
 		const lines = `SELECT id FROM transactions WHERE journal_entry_id = ANY($3::bigint[])`;
 		const recs = `SELECT id FROM reconciliations WHERE account_id = $2`;
@@ -187,7 +192,7 @@ export async function rootUpdateAccount(app: App, code: string, input: { type?: 
 			throw new ConflictError(`${acc.code} has lines in ${acc.currency.trim()}; its currency can't change while it has postings (each entry must balance in its own currency). Delete them or the account instead.`);
 		}
 		const what = [type !== acc.type ? `type ${acc.type} → ${type}` : "", currency !== acc.currency.trim() ? `currency ${acc.currency.trim()} → ${currency}` : ""].filter(Boolean).join(", ");
-		const id = await begin(tx, "account.update", code, `Changed account ${acc.code} ${acc.name}: ${what}`, user.username);
+		const id = await begin(tx, "account.update", code, `Changed account ${acc.code} ${acc.name}: ${what}`, user);
 		await keep(tx, id, "before", `SELECT * FROM accounts WHERE id = $2`, [acc.id]);
 		await keep(tx, id, "children", `SELECT id, parent_id FROM accounts WHERE parent_id = $2`, [acc.id]);
 		// A sub-account sits under an account of its own type and currency, and a tag fits the type: what no longer fits comes loose.
@@ -235,7 +240,7 @@ async function userRefs(tx: Queryable): Promise<{ table: string; column: string;
 }
 
 /** Takes the user out of one database, keeping what it took for reversing. Returns the action id. */
-async function removeUserFrom(db: Pool, userId: bigint, username: string, by: string, summary: string, partOf: number | null): Promise<bigint> {
+async function removeUserFrom(db: Pool, userId: bigint, username: string, by: Who, summary: string, partOf: number | null): Promise<bigint> {
 	return withTx(db, {}, async (tx) => {
 		const id = await begin(tx, "user.delete", username, summary, by, partOf === null ? {} : { part_of: partOf });
 		await keep(tx, id, "user", `SELECT * FROM users WHERE id = $2`, [userId]);
@@ -278,9 +283,9 @@ export async function rootDeleteUser(app: App, username: string, user: User): Pr
 	try {
 		for (const d of await databases(app)) {
 			const has = await queryRow(d.db, `SELECT 1 FROM users WHERE id = $1`, [u.id]);
-			if (has) done.push({ db: d.name, id: Number(await removeUserFrom(d.db, u.id, u.username, user.username, summary, -1)) });
+			if (has) done.push({ db: d.name, id: Number(await removeUserFrom(d.db, u.id, u.username, user, summary, -1)) });
 		}
-		const id = await removeUserFrom(app.main, u.id, u.username, user.username, summary, null);
+		const id = await removeUserFrom(app.main, u.id, u.username, user, summary, null);
 		await app.main.query(`UPDATE root_actions SET undo = undo || jsonb_build_object('orgs', $2::jsonb) WHERE id = $1`, [id, JSON.stringify(done)]);
 		return getAction(app.main, "users", id);
 	} catch (err) {
@@ -307,7 +312,7 @@ export async function rootRenameUser(app: App, username: string, newName: string
 			v.add("username", `${next} is taken`);
 			v.throwIfAny();
 		}
-		const id = await begin(tx, "user.update", u.username, `Renamed user ${u.username} to ${next}`, user.username, { user_id: String(u.id), before: u.username, after: next });
+		const id = await begin(tx, "user.update", u.username, `Renamed user ${u.username} to ${next}`, user, { user_id: String(u.id), before: u.username, after: next });
 		await tx.query(`UPDATE users SET username = $2 WHERE id = $1`, [u.id, next]);
 		return id;
 	});
@@ -349,7 +354,7 @@ async function getAction(db: Queryable, scope: RootAction["scope"], id: bigint):
 
 /** Root actions on this organization's books, and on users. */
 export async function listRootActions(app: App): Promise<RootAction[]> {
-	const books = await queryRows<ActionRow>(app.db, ACTION_SELECT + ` WHERE action LIKE 'account.%' ORDER BY id DESC LIMIT 500`);
+	const books = await queryRows<ActionRow>(app.db, ACTION_SELECT + ` WHERE action NOT LIKE 'user.%' ORDER BY id DESC LIMIT 500`);
 	const users = await queryRows<ActionRow>(app.main, ACTION_SELECT + ` WHERE action LIKE 'user.%' AND NOT undo ? 'part_of' ORDER BY id DESC LIMIT 500`);
 	return [...books.map((r) => ({ ...r, id: Number(r.id), scope: "books" as const })), ...users.map((r) => ({ ...r, id: Number(r.id), scope: "users" as const }))].sort(
 		(a, b) => new Date(b.done_at).getTime() - new Date(a.done_at).getTime(),
@@ -357,10 +362,10 @@ export async function listRootActions(app: App): Promise<RootAction[]> {
 }
 
 /** Puts back what a root action changed or deleted. */
-export async function reverseRootAction(app: App, scope: RootAction["scope"], id: bigint, user: User): Promise<RootAction> {
+export async function reverseRootAction(app: App, scope: RootAction["scope"], id: bigint, user: { username: string }): Promise<RootAction> {
 	const db = scope === "books" ? app.db : app.main;
 	const a = await queryRow<{ action: RootAction["action"]; reversed_at: Date | null; part_of: string | null }>(db, `SELECT action, reversed_at, undo->>'part_of' AS part_of FROM root_actions WHERE id = $1`, [id]);
-	if (!a || (scope === "books") !== a.action.startsWith("account.") || a.part_of !== null) throw new NotFoundError();
+	if (!a || (scope === "users") !== a.action.startsWith("user.") || a.part_of !== null) throw new NotFoundError();
 	if (a.reversed_at) throw new ConflictError("this root action was already reversed");
 	if (a.action === "user.delete") {
 		await reverseUserDelete(app.main, id, user.username);
@@ -397,6 +402,34 @@ export async function reverseRootAction(app: App, scope: RootAction["scope"], id
 				  WHERE a.id = (c->>'id')::bigint`,
 				[id],
 			);
+		} else if (a.action === "entry.delete") {
+			await putBackEntries(tx, id);
+		} else if (a.action === "line.delete") {
+			await putBack(tx, id, "transactions", "lines");
+			await putBack(tx, id, "reconciliation_lines", "rec_lines");
+			await putBack(tx, id, "transaction_changes", "amounts");
+			await putBack(tx, id, "transaction_moves", "moves");
+		} else if (a.action === "line.update") {
+			await tx.query(
+				`UPDATE transactions t SET account_id = b.account_id, currency = b.currency, amount = b.amount
+				   FROM jsonb_populate_recordset(NULL::transactions, (SELECT undo->'before' FROM root_actions WHERE id = $1)) b
+				  WHERE t.id = b.id`,
+				[id],
+			);
+		} else if (a.action === "module.delete" || a.action === "module.update") {
+			const u = await queryRow<{ schema: string; tbl: string }>(tx, `SELECT undo->>'schema' AS schema, undo->>'table' AS tbl FROM root_actions WHERE id = $1`, [id]);
+			const t = await moduleTable(tx, u?.schema ?? "", u?.tbl ?? "");
+			if (a.action === "module.delete") {
+				await putBack(tx, id, t.name, "row");
+			} else {
+				const cols = t.columns.filter((c) => c !== "id").map((c) => `"${c}"`);
+				await tx.query(
+					`UPDATE ${t.name} t SET (${cols.join(", ")}) = (${cols.map((c) => `b.${c}`).join(", ")})
+					   FROM jsonb_populate_recordset(NULL::${t.name}, (SELECT undo->'row' FROM root_actions WHERE id = $1)) b
+					  WHERE t.id = b.id`,
+					[id],
+				);
+			}
 		} else {
 			await putBack(tx, id, "accounts", "account");
 			await putBack(tx, id, "journal_entries", "entries");
@@ -416,4 +449,289 @@ export async function reverseRootAction(app: App, scope: RootAction["scope"], id
 	});
 	await syncUnreconciledLater(app);
 	return getAction(db, scope, id);
+}
+
+// ---------------------------------------------------------------------------
+// Entries and lines: delete anything, change any line
+// ---------------------------------------------------------------------------
+
+async function putBackEntries(tx: Queryable, id: bigint): Promise<void> {
+	await putBack(tx, id, "journal_entries", "entries");
+	await putBack(tx, id, "transactions", "lines");
+	await putBack(tx, id, "reconciliation_lines", "rec_lines");
+	await putBack(tx, id, "transaction_changes", "amounts");
+	await putBack(tx, id, "transaction_moves", "moves");
+	await putBack(tx, id, "journal_entry_date_changes", "dates");
+	await putBack(tx, id, "journal_entry_links", "links");
+}
+
+/** Deletes a journal entry whole (with the entry that reverses it, or that it reverses). */
+export async function rootDeleteEntry(app: App, entryId: bigint, user: User): Promise<RootAction> {
+	const id = await withTx(app.db, {}, async (tx) => {
+		const head = await queryRow<{ description: string; entry_date: string }>(tx, `SELECT description, entry_date FROM journal_entries WHERE id = $1 FOR UPDATE`, [entryId]);
+		if (!head) throw new NotFoundError();
+		const pair = await queryRows<{ id: bigint }>(tx, `SELECT id FROM journal_entries WHERE reverses_id = $1 UNION SELECT reverses_id FROM journal_entries WHERE id = $1 AND reverses_id IS NOT NULL`, [entryId]);
+		const e = [entryId, ...pair.map((r) => r.id)];
+		const id = await begin(tx, "entry.delete", String(entryId), `Deleted entry #${entryId} (${head.entry_date}, ${head.description})${pair.length ? ` and its reversal #${pair.map((r) => r.id).join(", #")}` : ""}`, user);
+		await keep(tx, id, "entries", `SELECT * FROM journal_entries WHERE id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "lines", `SELECT * FROM transactions WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "rec_lines", `SELECT * FROM reconciliation_lines WHERE transaction_id IN (SELECT id FROM transactions WHERE journal_entry_id = ANY($2::bigint[]))`, [e]);
+		await keep(tx, id, "amounts", `SELECT * FROM transaction_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "moves", `SELECT * FROM transaction_moves WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "dates", `SELECT * FROM journal_entry_date_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "links", `SELECT * FROM journal_entry_links WHERE entry_id = ANY($2::bigint[])`, [e]);
+		await tx.query(`DELETE FROM reconciliation_lines WHERE transaction_id IN (SELECT id FROM transactions WHERE journal_entry_id = ANY($1::bigint[]))`, [e]);
+		await tx.query(`DELETE FROM transaction_changes WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
+		await tx.query(`DELETE FROM transaction_moves WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entry_date_changes WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entry_links WHERE entry_id = ANY($1::bigint[])`, [e]);
+		await tx.query(`DELETE FROM transactions WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entries WHERE id = ANY($1::bigint[]) AND reverses_id IS NOT NULL`, [e]);
+		await tx.query(`DELETE FROM journal_entries WHERE id = ANY($1::bigint[])`, [e]);
+		return id;
+	});
+	await syncUnreconciledLater(app);
+	return getAction(app.db, "books", id);
+}
+
+async function lineOf(tx: Queryable, entryId: bigint, lineNumber: number) {
+	const l = await queryRow<{ id: bigint; code: string; name: string; amount: bigint; currency: string }>(
+		tx,
+		`SELECT t.id, a.code, a.name, t.amount, t.currency FROM transactions t JOIN accounts a ON a.id = t.account_id
+		  WHERE t.journal_entry_id = $1 AND t.line_number = $2 FOR UPDATE OF t`,
+		[entryId, lineNumber],
+	);
+	if (!l) throw new NotFoundError();
+	return l;
+}
+
+const side = (amount: bigint) => `${formatCents(amount < 0n ? -amount : amount)} ${amount < 0n ? "Cr" : "Dr"}`;
+
+/** Deletes one line of an entry. The entry may be left unbalanced, or with a single line, until root mode is left. */
+export async function rootDeleteLine(app: App, entryId: bigint, lineNumber: number, user: User): Promise<RootAction> {
+	const id = await withTx(app.db, {}, async (tx) => {
+		const l = await lineOf(tx, entryId, lineNumber);
+		const id = await begin(tx, "line.delete", `${entryId}/${lineNumber}`, `Deleted line ${lineNumber} of entry #${entryId}: ${l.code} ${l.name}, ${side(l.amount)}`, user);
+		await keep(tx, id, "lines", `SELECT * FROM transactions WHERE id = $2`, [l.id]);
+		await keep(tx, id, "rec_lines", `SELECT * FROM reconciliation_lines WHERE transaction_id = $2`, [l.id]);
+		await keep(tx, id, "amounts", `SELECT * FROM transaction_changes WHERE transaction_id = $2`, [l.id]);
+		await keep(tx, id, "moves", `SELECT * FROM transaction_moves WHERE transaction_id = $2`, [l.id]);
+		await tx.query(`DELETE FROM reconciliation_lines WHERE transaction_id = $1`, [l.id]);
+		await tx.query(`DELETE FROM transaction_changes WHERE transaction_id = $1`, [l.id]);
+		await tx.query(`DELETE FROM transaction_moves WHERE transaction_id = $1`, [l.id]);
+		await tx.query(`DELETE FROM transactions WHERE id = $1`, [l.id]);
+		return id;
+	});
+	await syncUnreconciledLater(app);
+	return getAction(app.db, "books", id);
+}
+
+/** Changes a line's account (any account, any currency) or amount; the entry need not balance until root mode is left. */
+export async function rootUpdateLine(app: App, entryId: bigint, lineNumber: number, input: { account_code?: string; debit_cents?: bigint; credit_cents?: bigint }, user: User): Promise<RootAction> {
+	const v = new ValidationError();
+	const amountGiven = input.debit_cents !== undefined || input.credit_cents !== undefined;
+	const debit = input.debit_cents ?? 0n;
+	const credit = input.credit_cents ?? 0n;
+	if (amountGiven && (debit < 0n || credit < 0n || debit > 0n === credit > 0n)) v.add("", "give a debit or a credit, not both and not neither");
+	if (!amountGiven && input.account_code === undefined) v.add("", "give an account or an amount");
+	v.throwIfAny();
+	const id = await withTx(app.db, {}, async (tx) => {
+		const l = await lineOf(tx, entryId, lineNumber);
+		let to: { id: bigint; code: string; name: string; currency: string } | undefined;
+		if (input.account_code !== undefined) {
+			to = await queryRow(tx, `SELECT id, code, name, currency FROM accounts WHERE code = $1 FOR SHARE`, [input.account_code]);
+			if (!to) {
+				v.add("account_code", `account ${JSON.stringify(input.account_code)} does not exist`);
+				v.throwIfAny();
+			}
+		}
+		const amount = amountGiven ? debit - credit : l.amount;
+		const what = [to && to.code !== l.code ? `account ${l.code} → ${to.code}` : "", amount !== l.amount ? `${side(l.amount)} → ${side(amount)}` : ""].filter(Boolean).join(", ");
+		if (!what) {
+			v.add("", "that is what it is already");
+			v.throwIfAny();
+		}
+		const id = await begin(tx, "line.update", `${entryId}/${lineNumber}`, `Changed line ${lineNumber} of entry #${entryId}: ${what}`, user);
+		await keep(tx, id, "before", `SELECT * FROM transactions WHERE id = $2`, [l.id]);
+		// The line's currency follows its account.
+		await tx.query(`UPDATE transactions SET account_id = COALESCE($2, account_id), currency = COALESCE($3, currency), amount = $4 WHERE id = $1`, [l.id, to?.id ?? null, to?.currency ?? null, amount]);
+		return id;
+	});
+	await syncUnreconciledLater(app);
+	return getAction(app.db, "books", id);
+}
+
+// ---------------------------------------------------------------------------
+// Modules' own records (ctx.root)
+// ---------------------------------------------------------------------------
+
+/** A table of a module's schema with an id column: its quoted name and columns. */
+async function moduleTable(tx: Queryable, schema: string, table: string): Promise<{ name: string; columns: string[] }> {
+	const ok = /^mod_[a-z0-9_]{1,40}$/.test(schema) && /^[a-z_][a-z0-9_]{0,62}$/.test(table);
+	const cols = ok ? await queryRows<{ column_name: string }>(tx, `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`, [schema, table]) : [];
+	const columns = cols.map((c) => c.column_name).filter((c) => /^[a-z_][a-z0-9_]*$/.test(c));
+	if (!columns.includes("id")) {
+		const v = new ValidationError();
+		v.add("table", `${JSON.stringify(table)} is not a table of this module with an id column`);
+		v.throwIfAny();
+	}
+	return { name: `"${schema}"."${table}"`, columns };
+}
+
+/** Deletes one row of a module's table in root mode, kept so it can be put back. */
+export async function rootModuleDelete(app: App, mod: { id: string; name: string; schema: string }, table: string, rowId: unknown, user: User, summary?: string): Promise<RootAction> {
+	requireRoot(user);
+	const id = await withTx(app.db, {}, async (tx) => {
+		const t = await moduleTable(tx, mod.schema, table);
+		const id = await begin(tx, "module.delete", `${mod.id}:${table}:${String(rowId)}`, summary?.trim() || `${mod.name}: deleted ${table} ${String(rowId)}`, user, { schema: mod.schema, table });
+		await keep(tx, id, "row", `SELECT * FROM ${t.name} WHERE id::text = $2`, [String(rowId)]);
+		const r = await tx.query(`DELETE FROM ${t.name} WHERE id::text = $1`, [String(rowId)]);
+		if ((r.rowCount ?? 0) === 0) throw new NotFoundError();
+		return id;
+	});
+	return getAction(app.db, "books", id);
+}
+
+/** Changes columns of one row of a module's table in root mode, keeping the row as it was. */
+export async function rootModuleUpdate(app: App, mod: { id: string; name: string; schema: string }, table: string, rowId: unknown, set: Record<string, unknown>, user: User, summary?: string): Promise<RootAction> {
+	requireRoot(user);
+	const keys = set && typeof set === "object" ? Object.keys(set) : [];
+	const id = await withTx(app.db, {}, async (tx) => {
+		const t = await moduleTable(tx, mod.schema, table);
+		const v = new ValidationError();
+		if (keys.length === 0) v.add("set", "give the columns to change");
+		for (const k of keys) if (k === "id" || !t.columns.includes(k)) v.add("set", `${JSON.stringify(k)} is not a column that can be changed`);
+		v.throwIfAny();
+		const id = await begin(tx, "module.update", `${mod.id}:${table}:${String(rowId)}`, summary?.trim() || `${mod.name}: changed ${table} ${String(rowId)} (${keys.join(", ")})`, user, { schema: mod.schema, table });
+		await keep(tx, id, "row", `SELECT * FROM ${t.name} WHERE id::text = $2`, [String(rowId)]);
+		const r = await tx.query(`UPDATE ${t.name} SET ${keys.map((k, i) => `"${k}" = $${i + 2}`).join(", ")} WHERE id::text = $1`, [String(rowId), ...keys.map((k) => set[k])]);
+		if ((r.rowCount ?? 0) === 0) throw new NotFoundError();
+		return id;
+	});
+	return getAction(app.db, "books", id);
+}
+
+// ---------------------------------------------------------------------------
+// Leaving root mode: the books must be intact
+// ---------------------------------------------------------------------------
+
+/** What is wrong with the entries in this database: too few lines, or debits and credits that differ. */
+async function checkBooks(db: Queryable): Promise<string[]> {
+	const few = await queryRows<{ id: bigint; n: number }>(db, `SELECT e.id, count(t.id)::int AS n FROM journal_entries e LEFT JOIN transactions t ON t.journal_entry_id = e.id GROUP BY e.id HAVING count(t.id) < 2 ORDER BY e.id LIMIT 50`);
+	const off = await queryRows<{ id: bigint; currency: string; off: bigint }>(
+		db,
+		`SELECT journal_entry_id AS id, btrim(currency) AS currency, sum(amount)::bigint AS off FROM transactions GROUP BY 1, 2 HAVING sum(amount) <> 0 ORDER BY 1 LIMIT 50`,
+	);
+	const fewIds = new Set(few.map((f) => f.id));
+	return [
+		...few.map((f) => `entry #${f.id} has ${f.n === 0 ? "no lines" : "only one line"}`),
+		...off.filter((o) => !fewIds.has(o.id)).map((o) => `entry #${o.id} doesn't balance in ${o.currency}: debits and credits differ by ${formatCents(o.off < 0n ? -o.off : o.off)}`),
+	];
+}
+
+/** Everything that keeps root mode from being left: broken entries in any set of books, and what modules report. */
+export async function rootProblems(app: App): Promise<string[]> {
+	const out: string[] = [];
+	const orgs = (await listOrganizations(app)).filter((o) => o.status === "ready");
+	for (const o of orgs) {
+		const prefix = orgs.length > 1 ? `${o.name}: ` : "";
+		await inOrg(o, async () => {
+			for (const p of await checkBooks(app.db)) out.push(prefix + p);
+			for (const m of app.modules.modules.values()) {
+				if (m.error) continue;
+				for (const fn of m.rootChecks) {
+					try {
+						const found = await fn();
+						if (Array.isArray(found)) for (const p of found.slice(0, 50)) out.push(`${prefix}${m.manifest.name}: ${String(p).slice(0, 300)}`);
+					} catch (err) {
+						out.push(`${prefix}${m.manifest.name}: its check failed (${(err as Error).message.slice(0, 200)})`);
+					}
+				}
+			}
+		});
+	}
+	return out;
+}
+
+/** Reverses, newest first, everything not yet reversed that was done in a root session; returns how many. */
+export async function reverseRootSession(app: App, session: string, by: { username: string }): Promise<number> {
+	let n = 0;
+	for (const o of (await listOrganizations(app)).filter((x) => x.status === "ready")) {
+		await inOrg(o, async () => {
+			const ids = await queryRows<{ id: bigint }>(app.db, `SELECT id FROM root_actions WHERE session = $1 AND reversed_at IS NULL AND action NOT LIKE 'user.%' ORDER BY id DESC`, [session]);
+			for (const a of ids) {
+				await reverseRootAction(app, "books", a.id, by);
+				n++;
+			}
+		});
+	}
+	const users = await queryRows<{ id: bigint }>(app.main, `SELECT id FROM root_actions WHERE session = $1 AND reversed_at IS NULL AND action LIKE 'user.%' AND NOT undo ? 'part_of' ORDER BY id DESC`, [session]);
+	for (const a of users) {
+		await reverseRootAction(app, "users", a.id, by);
+		n++;
+	}
+	return n;
+}
+
+async function closeRootSession(app: App, session: string): Promise<void> {
+	await app.main.query(`UPDATE root_actions SET closed = true WHERE session = $1 AND NOT closed`, [session]);
+	for (const d of await databases(app)) await d.db.query(`UPDATE root_actions SET closed = true WHERE session = $1 AND NOT closed`, [session]);
+}
+
+export class RootNotIntactError extends HttpError {
+	readonly problems: string[];
+	constructor(problems: string[], message: string) {
+		super(409, message, "root_not_intact");
+		this.problems = problems;
+	}
+}
+
+/**
+ * The check made when root mode is left. With the books intact the root
+ * session is closed. Otherwise it is refused (so the admin can go back and
+ * fix it) unless `reverse` is set: then everything done in this root session
+ * is reversed first. Returns how many actions were reversed.
+ */
+export async function leaveRootMode(app: App, user: { username: string; root_session: string | null }, reverse: boolean): Promise<number> {
+	const session = user.root_session;
+	let problems = await rootProblems(app);
+	let reversed = 0;
+	if (problems.length > 0) {
+		if (!reverse) throw new RootNotIntactError(problems, `the books are not intact: ${problems.slice(0, 5).join("; ")}${problems.length > 5 ? `; and ${problems.length - 5} more` : ""}`);
+		if (session) reversed = await reverseRootSession(app, session, user);
+		problems = await rootProblems(app);
+		if (problems.length > 0) {
+			throw new RootNotIntactError(problems, `this root session was reversed (${reversed} action${reversed === 1 ? "" : "s"}), but the books are still not intact: ${problems.slice(0, 5).join("; ")}. Fix these in root mode.`);
+		}
+	}
+	if (session) await closeRootSession(app, session);
+	return reversed;
+}
+
+/**
+ * Root sessions that ended without leaving root mode (the login timed out,
+ * the server restarted): if the books are broken they are reversed, newest
+ * first, until the books are intact again; then they are closed.
+ */
+export async function sweepRootSessions(app: App): Promise<void> {
+	const live = new Set((await queryRows<{ s: string }>(app.main, `SELECT root_session AS s FROM sessions WHERE root AND root_session IS NOT NULL AND expires_at > now()`)).map((r) => r.s));
+	const open = new Map<string, Date>();
+	const collect = async (db: Queryable) => {
+		for (const r of await queryRows<{ session: string; at: Date }>(db, `SELECT session, max(done_at) AS at FROM root_actions WHERE session IS NOT NULL AND NOT closed GROUP BY session`)) {
+			if (!live.has(r.session) && (open.get(r.session) ?? new Date(0)) < r.at) open.set(r.session, r.at);
+		}
+	};
+	await collect(app.main);
+	for (const d of await databases(app)) await collect(d.db);
+	if (open.size === 0) return;
+	const sessions = [...open.entries()].sort((a, b) => b[1].getTime() - a[1].getTime()).map((e) => e[0]);
+	for (const s of sessions) {
+		if ((await rootProblems(app)).length === 0) break;
+		const n = await reverseRootSession(app, s, { username: "ledger" }).catch((err: Error) => {
+			log.error("root: reversing an abandoned root session failed", { session: s, err: err.message });
+			return 0;
+		});
+		log.warn("root: an abandoned root session left the books broken; reversed it", { session: s, actions: n });
+	}
+	for (const s of sessions) await closeRootSession(app, s);
 }

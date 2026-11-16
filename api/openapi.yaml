@@ -1871,6 +1871,91 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /journal-entries/{entryId}/root:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    delete:
+      tags: [Root]
+      operationId: rootDeleteEntry
+      summary: Delete a journal entry whole, with its reversal (root mode; logged, reversible)
+      responses:
+        '200':
+          description: Done; the logged root action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RootAction' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /journal-entries/{entryId}/lines/{lineNumber}/root:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+      - { name: lineNumber, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    delete:
+      tags: [Root]
+      operationId: rootDeleteLine
+      summary: Delete one line of an entry (root mode; the entry may be left unbalanced until root mode is left)
+      responses:
+        '200':
+          description: Done; the logged root action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RootAction' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+    patch:
+      tags: [Root]
+      operationId: rootUpdateLine
+      summary: Change a line's account (any account) or amount (root mode; the entry need not balance until root mode is left)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                account_code: { $ref: '#/components/schemas/AccountCode' }
+                debit_cents: { $ref: '#/components/schemas/Cents' }
+                credit_cents: { $ref: '#/components/schemas/Cents' }
+      responses:
+        '200':
+          description: Done; the logged root action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RootAction' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /root/check:
+    get:
+      tags: [Root]
+      operationId: rootCheck
+      summary: Whether the books are intact, and what is wrong if not (root mode)
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [intact, problems]
+                properties:
+                  intact: { type: boolean }
+                  problems: { type: array, items: { type: string } }
+        '403': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /root-actions:
     get:
       tags: [Root]
@@ -1914,6 +1999,12 @@ paths:
       tags: [Auth]
       operationId: setRootMode
       summary: Turn root mode on or off for this session (admins only to turn it on)
+      description: |
+        Root mode can only be left with the books intact: every entry has at
+        least two lines and balances in each currency, and no module reports a
+        problem. Otherwise turning it off answers 409 `root_not_intact` with
+        the problems in `details`, unless `reverse` is true: then everything
+        done in this root session is reversed first.
       requestBody:
         required: true
         content:
@@ -1924,6 +2015,7 @@ paths:
               required: [on]
               properties:
                 on: { type: boolean }
+                reverse: { type: boolean, default: false }
       responses:
         '200':
           description: The current user
@@ -2786,7 +2878,7 @@ components:
       properties:
         id: { type: integer }
         scope: { type: string, enum: [books, users] }
-        action: { type: string, enum: [account.update, account.delete, user.update, user.delete] }
+        action: { type: string, enum: [account.update, account.delete, user.update, user.delete, entry.delete, line.delete, line.update, module.delete, module.update] }
         target: { type: string }
         summary: { type: string }
         done_by: { type: string }
@@ -2937,6 +3029,8 @@ components:
                 - forbidden
                 - payload_too_large
                 - too_many_requests
+                - root_not_intact
+                - password_change_required
                 - internal_error
             message: { type: string }
             details:
