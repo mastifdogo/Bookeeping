@@ -3825,3 +3825,107 @@ test("a first login that must choose a new password: nothing else works until it
 	// Other users are not affected.
 	assert.equal((await call("GET", "/auth/me")).json().must_change_password, false);
 });
+
+test("root mode: delete and change accounts and users, logged and reversible", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call, request } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "3000", "Equity", "equity", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	const post = async (date: string, what: string, ...lines: Line[]) => {
+		const r = await call("POST", "/journal-entries", entry(date, what, ...lines));
+		expectStatus(r, 201);
+		return r.json();
+	};
+	const e1 = await post("2026-01-01", "Opening", dr("1000", 100000), cr("3000", 100000));
+	const e2 = await post("2026-01-05", "Paper", dr("6100", 2500), cr("1000", 2500));
+	const e3 = (await call("POST", `/journal-entries/${e2.id}/reverse`, { entry_date: "2026-01-06" })).json();
+	const e4 = await post("2026-01-07", "Owner paid supplies", dr("6100", 700), cr("3000", 700));
+	expectStatus(await call("PATCH", `/journal-entries/${e1.id}/amounts`, { lines: [{ line_number: 1, debit_cents: 90000, credit_cents: 0 }, { line_number: 2, debit_cents: 0, credit_cents: 90000 }] }), 200);
+	let r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-01-31", statement_balance_cents: 90000 });
+	const rec = r.json();
+	await call("POST", `/reconciliations/${rec.reconciliation.id}/cleared`, { clear: rec.lines.map((l: any) => l.transaction_id) });
+	expectStatus(await call("POST", `/reconciliations/${rec.reconciliation.id}/finish`), 200);
+
+	// Without root mode, nothing.
+	expectStatus(await call("DELETE", "/accounts/1000"), 403);
+	expectStatus(await call("PATCH", "/accounts/6100/root", { type: "asset" }), 403);
+	assert.equal((await call("GET", "/auth/me")).json().root, false);
+	r = await call("POST", "/auth/root", { on: true });
+	expectStatus(r, 200);
+	assert.equal(r.json().root, true);
+
+	// Deleting an account takes every entry with a line in it, with its reversal, and its reconciliations.
+	r = await call("GET", "/accounts/1000/delete-preview");
+	assert.deepEqual(r.json(), { code: "1000", name: "Chequing", entries: 3, lines: 6, reconciliations: 1, sub_accounts: 0 });
+	r = await call("DELETE", "/accounts/1000");
+	expectStatus(r, 200);
+	const del = r.json();
+	assert.deepEqual([del.scope, del.action, del.target, del.done_by, del.reversed_at], ["books", "account.delete", "1000", "tester", null]);
+	assert.match(del.summary, /Deleted account 1000 Chequing and 3 journal entries \(6 lines\), 1 reconciliation/);
+	expectStatus(await call("GET", "/accounts/1000"), 404);
+	assert.deepEqual((await call("GET", "/journal-entries")).json().data.map((x: any) => x.id), [e4.id]);
+	assert.equal((await call("GET", "/accounts/6100")).json().balance_cents, 700);
+	assert.equal((await call("GET", "/reconciliations")).json().data.length, 0);
+
+	// Reversing puts it all back, with the same ids, the change log and the finished reconciliation.
+	r = await call("GET", "/root-actions");
+	assert.deepEqual(r.json().data.map((x: any) => [x.scope, x.action]), [["books", "account.delete"]]);
+	r = await call("POST", `/root-actions/books/${del.id}/reverse`);
+	expectStatus(r, 200);
+	assert.equal(r.json().reversed_by, "tester");
+	expectStatus(await call("POST", `/root-actions/books/${del.id}/reverse`), 409);
+	assert.equal((await call("GET", "/accounts/1000")).json().balance_cents, 90000);
+	assert.deepEqual((await call("GET", "/journal-entries")).json().data.map((x: any) => x.id).sort(), [e1.id, e2.id, e3.id, e4.id].sort());
+	const back = (await call("GET", `/journal-entries/${e1.id}`)).json();
+	assert.deepEqual([back.amended, back.changes.length, back.created_by], [true, 2, "tester"]);
+	assert.equal((await call("GET", `/journal-entries/${e2.id}`)).json().reversed_by_id, e3.id);
+	const recs = (await call("GET", "/reconciliations")).json().data;
+	assert.deepEqual(recs.map((x: any) => [x.status, x.cleared_count]), [["finished", 3]]);
+	// The books still balance.
+	const tb = (await call("GET", "/reports/trial-balance")).json();
+	assert.ok(tb.totals.every((x: any) => x.debit_cents === x.credit_cents));
+
+	// An account with postings can change type in root mode; its currency can't while it has lines.
+	r = await call("PATCH", "/accounts/6100/root", { type: "asset" });
+	expectStatus(r, 200);
+	assert.equal((await call("GET", "/accounts/6100")).json().type, "asset");
+	expectStatus(await call("PATCH", "/accounts/6100/root", { currency: "USD" }), 409);
+	expectStatus(await call("POST", `/root-actions/books/${r.json().id}/reverse`), 200);
+	assert.equal((await call("GET", "/accounts/6100")).json().type, "expense");
+
+	// Users: a user who posted something is deleted everywhere; what pointed at them goes blank, and comes back on reversing.
+	expectStatus(await call("POST", "/users", { username: "bob", password: "correct horse battery 2", role: "bookkeeper" }), 201);
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "bob", password: "correct horse battery 2" } });
+	const bob = `${SESSION_COOKIE}=${sessionFrom(r).value}`;
+	r = await request("POST", "/api/v1/journal-entries", { body: entry("2026-02-01", "Bob's entry", dr("6100", 100), cr("3000", 100)), cookie: bob });
+	expectStatus(r, 201);
+	const bobsEntry = r.json().id;
+	expectStatus(await call("DELETE", "/users/tester"), 409); // not yourself
+	r = await call("DELETE", "/users/bob");
+	expectStatus(r, 200);
+	const ud = r.json();
+	assert.deepEqual([ud.scope, ud.action, ud.summary], ["users", "user.delete", "Deleted user bob (bookkeeper)"]);
+	assert.ok(!(await call("GET", "/users")).json().data.some((u: any) => u.username === "bob"));
+	assert.equal((await call("GET", `/journal-entries/${bobsEntry}`)).json().created_by, null);
+	expectStatus(await request("GET", "/api/v1/auth/me", { cookie: bob }), 401);
+	r = await call("POST", `/root-actions/users/${ud.id}/reverse`);
+	expectStatus(r, 200);
+	assert.equal((await call("GET", `/journal-entries/${bobsEntry}`)).json().created_by, "bob");
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "bob", password: "correct horse battery 2" } });
+	expectStatus(r, 200);
+
+	// Renaming, and reversing it.
+	r = await call("PATCH", "/users/bob/root", { username: "robert" });
+	expectStatus(r, 200);
+	assert.equal((await call("GET", `/journal-entries/${bobsEntry}`)).json().created_by, "robert");
+	expectStatus(await call("POST", `/root-actions/users/${r.json().id}/reverse`), 200);
+	assert.equal((await call("GET", `/journal-entries/${bobsEntry}`)).json().created_by, "bob");
+	assert.deepEqual((await call("GET", "/root-actions")).json().data.map((x: any) => x.action), ["user.update", "user.delete", "account.update", "account.delete"]);
+
+	// Root mode off: the guards are back.
+	await call("POST", "/auth/root", { on: false });
+	expectStatus(await call("DELETE", "/accounts/6100"), 403);
+	expectStatus(await call("POST", `/root-actions/books/${del.id}/reverse`), 403);
+});

@@ -37,6 +37,15 @@ GRANT SELECT, INSERT, UPDATE          ON entities                               
 GRANT SELECT, INSERT                  ON account_code_changes                    TO :"app_role";
 GRANT SELECT, INSERT                  ON transaction_moves                       TO :"app_role";
 GRANT SELECT, INSERT                  ON journal_entry_date_changes              TO :"app_role";
+-- Root mode (migration 024): the database guards refuse these unless the
+-- transaction has set ledger.root = 'on', and every root action is logged.
+GRANT SELECT, INSERT, UPDATE          ON root_actions                            TO :"app_role";
+GRANT DELETE                          ON journal_entries, transactions, accounts, users,
+                                         transaction_changes, transaction_moves, journal_entry_date_changes,
+                                         account_code_changes                    TO :"app_role";
+GRANT UPDATE (created_by)             ON journal_entries                         TO :"app_role";
+GRANT UPDATE (imported_by)            ON csv_imports                             TO :"app_role";
+GRANT UPDATE (changed_by)             ON transaction_changes, transaction_moves, journal_entry_date_changes, account_code_changes TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON documents                               TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON document_marks                          TO :"app_role";
 -- Read-only, so pg_dump (run as this role for backups) can include it.

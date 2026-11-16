@@ -334,6 +334,15 @@ balance, a bill marked paid), read it from the entry
 (`ctx.ledger.linkedEntries(ref)`) instead of trusting the module's own copy,
 and show a difference to the user rather than overwriting either side.
 
+## Root mode can delete things
+
+Since Ledger 0.20.3 an admin in root mode can delete an account with every
+journal entry posted to it, and delete users; each can be reversed from the
+root log, which puts back the same ids. A module may therefore find that an
+account code, an entry id or a user it kept no longer exists (and later
+exists again). Treat a missing account or entry as gone, not as an error
+that stops the module, and don't delete your own records because of it.
+
 ## Account codes can change
 
 Since Ledger 0.19.3 a person can give an account a new code. Journal lines

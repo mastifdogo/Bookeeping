@@ -152,6 +152,10 @@ Decide, and state briefly to the user:
   Since 0.20.2 an entry's date can change too (`date_changes`), and a
   finished reconciliation moves a bank account's unticked lines to Ledger's
   Unreconciled clearing account until a person moves them on (`moves`).
+- **Root mode** (Ledger 0.20.3): an admin can delete an account with every
+  entry posted to it, or a user, and reverse it later from the root log
+  (same ids come back). Treat a missing account, entry or user as gone for
+  now; don't fail or delete the module's own records because of it.
 - **Account codes can change** (Ledger 0.19.3): people can renumber
   accounts. Ledger rewrites the old code in a module's tables and settings
   only where it can recognise one: text columns named `account_code`,

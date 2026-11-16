@@ -71,6 +71,24 @@
 	// Reloads this page's lists and the sidebar's list of books.
 	const reload = () => invalidateAll();
 
+	// Root mode (admins of the main books): rename or delete a user, logged under Settings → Root log.
+	let root = $derived(page.data.user?.root === true && serverAdmin);
+	const rename = (u: UserListItem) =>
+		act(async () => {
+			const name = prompt(`ROOT: new username for ${u.username}`, u.username)?.trim().toLowerCase();
+			if (!name || name === u.username) return;
+			unwrap(await api().PATCH('/users/{username}/root', { params: { path: { username: u.username } }, body: { username: name } }));
+			notice = `${u.username} is now ${name}. Reverse it under Settings → Root log.`;
+			await reload();
+		});
+	const removeUser = (u: UserListItem) =>
+		act(async () => {
+			if (!confirm(`ROOT: delete the user ${u.username}?\n\nThey are removed from every set of books. Entries and changes they made stay, without their name. It is kept in Settings → Root log, where it can be reversed.`)) return;
+			unwrap(await api().DELETE('/users/{username}', { params: { path: { username: u.username } } }));
+			notice = `${u.username} was deleted. Reverse it under Settings → Root log.`;
+			await reload();
+		});
+
 	const pendingNote = (o: { status: string; name: string }) =>
 		o.status === 'pending' ? ` ${o.name}'s books are being created; they'll be ready in a moment.` : o.status === 'error' ? ` ${o.name}'s books could not be created.` : '';
 
@@ -213,6 +231,10 @@
 							<button disabled={busy} onclick={() => update(u, { is_active: !u.is_active }, `${u.username} ${u.is_active ? 'disabled; their sessions ended' : 'enabled'}.`)}>
 								{u.is_active ? 'Disable' : 'Enable'}
 							</button>
+						{/if}
+						{#if root}
+							<button class="root" disabled={busy} onclick={() => rename(u)}>Rename</button>
+							{#if u.username !== me}<button class="danger" disabled={busy} onclick={() => removeUser(u)}>Delete</button>{/if}
 						{/if}
 					</td>
 				</tr>

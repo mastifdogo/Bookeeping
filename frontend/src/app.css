@@ -332,3 +332,42 @@ a.link-chip:hover {
 	color: var(--accent);
 	border-color: var(--accent);
 }
+
+/* Root mode (Settings → Account): the whole background turns red while it is on. */
+html.root {
+	--bg: #ef4444;
+	--row-hover: #fde2e2;
+}
+html.root th {
+	background: #fde8e8;
+}
+/* Text and links straight on the red stay readable; inside cards and tables they keep their colours. */
+html.root main :is(p, span, h1, h2, label, .tabs a).muted,
+html.root main > :is(p, .toolbar, .tabs) :is(.muted, a:not(.button)),
+html.root main > p.muted,
+html.root main > p a,
+html.root .tabs a {
+	color: #1f0303;
+}
+html.root .tabs a[aria-current='page'] {
+	border-bottom-color: #1f0303;
+}
+@media (prefers-color-scheme: dark) {
+	html.root {
+		--bg: #7f1d1d;
+		--row-hover: #3b1616;
+	}
+	html.root th {
+		background: #2a1212;
+	}
+	html.root main :is(p, span, h1, h2, label, .tabs a).muted,
+	html.root main > :is(p, .toolbar, .tabs) :is(.muted, a:not(.button)),
+	html.root main > p.muted,
+	html.root main > p a,
+	html.root .tabs a {
+		color: #fde8e8;
+	}
+	html.root .tabs a[aria-current='page'] {
+		border-bottom-color: #fde8e8;
+	}
+}

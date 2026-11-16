@@ -4,12 +4,59 @@
 	import Amount from '#lib/components/Amount.svelte';
 	import { openRow } from '#lib/rows.ts';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
-	import { ACCOUNT_KINDS, api, kindLabel, unwrap, type Account, type AccountKind } from '#lib/api/client.ts';
+	import { ACCOUNT_KINDS, ACCOUNT_TYPES, CURRENCIES, api, kindLabel, unwrap, type Account, type AccountKind, type AccountType, type Currency } from '#lib/api/client.ts';
 	import { naturalBalance } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 	let account = $derived(data.ledger.account);
+
+	// Root mode: change what is otherwise fixed, or delete the account with everything posted to it (logged, reversible).
+	let root = $derived(page.data.user?.root === true);
+	let rootType = $state<AccountType>('asset');
+	let rootCurrency = $state<Currency>('CAD');
+	let rootBusy = $state(false);
+	let rootError: unknown = $state(null);
+	$effect.pre(() => {
+		rootType = account.type;
+		rootCurrency = account.currency;
+	});
+	async function rootChange() {
+		rootBusy = true;
+		rootError = null;
+		try {
+			unwrap(
+				await api().PATCH('/accounts/{accountCode}/root', {
+					params: { path: { accountCode: account.code } },
+					body: { ...(rootType !== account.type ? { type: rootType } : {}), ...(rootCurrency !== account.currency ? { currency: rootCurrency } : {}) }
+				})
+			);
+			await invalidateAll();
+		} catch (err) {
+			rootError = err;
+		} finally {
+			rootBusy = false;
+		}
+	}
+	async function rootDelete() {
+		rootError = null;
+		rootBusy = true;
+		try {
+			const p = unwrap(await api().GET('/accounts/{accountCode}/delete-preview', { params: { path: { accountCode: account.code } } }));
+			const what = [
+				p.entries ? `${p.entries} journal entr${p.entries === 1 ? 'y' : 'ies'} (${p.lines} lines, in every account they touch)` : '',
+				p.reconciliations ? `${p.reconciliations} reconciliation${p.reconciliations === 1 ? '' : 's'}` : '',
+				p.sub_accounts ? `${p.sub_accounts} sub-account${p.sub_accounts === 1 ? '' : 's'} move to the top level` : ''
+			].filter(Boolean);
+			if (!confirm(`ROOT: delete ${p.code} ${p.name}?\n\n${what.length ? `This also deletes: ${what.join('; ')}.\n\n` : ''}It is kept in Settings → Root log, where it can be reversed.`)) return;
+			unwrap(await api().DELETE('/accounts/{accountCode}', { params: { path: { accountCode: account.code } } }));
+			await goto('/accounts');
+		} catch (err) {
+			rootError = err;
+		} finally {
+			rootBusy = false;
+		}
+	}
 
 	let from = $state('');
 	let to = $state('');
@@ -101,6 +148,23 @@
 			<strong><Amount cents={naturalBalance(account.type, account.balance_cents)} currency={account.currency} /> not cleared yet.</strong>
 			What is posted to a clearing account is meant to be cleared by a later posting the other way.{/if}
 	</p>
+{/if}
+{#if root}
+	<div class="card root-tools">
+		<strong>Root</strong>
+		<ErrorNotice error={rootError} />
+		<div class="toolbar" style="margin:0.4rem 0 0; align-items:flex-end">
+			<label>Type <select bind:value={rootType}>{#each ACCOUNT_TYPES as t (t)}<option value={t}>{t}</option>{/each}</select></label>
+			<label>Currency <select bind:value={rootCurrency}>{#each CURRENCIES as c (c)}<option value={c}>{c}</option>{/each}</select></label>
+			<button disabled={rootBusy || (rootType === account.type && rootCurrency === account.currency)} onclick={rootChange}>Change</button>
+			<span class="spacer"></span>
+			<button class="danger" disabled={rootBusy} onclick={rootDelete}>Delete account…</button>
+		</div>
+		<p class="muted small" style="margin:0.4rem 0 0">
+			The currency can only change while nothing is posted to the account. Deleting it deletes every journal entry with a line in it.
+			Both are logged under <a href="/settings/root">Settings → Root log</a> and can be reversed.
+		</p>
+	</div>
 {/if}
 {#if parentAccount || children.length}
 	<p class="small">
@@ -209,6 +273,9 @@
 </div>
 
 <style>
+	.root-tools {
+		border-color: var(--danger);
+	}
 	.clearing.off {
 		color: var(--warn);
 	}

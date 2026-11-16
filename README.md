@@ -381,6 +381,30 @@ or "date changed". Amounts can't be changed on an entry that was reversed
 or is a reversal; neither amounts nor the date on an entry with a line
 ticked on a reconciliation (untick it, or undo the reconciliation, first).
 
+### Root mode
+
+Admins have a **Root mode** switch under Settings → Account. While it is
+on, the whole background is red and the guards that keep the books intact
+step aside for a few actions:
+
+- On an account's page: change its **type** even after things are posted
+  to it (its currency only while nothing is), or **Delete account…**, which
+  deletes the account with every journal entry that has a line in it (whole
+  entries, in every account they touch, with their reversals), its
+  reconciliations and the change logs that point at them. Sub-accounts move
+  to the top level.
+- Under Settings → Users (admins of the main books): **Rename** or
+  **Delete** a user. A deleted user is removed from every set of books;
+  entries and changes they made stay, with no name on them.
+
+Every root action is kept in **Settings → Root log** with a copy of what it
+changed or deleted, and **Reverse** puts it back exactly (same ids, same
+amounts, the change logs and reconciliations too). Reversing needs root mode
+on. Root mode ends when it is turned off or the admin logs out. In the
+database, the guards only step aside inside a transaction that turns root
+on for itself; the app's database role can otherwise still not delete
+posted entries or accounts.
+
 ### Renumbering accounts
 
 An account's code can be changed on its page (**Edit**). Its entries,

@@ -16,7 +16,8 @@
 		{ href: '/settings/backups', label: 'Backups', title: '', admin: true, org: true },
 		{ href: '/settings/import-export', label: 'Import & export', title: '', admin: false },
 		{ href: '/settings/modules', label: 'Modules', title: '', admin: true },
-		{ href: '/settings/updates', label: 'Updates', title: '', admin: true }
+		{ href: '/settings/updates', label: 'Updates', title: '', admin: true },
+		{ href: '/settings/root', label: 'Root log', title: 'What was done in root mode, and reversing it', admin: true, org: true }
 	];
 	let isAdmin = $derived(data.user?.server_admin === true);
 	// Modules' settings belong to each organization: its admins set them.

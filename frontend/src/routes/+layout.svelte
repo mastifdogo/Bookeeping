@@ -16,6 +16,11 @@
 
 	let { children, data }: LayoutProps = $props();
 
+	// Root mode: the whole background goes red while it is on.
+	$effect(() => {
+		document.documentElement.classList.toggle('root', data.user?.root === true);
+	});
+
 	// Organizations: each has books of its own; switching reloads everything,
 	// including module pages open beside.
 	let orgs = $derived((data.user?.organizations ?? []).filter((o) => o.status === 'ready'));

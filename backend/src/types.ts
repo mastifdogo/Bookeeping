@@ -281,6 +281,8 @@ export interface User {
 	server_admin: boolean;
 	/** They must choose a new password before anything else (a new server's first login). */
 	must_change_password: boolean;
+	/** Root mode is on for this session (an admin's; see root.ts). */
+	root: boolean;
 	/** The organization this session works in. */
 	org: { id: number; name: string; kind: "business" | "personal"; db_name: string };
 }

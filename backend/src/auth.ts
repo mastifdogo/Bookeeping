@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { App } from "./app.ts";
 import { withTx, queryRow, queryRows } from "./db.ts";
-import { BadCredentialsError, NotFoundError, UnauthorizedError, ValidationError } from "./errors.ts";
+import { HttpError, BadCredentialsError, NotFoundError, UnauthorizedError, ValidationError } from "./errors.ts";
 import { charCount, trimSpace } from "./text.ts";
 import { MAIN_ROLES, type MainRole, type Role, type User } from "./types.ts";
 import { MAIN_ORG, orgsForUser } from "./orgs.ts";
@@ -84,6 +84,7 @@ interface SessionRow extends UserRow {
 	org_status: string;
 	org_role: Role | null;
 	must_change_password: boolean;
+	root: boolean;
 }
 
 function toUser(r: SessionRow): User {
@@ -97,6 +98,7 @@ function toUser(r: SessionRow): User {
 		main_role: r.role,
 		server_admin: r.role === "admin",
 		must_change_password: r.must_change_password === true,
+		root: r.root === true,
 		org: { id: Number(r.org_id), name: r.org_name, kind: r.org_kind, db_name: r.org_db },
 	};
 }
@@ -105,7 +107,7 @@ function toUser(r: SessionRow): User {
 const SESSION_SELECT = `
 	SELECT u.id, u.username, u.role, u.is_active, u.created_at, u.last_login_at, u.must_change_password, s.last_seen_at,
 	       o.id AS org_id, o.name AS org_name, o.kind AS org_kind, o.db_name AS org_db, o.status AS org_status,
-	       m.role AS org_role
+	       m.role AS org_role, s.root
 	  FROM sessions s
 	  JOIN users u ON u.id = s.user_id
 	  JOIN organizations o ON o.id = s.org_id
@@ -262,6 +264,15 @@ export async function sessionUser(app: App, token: string): Promise<User> {
 		await app.main.query(`UPDATE sessions SET last_seen_at = now() WHERE token_hash = $1`, [hashToken(token)]);
 	}
 	return toUser(row);
+}
+
+/**
+ * Turns root mode on or off for this session. Only an admin of the books
+ * the session works in can turn it on; it ends with the session.
+ */
+export async function setRootMode(app: App, user: User, token: string, on: boolean): Promise<void> {
+	if (on && user.role !== "admin") throw new HttpError(403, "only admins can turn on root mode", "forbidden");
+	await app.main.query(`UPDATE sessions SET root = $2 WHERE token_hash = $1`, [hashToken(token), on]);
 }
 
 export async function logout(app: App, token: string): Promise<void> {

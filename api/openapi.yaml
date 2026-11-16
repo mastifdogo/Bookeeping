@@ -389,6 +389,79 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Root]
+      operationId: rootDeleteAccount
+      summary: Delete the account and every journal entry with a line in it (root mode; logged, reversible)
+      description: |
+        Whole entries go, with their reversals, the account's reconciliations and
+        the logs that point at them; sub-accounts move to the top level. Reverse
+        it under Settings → Root log.
+      responses:
+        '200':
+          description: Done; the logged root action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RootAction' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /accounts/{accountCode}/delete-preview:
+    parameters:
+      - $ref: '#/components/parameters/AccountCode'
+    get:
+      tags: [Root]
+      operationId: previewAccountDelete
+      summary: What deleting the account would delete with it (root mode)
+      responses:
+        '200':
+          description: Counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, name, entries, lines, reconciliations, sub_accounts]
+                properties:
+                  code: { type: string }
+                  name: { type: string }
+                  entries: { type: integer }
+                  lines: { type: integer }
+                  reconciliations: { type: integer }
+                  sub_accounts: { type: integer }
+        '403': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /accounts/{accountCode}/root:
+    parameters:
+      - $ref: '#/components/parameters/AccountCode'
+    patch:
+      tags: [Root]
+      operationId: rootUpdateAccount
+      summary: Change an account's type, or its currency while it has no postings (root mode; logged, reversible)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                type: { $ref: '#/components/schemas/AccountType' }
+                currency: { $ref: '#/components/schemas/Currency' }
+      responses:
+        '200':
+          description: Done; the logged root action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RootAction' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
 
   /accounts/{accountCode}/ledger:
     parameters:
@@ -1750,6 +1823,115 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Root]
+      operationId: rootDeleteUser
+      summary: Delete a user everywhere (root mode, main-books admins; logged, reversible)
+      description: What pointed at them (who posted an entry, who changed it) is set to nobody and remembered, so reversing puts it back.
+      parameters:
+        - { name: username, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Done; the logged root action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RootAction' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /users/{username}/root:
+    parameters:
+      - { name: username, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [Root]
+      operationId: rootRenameUser
+      summary: Rename a user (root mode, main-books admins; logged, reversible)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username]
+              properties:
+                username: { type: string }
+      responses:
+        '200':
+          description: Done; the logged root action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RootAction' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /root-actions:
+    get:
+      tags: [Root]
+      operationId: listRootActions
+      summary: The root log (admins)
+      responses:
+        '200':
+          description: Newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/RootAction' } }
+        '403': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /root-actions/{scope}/{actionId}/reverse:
+    parameters:
+      - { name: scope, in: path, required: true, schema: { type: string, enum: [books, users] } }
+      - { name: actionId, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    post:
+      tags: [Root]
+      operationId: reverseRootAction
+      summary: Put back what a root action changed or deleted (root mode)
+      responses:
+        '200':
+          description: Done; the logged root action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RootAction' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /auth/root:
+    post:
+      tags: [Auth]
+      operationId: setRootMode
+      summary: Turn root mode on or off for this session (admins only to turn it on)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [on]
+              properties:
+                on: { type: boolean }
+      responses:
+        '200':
+          description: The current user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '403': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
 
   /users/{username}/organizations/{orgId}:
     parameters:
@@ -2587,8 +2769,9 @@ components:
       allOf:
         - { $ref: '#/components/schemas/User' }
         - type: object
-          required: [organization, organizations]
+          required: [organization, organizations, root]
           properties:
+            root: { type: boolean, description: Root mode is on for this session }
             organization:
               type: object
               required: [id, name, kind]
@@ -2597,6 +2780,19 @@ components:
                 name: { type: string }
                 kind: { $ref: '#/components/schemas/OrgKind' }
             organizations: { type: array, items: { $ref: '#/components/schemas/OrgAccess' } }
+    RootAction:
+      type: object
+      required: [id, scope, action, target, summary, done_by, done_at, reversed_by, reversed_at]
+      properties:
+        id: { type: integer }
+        scope: { type: string, enum: [books, users] }
+        action: { type: string, enum: [account.update, account.delete, user.update, user.delete] }
+        target: { type: string }
+        summary: { type: string }
+        done_by: { type: string }
+        done_at: { type: string, format: date-time }
+        reversed_by: { type: string, nullable: true }
+        reversed_at: { type: string, format: date-time, nullable: true }
     UserListItem:
       type: object
       required: [username, role, is_active, created_at, last_login_at, server_admin, organizations, manageable]

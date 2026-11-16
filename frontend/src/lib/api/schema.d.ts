@@ -216,7 +216,13 @@ export interface paths {
         get: operations["getAccount"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete the account and every journal entry with a line in it (root mode; logged, reversible)
+         * @description Whole entries go, with their reversals, the account's reconciliations and
+         *     the logs that point at them; sub-accounts move to the top level. Reverse
+         *     it under Settings → Root log.
+         */
+        delete: operations["rootDeleteAccount"];
         options?: never;
         head?: never;
         /**
@@ -225,6 +231,44 @@ export interface paths {
          *     keep their history but cannot receive new postings.
          */
         patch: operations["updateAccount"];
+        trace?: never;
+    };
+    "/accounts/{accountCode}/delete-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountCode: components["parameters"]["AccountCode"];
+            };
+            cookie?: never;
+        };
+        /** What deleting the account would delete with it (root mode) */
+        get: operations["previewAccountDelete"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/accounts/{accountCode}/root": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountCode: components["parameters"]["AccountCode"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change an account's type, or its currency while it has no postings (root mode; logged, reversible) */
+        patch: operations["rootUpdateAccount"];
         trace?: never;
     };
     "/accounts/{accountCode}/ledger": {
@@ -1161,7 +1205,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a user everywhere (root mode, main-books admins; logged, reversible)
+         * @description What pointed at them (who posted an entry, who changed it) is set to nobody and remembered, so reversing puts it back.
+         */
+        delete: operations["rootDeleteUser"];
         options?: never;
         head?: never;
         /**
@@ -1170,6 +1218,79 @@ export interface paths {
          *     themselves. Disabling or a new password ends the user's sessions.
          */
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/users/{username}/root": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename a user (root mode, main-books admins; logged, reversible) */
+        patch: operations["rootRenameUser"];
+        trace?: never;
+    };
+    "/root-actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The root log (admins) */
+        get: operations["listRootActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/root-actions/{scope}/{actionId}/reverse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope: "books" | "users";
+                actionId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Put back what a root action changed or deleted (root mode) */
+        post: operations["reverseRootAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/root": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn root mode on or off for this session (admins only to turn it on) */
+        post: operations["setRootMode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/users/{username}/organizations/{orgId}": {
@@ -1723,12 +1844,29 @@ export interface components {
             must_change_password: boolean;
         };
         CurrentUser: components["schemas"]["User"] & {
+            /** @description Root mode is on for this session */
+            root: boolean;
             organization: {
                 id: number;
                 name: string;
                 kind: components["schemas"]["OrgKind"];
             };
             organizations: components["schemas"]["OrgAccess"][];
+        };
+        RootAction: {
+            id: number;
+            /** @enum {string} */
+            scope: "books" | "users";
+            /** @enum {string} */
+            action: "account.update" | "account.delete" | "user.update" | "user.delete";
+            target: string;
+            summary: string;
+            done_by: string;
+            /** Format: date-time */
+            done_at: string;
+            reversed_by: string | null;
+            /** Format: date-time */
+            reversed_at: string | null;
         };
         UserListItem: {
             /** @description Whether the caller may reset this user's password and disable or enable them (an organization's admin may only when the user has access to nothing else) */
@@ -3420,6 +3558,33 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    rootDeleteAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountCode: components["parameters"]["AccountCode"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Done; the logged root action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootAction"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
     updateAccount: {
         parameters: {
             query?: never;
@@ -3445,6 +3610,71 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    previewAccountDelete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountCode: components["parameters"]["AccountCode"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code: string;
+                        name: string;
+                        entries: number;
+                        lines: number;
+                        reconciliations: number;
+                        sub_accounts: number;
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    rootUpdateAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountCode: components["parameters"]["AccountCode"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    type?: components["schemas"]["AccountType"];
+                    currency?: components["schemas"]["Currency"];
+                };
+            };
+        };
+        responses: {
+            /** @description Done; the logged root action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootAction"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
@@ -5051,6 +5281,33 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    rootDeleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Done; the logged root action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootAction"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
     updateUser: {
         parameters: {
             query?: never;
@@ -5081,6 +5338,119 @@ export interface operations {
             };
             404: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    rootRenameUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Done; the logged root action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootAction"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listRootActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["RootAction"][];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    reverseRootAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope: "books" | "users";
+                actionId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Done; the logged root action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootAction"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    setRootMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    on: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The current user */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUser"];
+                };
+            };
+            403: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

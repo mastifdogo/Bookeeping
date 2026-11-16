@@ -1,6 +1,7 @@
 // HTTP layer. Paths match api/openapi.yaml under /api/v1; everything else
 // serves the built SvelteKit frontend.
 
+import { listRootActions, previewAccountDelete, requireRoot, reverseRootAction, rootDeleteAccount, rootDeleteUser, rootRenameUser, rootUpdateAccount } from "./root.ts";
 import { moveUnreconciledLine, unreconciledSummary } from "./unreconciled.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
@@ -100,7 +101,7 @@ import {
 	undoReconciliation,
 	updateReconciliation,
 } from "./reconcile.ts";
-import { changePassword, createUser, findUser, hashToken, listUsers, login, logout, normalizeUsername, sessionUser, setPassword, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, updateUserAccess, validatePassword, type UserRecord } from "./auth.ts";
+import { changePassword, createUser, findUser, hashToken, listUsers, login, logout, normalizeUsername, sessionUser, setPassword, setRootMode, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, updateUserAccess, validatePassword, type UserRecord } from "./auth.ts";
 import {
 	allMemberships,
 	createOrganization,
@@ -458,6 +459,7 @@ async function handleMe(c: Ctx): Promise<void> {
 	const u = c.user!;
 	writeJSON(c.res, 200, {
 		...publicUser(u),
+		root: u.root && u.role === "admin",
 		organization: { id: u.org.id, name: u.org.name, kind: u.org.kind },
 		organizations: (await orgsForUser(c.app, u.id)).map(publicAccess),
 	});
@@ -760,6 +762,65 @@ async function handleChangePassword(c: Ctx): Promise<void> {
 	const input = await decodeBody(c, true, decodePasswordChange);
 	await changePassword(c.app, c.user!, c.token, input);
 	c.res.writeHead(204).end();
+}
+
+// Root mode (root.ts): an admin's session can delete and change accounts and users in ways otherwise refused.
+
+function objectBody(fields: string[]) {
+	return (v: unknown): Record<string, unknown> => {
+		if (!v || typeof v !== "object" || Array.isArray(v)) throw new DecodeError("json: body must be an object");
+		for (const k of Object.keys(v)) if (!fields.includes(k)) throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+		return v as Record<string, unknown>;
+	};
+}
+
+async function handleSetRoot(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, objectBody(["on"]));
+	if (typeof b.on !== "boolean") throw new HttpError(400, "invalid JSON: on must be true or false", "bad_request");
+	await setRootMode(c.app, c.user!, c.token, b.on);
+	c.user = await sessionUser(c.app, c.token);
+	await handleMe(c);
+}
+
+async function handleRootAccountPreview(c: Ctx): Promise<void> {
+	requireRoot(c.user!);
+	writeJSON(c.res, 200, await previewAccountDelete(c.app, c.params.accountCode!));
+}
+
+async function handleRootDeleteAccount(c: Ctx): Promise<void> {
+	requireRoot(c.user!);
+	writeJSON(c.res, 200, await rootDeleteAccount(c.app, c.params.accountCode!, c.user!));
+}
+
+async function handleRootUpdateAccount(c: Ctx): Promise<void> {
+	requireRoot(c.user!);
+	const b = await decodeBody(c, true, objectBody(["type", "currency"]));
+	if ((b.type !== undefined && typeof b.type !== "string") || (b.currency !== undefined && typeof b.currency !== "string")) throw new HttpError(400, "invalid JSON: type and currency must be text", "bad_request");
+	writeJSON(c.res, 200, await rootUpdateAccount(c.app, c.params.accountCode!, b as { type?: string; currency?: string }, c.user!));
+}
+
+async function handleRootUpdateUser(c: Ctx): Promise<void> {
+	requireRoot(c.user!, true);
+	const b = await decodeBody(c, true, objectBody(["username"]));
+	if (typeof b.username !== "string") throw new HttpError(400, "invalid JSON: username must be text", "bad_request");
+	writeJSON(c.res, 200, await rootRenameUser(c.app, c.params.username!, b.username, c.user!));
+}
+
+async function handleRootDeleteUser(c: Ctx): Promise<void> {
+	requireRoot(c.user!, true);
+	writeJSON(c.res, 200, await rootDeleteUser(c.app, c.params.username!, c.user!));
+}
+
+async function handleListRootActions(c: Ctx): Promise<void> {
+	if (c.user!.role !== "admin") throw new HttpError(403, "only admins can see the root log", "forbidden");
+	writeJSON(c.res, 200, { data: await listRootActions(c.app) });
+}
+
+async function handleReverseRootAction(c: Ctx): Promise<void> {
+	const scope = c.params.scope;
+	if (scope !== "books" && scope !== "users") throw new NotFoundError();
+	requireRoot(c.user!, scope === "users");
+	writeJSON(c.res, 200, await reverseRootAction(c.app, scope, pathId(c, "actionId"), c.user!));
 }
 
 async function handleListCurrencies(c: Ctx): Promise<void> {
@@ -2094,6 +2155,11 @@ const ROUTES: Route[] = [
 	route("GET", "/users", "users", handleListUsers),
 	route("POST", "/users", "users", handleCreateUser),
 	route("PATCH", "/users/:username", "users", handleUpdateUser),
+	route("DELETE", "/users/:username", "server", handleRootDeleteUser),
+	route("PATCH", "/users/:username/root", "server", handleRootUpdateUser),
+	route("POST", "/auth/root", "viewer", handleSetRoot),
+	route("GET", "/root-actions", "admin", handleListRootActions),
+	route("POST", "/root-actions/:scope/:actionId/reverse", "admin", handleReverseRootAction),
 	route("PUT", "/users/:username/organizations/:orgId", "users", handlePutMembership),
 	route("DELETE", "/users/:username/organizations/:orgId", "users", handleDeleteMembership),
 	route("PUT", "/settings/sidebar", "viewer", handlePutSidebar),
@@ -2103,6 +2169,9 @@ const ROUTES: Route[] = [
 	route("POST", "/accounts", true, handleCreateAccount),
 	route("GET", "/accounts/:accountCode", true, handleGetAccount),
 	route("PATCH", "/accounts/:accountCode", true, handleUpdateAccount),
+	route("DELETE", "/accounts/:accountCode", "admin", handleRootDeleteAccount),
+	route("GET", "/accounts/:accountCode/delete-preview", "admin", handleRootAccountPreview),
+	route("PATCH", "/accounts/:accountCode/root", "admin", handleRootUpdateAccount),
 	route("GET", "/accounts/:accountCode/ledger", true, handleAccountLedger),
 
 	route("GET", "/entities", true, handleListEntities),
