@@ -1,6 +1,7 @@
 // HTTP layer. Paths match api/openapi.yaml under /api/v1; everything else
 // serves the built SvelteKit frontend.
 
+import { closeSession, consoleOpen, emit, installConsole, listen, onSessionClose, withConsoleContext } from "./console.ts";
 import { listRootActions, previewAccountDelete, requireRoot, reverseRootAction, rootDeleteAccount, rootDeleteUser, rootRenameUser, rootUpdateAccount } from "./root.ts";
 import { moveUnreconciledLine, unreconciledSummary } from "./unreconciled.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -437,7 +438,10 @@ async function handleLogin(c: Ctx): Promise<void> {
 
 async function handleLogout(c: Ctx): Promise<void> {
 	const token = sessionToken(c.req);
-	if (token !== "") await logout(c.app, token);
+	if (token !== "") {
+		await logout(c.app, token);
+		closeSession(hashToken(token).toString("hex"));
+	}
 	setSessionCookie(c, "", -1);
 	c.res.writeHead(204).end();
 }
@@ -778,6 +782,7 @@ async function handleSetRoot(c: Ctx): Promise<void> {
 	const b = await decodeBody(c, true, objectBody(["on"]));
 	if (typeof b.on !== "boolean") throw new HttpError(400, "invalid JSON: on must be true or false", "bad_request");
 	await setRootMode(c.app, c.user!, c.token, b.on);
+	if (!b.on) closeSession(hashToken(c.token).toString("hex"));
 	c.user = await sessionUser(c.app, c.token);
 	await handleMe(c);
 }
@@ -821,6 +826,31 @@ async function handleReverseRootAction(c: Ctx): Promise<void> {
 	if (scope !== "books" && scope !== "users") throw new NotFoundError();
 	requireRoot(c.user!, scope === "users");
 	writeJSON(c.res, 200, await reverseRootAction(c.app, scope, pathId(c, "actionId"), c.user!));
+}
+
+/** The root console: a live stream (server-sent events) of requests and their SQL. */
+async function handleRootConsole(c: Ctx): Promise<void> {
+	requireRoot(c.user!);
+	const all = c.query.get("scope") === "all";
+	if (all && !c.user!.server_admin) throw new HttpError(403, "only admins of the main books can watch the whole server", "forbidden");
+	const session = hashToken(c.token).toString("hex");
+	c.res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no" });
+	c.res.write(`retry: 3000\n\n`);
+	const send = (e: unknown) => c.res.write(`data: ${JSON.stringify(e)}\n\n`);
+	send({ t: Date.now(), kind: "info", request: "", text: `Console open: ${all ? "everything on the server" : "this session's requests"}. Showing each request and the SQL it runs.` });
+	await new Promise<void>((resolve) => {
+		const stop = listen(all ? null : session, send);
+		const ping = setInterval(() => c.res.write(": ping\n\n"), 15_000);
+		const end = () => {
+			stop();
+			clearInterval(ping);
+			unClose();
+			if (!c.res.writableEnded) c.res.end();
+			resolve();
+		};
+		const unClose = onSessionClose(session, end);
+		c.res.on("close", end);
+	});
 }
 
 async function handleListCurrencies(c: Ctx): Promise<void> {
@@ -2159,6 +2189,7 @@ const ROUTES: Route[] = [
 	route("PATCH", "/users/:username/root", "server", handleRootUpdateUser),
 	route("POST", "/auth/root", "viewer", handleSetRoot),
 	route("GET", "/root-actions", "admin", handleListRootActions),
+	route("GET", "/root/console", "admin", handleRootConsole),
 	route("POST", "/root-actions/:scope/:actionId/reverse", "admin", handleReverseRootAction),
 	route("PUT", "/users/:username/organizations/:orgId", "users", handlePutMembership),
 	route("DELETE", "/users/:username/organizations/:orgId", "users", handleDeleteMembership),
@@ -2339,13 +2370,20 @@ const requestPrefix = randomBytes(4).toString("hex");
 /** Builds the request handler for the HTTP server. */
 export function createHandler(app: App): (req: IncomingMessage, res: ServerResponse) => void {
 	const serveStatic = staticHandler(app.webDir);
+	installConsole();
 	return (req, res) => {
 		const start = performance.now();
 		const requestId = `${requestPrefix}-${String(++requestCounter).padStart(6, "0")}`;
 		const rawUrl = req.url ?? "/";
 		const q = rawUrl.indexOf("?");
 		const pathname = q < 0 ? rawUrl : rawUrl.slice(0, q);
+		// The root console (console.ts) shows each API and module request and the SQL it runs, tagged with its session.
+		const token = sessionToken(req);
+		const session = token ? hashToken(token).toString("hex") : "";
+		const shown = (pathname.startsWith("/api/") || pathname.startsWith("/m/")) && pathname !== "/api/v1/root/console";
+		if (shown && consoleOpen()) emit({ kind: "request", text: `${req.method} ${rawUrl.length > 300 ? rawUrl.slice(0, 300) + "…" : rawUrl}`, request: requestId }, session);
 		res.on("finish", () => {
+			if (shown && consoleOpen()) emit({ kind: "response", text: `${req.method} ${pathname} → ${res.statusCode}`, status: res.statusCode, ms: Math.round(performance.now() - start), request: requestId }, session);
 			log.info("request", {
 				method: req.method,
 				path: pathname,
@@ -2375,7 +2413,7 @@ export function createHandler(app: App): (req: IncomingMessage, res: ServerRespo
 				await serveStatic(req, res, pathname);
 			}
 		};
-		run().catch((err) => {
+		withConsoleContext(session, requestId, run).catch((err) => {
 			try {
 				writeErr(c, err);
 			} catch (e) {

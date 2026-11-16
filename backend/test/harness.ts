@@ -39,6 +39,8 @@ export interface TestApp {
 	/** An API request (path relative to /api/v1) carrying the test user's session. */
 	call(method: string, apiPath: string, body?: unknown): Promise<Resp>;
 	token: string;
+	/** The test server's port (for streams the request helper can't wait out). */
+	port: number;
 	countRows(table: string): Promise<number>;
 }
 
@@ -133,6 +135,7 @@ export async function setupTestApp(t: TestContext): Promise<TestApp | null> {
 	return {
 		app,
 		token,
+		port,
 		request,
 		call: (method, apiPath, body) => request(method, "/api/v1" + apiPath, { body, cookie: `${SESSION_COOKIE}=${token}` }),
 		countRows: async (table) => Number((await db.query(`SELECT count(*) AS n FROM ${table}`)).rows[0].n),

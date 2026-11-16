@@ -3929,3 +3929,68 @@ test("root mode: delete and change accounts and users, logged and reversible", a
 	expectStatus(await call("DELETE", "/accounts/6100"), 403);
 	expectStatus(await call("POST", `/root-actions/books/${del.id}/reverse`), 403);
 });
+
+test("root console: a live stream of this session's requests and their SQL, secrets hidden", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call, port, token } = ta;
+	const { request: httpRequest } = await import("node:http");
+	const open = (path: string) =>
+		new Promise<{ status: number; events: any[]; close: () => void }>((resolve) => {
+			const events: any[] = [];
+			const req = httpRequest({ host: "127.0.0.1", port, path: "/api/v1" + path, agent: false, headers: { Cookie: `${SESSION_COOKIE}=${token}` } }, (res) => {
+				let buf = "";
+				res.on("data", (d: Buffer) => {
+					buf += d.toString("utf8");
+					let i;
+					while ((i = buf.indexOf("\n\n")) >= 0) {
+						const chunk = buf.slice(0, i);
+						buf = buf.slice(i + 2);
+						if (chunk.startsWith("data: ")) events.push(JSON.parse(chunk.slice(6)));
+					}
+				});
+				res.on("error", () => {});
+				resolve({ status: res.statusCode!, events, close: () => req.destroy() });
+			});
+			req.on("error", () => {});
+			req.end();
+		});
+	// Only in root mode.
+	let c = await open("/root/console");
+	assert.equal(c.status, 403);
+	c.close();
+	await call("POST", "/auth/root", { on: true });
+	c = await open("/root/console");
+	try {
+	assert.equal(c.status, 200);
+	await new Promise((r) => setTimeout(r, 100));
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	expectStatus(await call("POST", "/users", { username: "carol", password: "correct horse battery 3", role: "viewer" }), 201);
+	await new Promise((r) => setTimeout(r, 200));
+	const kinds = c.events.map((e) => e.kind);
+	assert.equal(kinds[0], "info");
+	assert.ok(c.events.some((e) => e.kind === "request" && e.text === "POST /api/v1/accounts"));
+	assert.ok(c.events.some((e) => e.kind === "response" && e.text === "POST /api/v1/accounts → 201" && typeof e.ms === "number"));
+	const insert = c.events.find((e) => e.kind === "sql" && /INSERT INTO accounts/.test(e.text));
+	assert.ok(insert, "the INSERT is shown");
+	assert.deepEqual(insert.params.slice(0, 4), ["1000", "Chequing", "asset", "CAD"]);
+	assert.equal(insert.rows, 1);
+	// The password hash of the new user, and the session token hash, are never shown.
+	const all = JSON.stringify(c.events);
+	assert.ok(!/\$2[aby]\$/.test(all), "no password hash");
+	assert.ok(all.includes("<password hash>"));
+	assert.ok(all.includes("<32 bytes>"));
+	// A failing statement shows its error.
+	expectStatus(await call("POST", "/accounts", { code: "1000", name: "Again", type: "asset", currency: "CAD" }), 409);
+	await new Promise((r) => setTimeout(r, 100));
+	assert.ok(c.events.some((e) => e.kind === "sql-error" && /duplicate key/.test(e.text)));
+	// Turning root mode off closes the console.
+	const n = c.events.length;
+	await call("POST", "/auth/root", { on: false });
+	await call("GET", "/accounts");
+	await new Promise((r) => setTimeout(r, 100));
+	assert.ok(c.events.length <= n + 4, "nothing more after root mode is off");
+	} finally {
+		c.close();
+	}
+});

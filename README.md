@@ -397,6 +397,14 @@ step aside for a few actions:
   **Delete** a user. A deleted user is removed from every set of books;
   entries and changes they made stay, with no name on them.
 
+In root mode a **▤ Console** button opens a console beside the page (drag
+the divider to resize it). It shows live, read-only, each request the page
+makes and every SQL statement the server runs for it, with the values sent,
+how long it took, how many rows it touched, and any database error, so it
+can be used to debug. Admins of the main books can switch it to the whole
+server. Password hashes, session tokens and values that look like secrets
+are hidden. Nothing is recorded while no console is open.
+
 Every root action is kept in **Settings → Root log** with a copy of what it
 changed or deleted, and **Reverse** puts it back exactly (same ids, same
 amounts, the change logs and reconciliations too). Reversing needs root mode

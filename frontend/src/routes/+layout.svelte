@@ -7,6 +7,7 @@
 	import { formatCents } from '#lib/money.ts';
 	import { ICONS, arrangeNav, pageTitle } from '#lib/nav.ts';
 	import NavIcon from '#lib/components/NavIcon.svelte';
+	import RootConsole from '#lib/components/RootConsole.svelte';
 	import SearchPalette from '#lib/components/SearchPalette.svelte';
 	import NewAccountDialog from '#lib/components/NewAccountDialog.svelte';
 	import { requestNewAccount, type NewAccountDefaults } from '#lib/new-account.svelte.ts';
@@ -20,6 +21,43 @@
 	$effect(() => {
 		document.documentElement.classList.toggle('root', data.user?.root === true);
 	});
+
+	// Root console beside the page: open or closed and its width, remembered on this device.
+	let consoleOn = $state(false);
+	let consoleWidth = $state(42);
+	let consoleDrag = $state(false);
+	let consoleBox: HTMLDivElement | undefined = $state();
+	$effect(() => {
+		try {
+			consoleOn = localStorage.getItem('ledger:root-console') === 'open';
+			const w = Number(localStorage.getItem('ledger:root-console-width'));
+			if (w >= 20 && w <= 75) consoleWidth = w;
+		} catch {
+			// storage blocked
+		}
+	});
+	function setConsole(on: boolean) {
+		consoleOn = on;
+		try {
+			localStorage.setItem('ledger:root-console', on ? 'open' : 'closed');
+		} catch {
+			// storage blocked
+		}
+	}
+	function consoleMove(e: PointerEvent) {
+		if (!consoleDrag || !consoleBox) return;
+		const box = consoleBox.getBoundingClientRect();
+		consoleWidth = Math.min(75, Math.max(20, Math.round(((box.right - e.clientX) / box.width) * 1000) / 10));
+	}
+	function consoleDragEnd() {
+		consoleDrag = false;
+		try {
+			localStorage.setItem('ledger:root-console-width', String(consoleWidth));
+		} catch {
+			// storage blocked
+		}
+	}
+	let showConsole = $derived(data.user?.root === true && consoleOn);
 
 	// Organizations: each has books of its own; switching reloads everything,
 	// including module pages open beside.
@@ -304,16 +342,32 @@
 					{/if}
 					<div class="pane-body">
 						{#if p.id === MAIN_ID}
-							<main>
-								{#if data.unreconciled?.length}
-									<div class="notice error unrec" role="alert">
-										<strong>Danger: unreconciled transactions.</strong>
-										{#each data.unreconciled as u, i (u.code)}{i ? '; ' : ' '}{u.line_count} in
-											<a href="/accounts/{encodeURIComponent(u.code)}">{u.name}</a> ({formatCents(u.balance_cents)}
-											{u.currency}){/each}. Move each to the right account until it is back at zero.
+							<main class:with-console={showConsole}>
+								{#snippet pageBody()}
+									{#if data.unreconciled?.length}
+										<div class="notice error unrec" role="alert">
+											<strong>Danger: unreconciled transactions.</strong>
+											{#each data.unreconciled as u, i (u.code)}{i ? '; ' : ' '}{u.line_count} in
+												<a href="/accounts/{encodeURIComponent(u.code)}">{u.name}</a> ({formatCents(u.balance_cents)}
+												{u.currency}){/each}. Move each to the right account until it is back at zero.
+										</div>
+									{/if}
+									{@render children()}
+								{/snippet}
+								{#if showConsole}
+									<!-- svelte-ignore a11y_no_static_element_interactions (dragging the divider; the console has its own controls) -->
+									<div class="console-split" class:dragging={consoleDrag} bind:this={consoleBox} style="--console:{consoleWidth}%" onpointermove={consoleMove} onpointerup={consoleDragEnd}>
+										<div class="console-page">{@render pageBody()}</div>
+										<!-- svelte-ignore a11y_no_static_element_interactions -->
+										<div class="console-divider" title="Drag to resize" onpointerdown={(e) => ((consoleDrag = true), (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId))}></div>
+										<div class="console-side"><RootConsole onclose={() => setConsole(false)} /></div>
 									</div>
+								{:else}
+									{@render pageBody()}
 								{/if}
-								{@render children()}
+								{#if data.user?.root && !consoleOn}
+									<button class="console-open" onclick={() => setConsole(true)} title="Show the requests and SQL the server runs, beside the page">▤ Console</button>
+								{/if}
 							</main>
 						{:else}
 							<iframe bind:this={frames[p.id]} src={srcOf(p)} {title}></iframe>
@@ -525,6 +579,42 @@
 		margin: 0;
 		max-width: 1200px;
 		width: 100%;
+	}
+	main.with-console {
+		max-width: none;
+	}
+	.console-split {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 0.6rem var(--console);
+		align-items: start;
+	}
+	.console-split.dragging {
+		user-select: none;
+		cursor: col-resize;
+	}
+	.console-page {
+		min-width: 0;
+	}
+	.console-divider {
+		cursor: col-resize;
+		align-self: stretch;
+		touch-action: none;
+	}
+	.console-side {
+		position: sticky;
+		top: 0.5rem;
+		height: calc(100vh - 2rem);
+	}
+	.console-open {
+		position: fixed;
+		right: 1rem;
+		bottom: 1rem;
+		z-index: 20;
+		background: #0d1117;
+		color: #d1d7e0;
+		border: 1px solid #30363d;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		font-size: 0.8rem;
 	}
 	.unrec {
 		margin-bottom: 1rem;
