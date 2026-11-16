@@ -4,7 +4,7 @@
 	import Amount from '#lib/components/Amount.svelte';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, today, unwrap } from '#lib/api/client.ts';
-	import { centsToInput, parseAmount } from '#lib/money.ts';
+	import { centsToInput, formatCents, parseAmount } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -75,6 +75,95 @@
 		}
 	}
 
+	// Changing the date: logged below with the other changes.
+	let redating = $state(false);
+	let newDate = $state('');
+	let dateReason = $state('');
+	function startRedate() {
+		error = null;
+		amending = reversing = false;
+		newDate = e.entry_date;
+		dateReason = '';
+		redating = true;
+	}
+	async function saveDate(ev: SubmitEvent) {
+		ev.preventDefault();
+		busy = true;
+		error = null;
+		try {
+			unwrap(
+				await api().PATCH('/journal-entries/{entryId}/date', {
+					params: { path: { entryId: e.id } },
+					body: { entry_date: newDate, ...(dateReason.trim() ? { reason: dateReason.trim() } : {}) }
+				})
+			);
+			redating = false;
+			await invalidateAll();
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+
+	// A line in the Unreconciled clearing account moves on to where it belongs.
+	let moving = $state<number | null>(null);
+	let moveTo = $state('');
+	let moveReason = $state('');
+	let movingLine = $derived(e.lines.find((l) => l.line_number === moving));
+	let moveTargets = $derived(movingLine ? data.accounts.filter((a) => a.currency === movingLine.currency && a.code !== movingLine.account_code && a.is_active && !(a.module_id === 'ledger' && a.module_key === 'unreconciled')) : []);
+	async function saveMove(ev: SubmitEvent) {
+		ev.preventDefault();
+		if (moving === null || !moveTo) return;
+		busy = true;
+		error = null;
+		try {
+			unwrap(
+				await api().PATCH('/journal-entries/{entryId}/lines/{lineNumber}/account', {
+					params: { path: { entryId: e.id, lineNumber: moving } },
+					body: { account_code: moveTo, ...(moveReason.trim() ? { reason: moveReason.trim() } : {}) }
+				})
+			);
+			moving = null;
+			await invalidateAll();
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+
+	// One log of what changed after posting: amounts, the date and lines moved to another account.
+	type LogRow = { key: string; at: string; by: string | null; what: string; was: string; now: string; why: string };
+	const money = (c: number) => formatCents(c);
+	let log = $derived(
+		[
+			...(e.changes ?? []).map(
+				(c): LogRow => ({
+					key: `a${c.id}`,
+					at: String(c.changed_at),
+					by: c.changed_by,
+					what: `Amount, line ${c.line_number} (${c.account_code} ${c.account_name})`,
+					was: `${money(c.old_debit_cents || c.old_credit_cents)} ${c.old_debit_cents ? 'Dr' : 'Cr'}`,
+					now: `${money(c.new_debit_cents || c.new_credit_cents)} ${c.new_debit_cents ? 'Dr' : 'Cr'}`,
+					why: c.reason
+				})
+			),
+			...(e.date_changes ?? []).map((c): LogRow => ({ key: `d${c.id}`, at: String(c.changed_at), by: c.changed_by, what: 'Date', was: c.old_date, now: c.new_date, why: c.reason })),
+			...(e.moves ?? []).map(
+				(m): LogRow => ({
+					key: `m${m.id}`,
+					at: String(m.changed_at),
+					by: m.changed_by,
+					what: `Account, line ${m.line_number}`,
+					was: `${m.from_code} ${m.from_name}`,
+					now: `${m.to_code} ${m.to_name}`,
+					why: m.reason || (m.reconciliation_id ? 'reconciliation' : '')
+				})
+			)
+		].sort((a, b) => a.at.localeCompare(b.at))
+	);
+
 	async function reverse(ev: SubmitEvent) {
 		ev.preventDefault();
 		if (!confirm(`Post a reversing entry for #${e.id} dated ${reverseDate}?`)) return;
@@ -105,7 +194,10 @@
 	{#if e.reversed_by_id}<span class="badge warn">reversed by <a href="/journal/{e.reversed_by_id}">#{e.reversed_by_id}</a></span>{/if}
 	{#if e.import_id}<span class="badge">imported (batch {e.import_id})</span>{/if}
 	{#if e.amended}<span class="badge warn" title="Its amounts were changed after it was posted; see the changes below">amounts changed</span>{/if}
+	{#if e.date_changes?.length}<span class="badge warn" title="Its date was changed after it was posted; see the changes below">date changed</span>{/if}
+	{#if e.lines.some((l) => l.unreconciled)}<span class="badge danger">unreconciled</span>{/if}
 	<span class="spacer"></span>
+	{#if canEdit}<button onclick={() => (redating ? (redating = false) : startRedate())}>{redating ? 'Cancel' : 'Change date…'}</button>{/if}
 	{#if !e.reverses_id && !e.reversed_by_id && canEdit}
 		<button onclick={() => (amending ? (amending = false) : startAmend())}>{amending ? 'Cancel' : 'Change amounts…'}</button>
 		<button class="danger" onclick={() => ((amending = false), (reversing = !reversing))}>Reverse…</button>
@@ -113,6 +205,28 @@
 </div>
 
 <ErrorNotice {error} />
+
+{#if redating}
+	<form class="card toolbar" onsubmit={saveDate}>
+		<label>New date <input type="date" bind:value={newDate} required /></label>
+		<label style="flex:1; min-width:14rem">Why (optional) <input bind:value={dateReason} maxlength="500" placeholder="e.g. the cheque was dated the 3rd" /></label>
+		<button class="primary" disabled={busy || !newDate || newDate === e.entry_date}>Save date</button>
+		<span class="muted small" style="flex-basis:100%">The old and new date, who changed it and when are kept with this entry.</span>
+	</form>
+{/if}
+
+{#if moving !== null && movingLine}
+	<form class="card toolbar" onsubmit={saveMove}>
+		<span>Move line {movingLine.line_number} out of <strong>{movingLine.account_name}</strong> to</span>
+		<select bind:value={moveTo} required aria-label="Account to move the line to">
+			<option value="" disabled>Choose the account…</option>
+			{#each moveTargets as a (a.code)}<option value={a.code}>{a.code} — {a.name}{a.hidden ? ' (hidden)' : ''}</option>{/each}
+		</select>
+		<label style="flex:1; min-width:12rem">Why (optional) <input bind:value={moveReason} maxlength="500" placeholder="e.g. cleared on the October statement" /></label>
+		<button class="primary" disabled={busy || !moveTo}>Move</button>
+		<button type="button" onclick={() => (moving = null)}>Cancel</button>
+	</form>
+{/if}
 
 {#if reversing}
 	<form class="card toolbar" onsubmit={reverse}>
@@ -177,7 +291,13 @@
 			{#each e.lines as l (l.id)}
 				<tr>
 					<td class="muted">{l.line_number}</td>
-					<td><a class="mono" href="/accounts/{encodeURIComponent(l.account_code)}">{l.account_code}</a> {l.account_name}</td>
+					<td>
+						<a class="mono" href="/accounts/{encodeURIComponent(l.account_code)}">{l.account_code}</a>
+						{l.account_name}
+						{#if l.unreconciled && canEdit && !amending}
+							<button type="button" class="link small" onclick={() => ((moving = l.line_number), (moveTo = ''), (moveReason = ''))}>Move…</button>
+						{/if}
+					</td>
 					<td>{l.memo}</td>
 					<td>{l.currency}</td>
 					{#if amending && draft[l.line_number]}
@@ -204,23 +324,22 @@
 </div>
 </form>
 
-{#if e.changes && e.changes.length > 0}
-	<h2>Changes to amounts</h2>
+{#if log.length > 0}
+	<h2>Changes</h2>
 	<div class="table-wrap">
 		<table>
 			<thead>
-				<tr><th>When</th><th>By</th><th>Line</th><th>Account</th><th class="num">Was</th><th class="num">Now</th><th>Why</th></tr>
+				<tr><th>When</th><th>By</th><th>What</th><th>Was</th><th>Now</th><th>Why</th></tr>
 			</thead>
 			<tbody>
-				{#each e.changes as c (c.id)}
+				{#each log as c (c.key)}
 					<tr>
-						<td class="small">{new Date(c.changed_at).toLocaleString()}</td>
-						<td>{c.changed_by ?? '—'}</td>
-						<td class="muted">{c.line_number}</td>
-						<td><span class="mono">{c.account_code}</span> {c.account_name}</td>
-						<td class="num"><Amount cents={c.old_debit_cents || c.old_credit_cents} /> {c.old_debit_cents ? 'Dr' : 'Cr'}</td>
-						<td class="num"><Amount cents={c.new_debit_cents || c.new_credit_cents} /> {c.new_debit_cents ? 'Dr' : 'Cr'}</td>
-						<td>{c.reason}</td>
+						<td class="small">{new Date(c.at).toLocaleString()}</td>
+						<td>{c.by ?? '—'}</td>
+						<td>{c.what}</td>
+						<td class="mono small">{c.was}</td>
+						<td class="mono small">{c.now}</td>
+						<td>{c.why}</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -235,6 +354,13 @@
 	}
 	.amend .off {
 		color: var(--danger);
+	}
+	button.link {
+		background: none;
+		border: none;
+		padding: 0 0 0 0.4rem;
+		color: var(--accent);
+		cursor: pointer;
 	}
 	.links ul {
 		list-style: none;

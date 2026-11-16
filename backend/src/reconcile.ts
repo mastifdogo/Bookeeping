@@ -10,6 +10,7 @@ import { queryRow, queryRows, withTx, type Queryable } from "./db.ts";
 import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
 import { checkLinesPostable, insertJournalEntry, jsonFieldNames, lockAccounts, validateEntry } from "./ledger.ts";
 import type { AccountType, Currency, JournalEntryCreate } from "./types.ts";
+import { moveLines, syncUnreconciledLater, UNRECONCILED_WHERE } from "./unreconciled.ts";
 
 export interface Reconciliation {
 	id: number;
@@ -353,26 +354,45 @@ export function unreconciledAccount(app: App, currency: Currency) {
  * and the Unreconciled clearing account and ticked, so the account matches
  * the statement. When the AI's statement lines that aren't in the books add
  * up to exactly the difference, each gets its own entry (its date and
- * description); otherwise one entry for the whole difference. Lines in the
- * books that aren't on the statement stay unticked for the next statement.
+ * description); otherwise one entry for the whole difference.
+ *
+ * The account's lines up to the statement date that weren't ticked then move
+ * to Unreconciled (the line itself changes account, logged), each with a
+ * dashboard to-do, until a person moves it on. Lines of reversed entries and
+ * of reversals stay where they are (the pair must keep mirroring each other).
  */
 export async function finishReconciliation(app: App, id: bigint, userId: number | null, opts: { postDifference?: boolean } = {}): Promise<ReconciliationDetail> {
 	const pre = await loadRow(app.db, id);
-	const clearing = opts.postDifference ? await unreconciledAccount(app, pre.currency) : null;
-	return withTx(app.db, {}, async (tx) => {
+	const clearing = await unreconciledAccount(app, pre.currency);
+	const done = await withTx(app.db, {}, async (tx) => {
 		const r = await openForUpdate(tx, id);
 		const d = await getReconciliation(app, id, tx);
 		if (d.difference_cents !== 0n) {
-			if (!clearing) {
+			if (!opts.postDifference) {
 				throw new ConflictError(`the cleared balance is ${d.difference_cents > 0n ? "below" : "above"} the statement balance; the difference must be 0.00 to finish, or post it to Unreconciled`);
 			}
 			await postDifference(tx, r, d, clearing.code, userId);
 			const after = await getReconciliation(app, id, tx);
 			if (after.difference_cents !== 0n) throw new Error(`posting the difference left ${after.difference_cents}`);
 		}
+		const unticked = d.lines.filter((l) => !l.cleared).map((l) => BigInt(l.transaction_id));
+		if (unticked.length > 0) {
+			const movable = await queryRows<{ id: bigint }>(
+				tx,
+				`SELECT t.id FROM transactions t JOIN journal_entries je ON je.id = t.journal_entry_id
+				  WHERE t.id = ANY($1::bigint[]) AND t.account_id = $2 AND je.reverses_id IS NULL
+				    AND NOT EXISTS (SELECT 1 FROM journal_entries x WHERE x.reverses_id = je.id)
+				    AND NOT EXISTS (SELECT 1 FROM reconciliation_lines l WHERE l.transaction_id = t.id)`,
+				[unticked, r.account_id],
+			);
+			const to = await queryRow<{ id: bigint }>(tx, `SELECT id FROM accounts WHERE code = $1`, [clearing.code]);
+			await moveLines(tx, movable.map((m) => m.id), to!.id, userId, `not ticked on the statement to ${r.statement_date}`, BigInt(r.id));
+		}
 		await tx.query(`UPDATE reconciliations SET status = 'finished', finished_at = now(), finished_by = $2 WHERE id = $1`, [id, userId]);
 		return getReconciliation(app, id, tx);
 	});
+	await syncUnreconciledLater(app);
+	return done;
 }
 
 async function postDifference(tx: Queryable, r: Row, d: ReconciliationDetail, clearingCode: string, userId: number | null): Promise<void> {
@@ -412,8 +432,8 @@ async function postDifference(tx: Queryable, r: Row, d: ReconciliationDetail, cl
 }
 
 /** Reopens the account's most recent finished reconciliation for changes. */
-export async function undoReconciliation(app: App, id: bigint): Promise<ReconciliationDetail> {
-	return withTx(app.db, {}, async (tx) => {
+export async function undoReconciliation(app: App, id: bigint, userId: number | null = null): Promise<ReconciliationDetail> {
+	const done = await withTx(app.db, {}, async (tx) => {
 		const r = await loadRow(tx, id, true);
 		if (r.status !== "finished") throw new ConflictError("this reconciliation is not finished");
 		await tx.query(`SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, [r.account_id]);
@@ -422,8 +442,24 @@ export async function undoReconciliation(app: App, id: bigint): Promise<Reconcil
 		const open = await queryRow(tx, `SELECT 1 FROM reconciliations WHERE account_id = $1 AND status = 'open'`, [r.account_id]);
 		if (open) throw new ConflictError("this account has a reconciliation in progress; finish or delete it first");
 		await tx.query(`UPDATE reconciliations SET status = 'open', finished_at = NULL, finished_by = NULL WHERE id = $1`, [id]);
+		// Lines it moved to Unreconciled that are still there come back to the account.
+		const back = await queryRows<{ id: bigint; from_id: bigint }>(
+			tx,
+			`SELECT t.id, m.old_account_id AS from_id
+			   FROM transaction_moves m
+			   JOIN transactions t ON t.id = m.transaction_id
+			   JOIN accounts a ON a.id = t.account_id
+			  WHERE m.reconciliation_id = $1 AND ${UNRECONCILED_WHERE} AND t.account_id = m.new_account_id
+			    AND m.id = (SELECT max(m2.id) FROM transaction_moves m2 WHERE m2.transaction_id = t.id)`,
+			[id],
+		);
+		const byAccount = new Map<bigint, bigint[]>();
+		for (const b of back) byAccount.set(b.from_id, [...(byAccount.get(b.from_id) ?? []), b.id]);
+		for (const [acc, ids] of byAccount) await moveLines(tx, ids, acc, userId, `reconciliation to ${r.statement_date} undone`, null);
 		return getReconciliation(app, id, tx);
 	});
+	await syncUnreconciledLater(app);
+	return done;
 }
 
 export async function deleteReconciliation(app: App, id: bigint): Promise<void> {

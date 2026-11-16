@@ -313,6 +313,70 @@ export interface paths {
         patch: operations["amendJournalEntry"];
         trace?: never;
     };
+    "/journal-entries/{entryId}/lines/{lineNumber}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                lineNumber: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Move a line out of the Unreconciled account to another account
+         * @description Only a line sitting in Ledger's Unreconciled clearing account can move,
+         *     to an active account in the same currency (back to the bank once it
+         *     clears, or to where it belongs). Every move is logged on the entry.
+         */
+        patch: operations["moveJournalLine"];
+        trace?: never;
+    };
+    "/journal-entries/{entryId}/date": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the date of a posted entry; every change is logged
+         * @description Refused (409) while one of its lines is ticked on a reconciliation.
+         */
+        patch: operations["changeJournalEntryDate"];
+        trace?: never;
+    };
+    "/unreconciled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What sits in the Unreconciled clearing accounts */
+        get: operations["getUnreconciled"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/journal-entries/{entryId}/reverse": {
         parameters: {
             query?: never;
@@ -509,7 +573,13 @@ export interface paths {
         put?: never;
         /**
          * Finish (the difference must be 0, or posted to Unreconciled)
-         * @description With a difference left, finishing is refused unless post_difference is
+         * @description The account's lines up to the statement date that weren't ticked move
+         *     to Unreconciled (each gets a dashboard to-do, and a danger notice stays
+         *     up until Unreconciled is back at zero); undoing the reconciliation
+         *     moves back those still there. Lines of reversed entries and reversals
+         *     stay put.
+         *
+         *     With a difference left, finishing is refused unless post_difference is
          *     true: then the difference is posted between the account and Ledger's
          *     Unreconciled clearing account (in the account's currency) and ticked.
          *     When the AI's statement lines that aren't in the books add up to the
@@ -1905,10 +1975,39 @@ export interface components {
             debit_cents: components["schemas"]["Cents"];
             credit_cents: components["schemas"]["Cents"];
             memo: string;
+            /** @description Set when the line sits in Ledger's Unreconciled clearing account (it can be moved on) */
+            unreconciled?: boolean;
         };
         JournalEntry: {
             /** @description Whether any of its amounts were changed after it was posted */
             amended: boolean;
+            /** @description Every change to its date, oldest first (only when one entry is fetched) */
+            date_changes?: {
+                id: number;
+                /** Format: date */
+                old_date: string;
+                /** Format: date */
+                new_date: string;
+                reason: string;
+                changed_by: string | null;
+                /** Format: date-time */
+                changed_at: string;
+            }[];
+            /** @description Every move of one of its lines to another account, oldest first (only when one entry is fetched) */
+            moves?: {
+                id: number;
+                line_number: number;
+                from_code: string;
+                from_name: string;
+                to_code: string;
+                to_name: string;
+                /** @description The reconciliation that moved it */
+                reconciliation_id: number | null;
+                reason: string;
+                changed_by: string | null;
+                /** Format: date-time */
+                changed_at: string;
+            }[];
             /** @description Every change made to its amounts, oldest first (only when one entry is fetched) */
             changes?: {
                 id: number;
@@ -3521,6 +3620,101 @@ export interface operations {
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             default: components["responses"]["Error"];
+        };
+    };
+    moveJournalLine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                lineNumber: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    account_code: components["schemas"]["AccountCode"];
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Moved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    changeJournalEntryDate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: date */
+                    entry_date: string;
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getUnreconciled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Each Unreconciled account with lines in it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            code: components["schemas"]["AccountCode"];
+                            name: string;
+                            currency: components["schemas"]["Currency"];
+                            balance_cents: components["schemas"]["SignedCents"];
+                            line_count: number;
+                        }[];
+                    };
+                };
+            };
         };
     };
     reverseJournalEntry: {

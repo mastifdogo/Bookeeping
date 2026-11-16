@@ -368,16 +368,18 @@ balances still count them); **Settings → Clearing accounts** lists them all,
 with who made each and its balance, and a switch to show one. The Accounts
 page still points out any that aren't at zero.
 
-### Changing an entry's amounts
+### Changing an entry's amounts and date
 
 An entry's page has **Change amounts…**: type new debit and credit figures
-for its lines (they must still balance) and, optionally, why. Accounts,
-dates, descriptions and the number of lines can't change; for those, reverse
-the entry and post a new one. Every change is kept and shown under the
-entry: the line, what it was, what it is now, who changed it and when. The
-entry is marked "amounts changed". Amounts can't be changed on an entry
-that was reversed or is a reversal, or on a line ticked on a reconciliation
-(untick it, or undo the reconciliation, first).
+for its lines (they must still balance) and, optionally, why. **Change
+date…** moves the entry to another date. Descriptions and the number of
+lines can't change; for those, reverse the entry and post a new one. Every
+change is kept and shown under the entry in one **Changes** log (amounts,
+the date, and lines moved out of Unreconciled): what it was, what it is
+now, who changed it, when and why. The entry is marked "amounts changed"
+or "date changed". Amounts can't be changed on an entry that was reversed
+or is a reversal; neither amounts nor the date on an entry with a line
+ticked on a reconciliation (untick it, or undo the reconciliation, first).
 
 ### Renumbering accounts
 
@@ -414,10 +416,17 @@ a difference is left, **Finish, difference to Unreconciled** posts it
 between the account and Ledger's own **Unreconciled** clearing account and
 ticks it, so the account matches the statement; when the AI's statement
 lines missing from the books make up exactly the difference, each gets its
-own entry with its date and description. Move those amounts to the right
-accounts later. Transactions in the books but not on the statement (a
-cheque not cashed yet) stay unticked for the next statement. The next
-statement starts from there. Only the most recent
+own entry with its date and description. Transactions in the books up to
+the statement date that aren't ticked (a cheque not cashed yet) move out of
+the account into Unreconciled when you finish: the line itself changes
+account, and the move is logged on the entry. Everything in Unreconciled
+gets a dashboard to-do, and a red **Danger: unreconciled transactions**
+notice shows on every page until the account is back at zero. On the
+entry's page, **Move…** sends a line on: back to the bank once it clears
+(then tick it on the next statement), or to the account it belongs in.
+Undoing a reconciliation moves back the lines it moved that are still in
+Unreconciled. Lines of reversed entries and reversals stay where they are.
+The next statement starts from there. Only the most recent
 reconciliation of an account can be undone. Posted entries never change;
 reconciliations only mark lines as cleared.
 

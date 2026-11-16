@@ -149,6 +149,9 @@ Decide, and state briefly to the user:
   assume an entry the module posted still has the amounts it posted: read
   them from the entry (`ctx.ledger.linkedEntries(ref)`), and show any
   difference from the module's own record instead of overwriting either.
+  Since 0.20.2 an entry's date can change too (`date_changes`), and a
+  finished reconciliation moves a bank account's unticked lines to Ledger's
+  Unreconciled clearing account until a person moves them on (`moves`).
 - **Account codes can change** (Ledger 0.19.3): people can renumber
   accounts. Ledger rewrites the old code in a module's tables and settings
   only where it can recognise one: text columns named `account_code`,

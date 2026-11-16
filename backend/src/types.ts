@@ -111,6 +111,8 @@ export interface JournalLine {
 	debit_cents: bigint;
 	credit_cents: bigint;
 	memo: string;
+	/** Set when the line sits in Ledger's Unreconciled clearing account (it can be moved on). */
+	unreconciled?: boolean;
 }
 
 /** Total debits (= total credits) of an entry in one currency. */
@@ -139,6 +141,20 @@ export interface JournalEntry {
 	amended: boolean;
 	/** Every change made to its amounts, oldest first (only when one entry is fetched). */
 	changes?: EntryChange[];
+	/** Every move of one of its lines to another account, oldest first (only when one entry is fetched). */
+	moves?: import("./unreconciled.ts").EntryMove[];
+	/** Every change to its date, oldest first (only when one entry is fetched). */
+	date_changes?: EntryDateChange[];
+}
+
+/** One change to the date of a posted entry. */
+export interface EntryDateChange {
+	id: number;
+	old_date: string;
+	new_date: string;
+	reason: string;
+	changed_by: string | null;
+	changed_at: Date;
 }
 
 /** One change to the amount of a posted line. */

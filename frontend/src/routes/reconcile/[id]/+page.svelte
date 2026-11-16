@@ -76,15 +76,19 @@
 	// With a difference left, it is posted to the Unreconciled clearing account first.
 	const finish = () => {
 		const off = d.difference_cents !== 0;
-		if (
-			off &&
-			!confirm(
-				`Finish with a difference of ${formatCents(d.difference_cents)} ${rec.currency}?\n\nThe difference is posted between ${rec.account_code} and the Unreconciled clearing account` +
+		const unticked = d.lines.filter((l) => !l.cleared).length;
+		const parts: string[] = [];
+		if (off)
+			parts.push(
+				`The difference of ${formatCents(d.difference_cents)} ${rec.currency} is posted between ${rec.account_code} and the Unreconciled clearing account` +
 					(postsLines ? `, one entry for each of the ${notInBooks.length} statement lines not in your books` : '') +
-					', and ticked, so the account matches the statement. Move it to the right account later. Lines not ticked stay for the next statement.'
-			)
-		)
-			return;
+					', and ticked, so the account matches the statement.'
+			);
+		if (unticked > 0)
+			parts.push(
+				`${unticked} transaction${unticked === 1 ? '' : 's'} not ticked move${unticked === 1 ? 's' : ''} from ${rec.account_code} to the Unreconciled clearing account, each with a to-do, until you move ${unticked === 1 ? 'it' : 'them'} to the right account.`
+			);
+		if (parts.length > 0 && !confirm(`Finish this reconciliation?\n\n${parts.join('\n\n')}`)) return;
 		return run(async () => {
 			const done = unwrap(await api().POST('/reconciliations/{reconciliationId}/finish', { ...path(), body: { post_difference: off } }));
 			await goto(`/reconcile?finished=${done.reconciliation.id}`);
@@ -304,6 +308,9 @@
 		<span class="small">
 			{#if d.difference_cents === 0}{open ? 'Balanced. Ready to finish.' : `Reconciled${rec.finished_by ? ` by ${rec.finished_by}` : ''}.`}{:else}Tick
 				lines until this is 0.00, or finish and the difference goes to Unreconciled.{/if}
+			{#if open && d.totals.uncleared.debit_count + d.totals.uncleared.credit_count > 0}<br /><span class="muted"
+					>On finishing, lines not ticked move to Unreconciled.</span
+				>{/if}
 		</span>
 	</div>
 </div>

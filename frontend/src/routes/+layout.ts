@@ -1,6 +1,6 @@
-import { redirect } from '@sveltejs/kit';
-import { api } from '#lib/api/client.ts';
-import type { LayoutLoad } from './$types';
+import { redirect } from "@sveltejs/kit";
+import { api } from "#lib/api/client.ts";
+import type { LayoutLoad } from "./$types";
 
 // Single-page app served by the backend: render in the browser only.
 export const ssr = false;
@@ -9,36 +9,62 @@ export const prerender = false;
 // Resolve the logged-in user on every navigation; send anonymous visitors to
 // the login page (the API enforces authentication regardless).
 export const load: LayoutLoad = async ({ fetch, url, depends }) => {
-	depends('app:user');
-	const res = await api(fetch).GET('/auth/me');
-	const user = res.data ?? null;
-	const onLogin = url.pathname === '/login';
-	if (!user && !onLogin) {
-		if (res.response.status !== 401) {
-			// API down or misconfigured: let the page show the error.
-			return { user: null, modules: [], sidebar: [] };
-		}
-		redirect(307, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
-	}
-	// A new server's first login: nothing else until they have chosen a password.
-	const onSetPassword = url.pathname === '/set-password';
-	if (user?.must_change_password) {
-		if (!onSetPassword) redirect(307, `/set-password?next=${encodeURIComponent(onLogin ? (url.searchParams.get('next') ?? '/') : url.pathname + url.search)}`);
-		return { user, modules: [], sidebar: [] };
-	}
-	if (user && onSetPassword) redirect(307, safeNext(url.searchParams.get('next')));
-	if (user && onLogin) redirect(307, safeNext(url.searchParams.get('next')));
-	// Sidebar entries for installed modules and the user's sidebar
-	// preferences (defaults if either request fails).
-	depends('app:modules');
-	depends('app:sidebar');
-	if (!user) return { user, modules: [], sidebar: [] };
-	const [mods, prefs] = await Promise.all([api(fetch).GET('/modules'), api(fetch).GET('/settings/sidebar')]);
-	return { user, modules: mods.data?.nav ?? [], sidebar: prefs.data?.items ?? [] };
+  depends("app:user");
+  const res = await api(fetch).GET("/auth/me");
+  const user = res.data ?? null;
+  const onLogin = url.pathname === "/login";
+  if (!user && !onLogin) {
+    if (res.response.status !== 401) {
+      // API down or misconfigured: let the page show the error.
+      return { user: null, modules: [], sidebar: [] };
+    }
+    redirect(
+      307,
+      `/login?next=${encodeURIComponent(url.pathname + url.search)}`,
+    );
+  }
+  // A new server's first login: nothing else until they have chosen a password.
+  const onSetPassword = url.pathname === "/set-password";
+  if (user?.must_change_password) {
+    if (!onSetPassword)
+      redirect(
+        307,
+        `/set-password?next=${encodeURIComponent(onLogin ? (url.searchParams.get("next") ?? "/") : url.pathname + url.search)}`,
+      );
+    return { user, modules: [], sidebar: [] };
+  }
+  if (user && onSetPassword)
+    redirect(307, safeNext(url.searchParams.get("next")));
+  if (user && onLogin) redirect(307, safeNext(url.searchParams.get("next")));
+  // Sidebar entries for installed modules and the user's sidebar
+  // preferences (defaults if either request fails).
+  depends("app:modules");
+  depends("app:sidebar");
+  if (!user) return { user, modules: [], sidebar: [] };
+  const [mods, prefs, unrec] = await Promise.all([
+    api(fetch).GET("/modules"),
+    api(fetch).GET("/settings/sidebar"),
+    api(fetch).GET("/unreconciled"),
+  ]);
+  // What sits in the Unreconciled clearing account: a warning on every page until it is back at zero.
+  const unreconciled = (unrec.data?.data ?? []).filter(
+    (a) => a.balance_cents !== 0,
+  );
+  return {
+    user,
+    modules: mods.data?.nav ?? [],
+    sidebar: prefs.data?.items ?? [],
+    unreconciled,
+  };
 };
 
 /** Only same-site relative paths are followed after login. */
 export function _safeNext(next: string | null): string {
-	return next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') ? next : '/';
+  return next &&
+    next.startsWith("/") &&
+    !next.startsWith("//") &&
+    !next.startsWith("/\\")
+    ? next
+    : "/";
 }
 const safeNext = _safeNext;

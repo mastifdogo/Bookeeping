@@ -1,15 +1,17 @@
 import type { App } from "./app.ts";
+import { entryMoves } from "./unreconciled.ts";
 import { withTx, queryRow, queryRows, toNumber, type Queryable } from "./db.ts";
 import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
 import { MAX_CENTS, formatCents, splitAmount } from "./money.ts";
 import { checkText, quote, trimSpace } from "./text.ts";
-import { dateYear, today } from "./date.ts";
+import { dateYear, parseDate, today } from "./date.ts";
 import {
 	ACCOUNT_CODE_RE,
 	type Currency,
 	type CurrencyTotal,
 	type EntryAmend,
 	type EntryChange,
+	type EntryDateChange,
 	type EntryLink,
 	type EntryLinkInput,
 	type JournalEntry,
@@ -561,12 +563,66 @@ export async function amendEntryAmounts(app: App, id: bigint, input: EntryAmend,
 	return getJournalEntry(app, id);
 }
 
+/**
+ * Changes the date of a posted entry. Refused while one of its lines is
+ * ticked on a reconciliation (the reconciled statement would no longer
+ * hold). The database logs the old and new date, who changed it and why.
+ */
+export async function changeEntryDate(app: App, id: bigint, input: { entry_date: string; reason?: string }, actorId: number | null): Promise<JournalEntry> {
+	const orig = await getJournalEntry(app, id);
+	const v = new ValidationError();
+	const reason = trimSpace(input.reason ?? "");
+	if (reason.length > 500) v.add("reason", "must be at most 500 characters");
+	const d = input.entry_date;
+	let ok = false;
+	try {
+		ok = typeof d === "string" && parseDate(d) === d;
+	} catch {
+		// not a date
+	}
+	if (!ok) v.add("entry_date", "must be a date (YYYY-MM-DD)");
+	else if (dateYear(d) < 1900 || dateYear(d) > 9999) v.add("entry_date", "year must be between 1900 and 9999");
+	else if (d === orig.entry_date) v.add("entry_date", "is the same as before");
+	v.throwIfAny();
+	await withTx(app.db, {}, async (tx) => {
+		const ticked = await queryRow<{ statement_date: string; status: string }>(
+			tx,
+			`SELECT r.statement_date, r.status
+			   FROM reconciliation_lines l JOIN transactions t ON t.id = l.transaction_id JOIN reconciliations r ON r.id = l.reconciliation_id
+			  WHERE t.journal_entry_id = $1 LIMIT 1`,
+			[id],
+		);
+		if (ticked) {
+			throw new ConflictError(
+				`a line of this entry is ticked on the reconciliation to ${ticked.statement_date}; ${ticked.status === "finished" ? "undo that reconciliation" : "untick it there"} before changing its date`,
+			);
+		}
+		await tx.query(`SELECT set_config('ledger.amend_by', $1, true), set_config('ledger.amend_reason', $2, true)`, [String(actorId ?? "system"), reason]);
+		await tx.query(`UPDATE journal_entries SET entry_date = $2 WHERE id = $1`, [id, d]);
+	});
+	return getJournalEntry(app, id);
+}
+
+/** Every change to an entry's date, oldest first. */
+async function entryDateChanges(db: Queryable, id: bigint): Promise<EntryDateChange[]> {
+	const rows = await queryRows<{ id: bigint; old_date: string; new_date: string; reason: string; username: string | null; changed_at: Date }>(
+		db,
+		`SELECT c.id, c.old_date, c.new_date, c.reason, u.username, c.changed_at
+		   FROM journal_entry_date_changes c LEFT JOIN users u ON u.id = c.changed_by
+		  WHERE c.journal_entry_id = $1 ORDER BY c.id`,
+		[id],
+	);
+	return rows.map((r) => ({ id: Number(r.id), old_date: r.old_date, new_date: r.new_date, reason: r.reason, changed_by: r.username, changed_at: r.changed_at }));
+}
+
 export async function getJournalEntry(app: App, id: bigint): Promise<JournalEntry> {
 	const row = await queryRow<EntryRow>(app.db, ENTRY_SELECT + ` WHERE e.id = $1`, [id]);
 	if (!row) throw new NotFoundError();
 	const e = toEntry(row);
 	await attachLines(app, [e]);
 	e.changes = e.amended ? await entryChanges(app.db, id) : [];
+	e.moves = await entryMoves(app.db, id);
+	e.date_changes = await entryDateChanges(app.db, id);
 	return e;
 }
 
@@ -622,9 +678,11 @@ async function attachLines(app: App, entries: JournalEntry[]): Promise<void> {
 		currency: Currency;
 		amount: bigint;
 		memo: string;
+		unreconciled: boolean;
 	}>(
 		app.db,
-		`SELECT t.journal_entry_id, t.id, t.line_number, a.code, a.name, t.currency, t.amount, t.memo
+		`SELECT t.journal_entry_id, t.id, t.line_number, a.code, a.name, t.currency, t.amount, t.memo,
+		        (a.module_id = 'ledger' AND a.module_key = 'unreconciled') AS unreconciled
 		   FROM transactions t
 		   JOIN accounts a ON a.id = t.account_id
 		  WHERE t.journal_entry_id = ANY($1)
@@ -645,6 +703,7 @@ async function attachLines(app: App, entries: JournalEntry[]): Promise<void> {
 			credit_cents: credit,
 			memo: r.memo,
 		};
+		if (r.unreconciled) line.unreconciled = true;
 		byId.get(entryId)!.lines.push(line);
 		let t = totals.get(entryId);
 		if (!t) totals.set(entryId, (t = new Map()));

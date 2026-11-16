@@ -534,6 +534,95 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /journal-entries/{entryId}/lines/{lineNumber}/account:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+      - { name: lineNumber, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    patch:
+      tags: [Journal Entries]
+      operationId: moveJournalLine
+      summary: Move a line out of the Unreconciled account to another account
+      description: |
+        Only a line sitting in Ledger's Unreconciled clearing account can move,
+        to an active account in the same currency (back to the bank once it
+        clears, or to where it belongs). Every move is logged on the entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [account_code]
+              properties:
+                account_code: { $ref: '#/components/schemas/AccountCode' }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Moved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JournalEntry' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /journal-entries/{entryId}/date:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    patch:
+      tags: [Journal Entries]
+      operationId: changeJournalEntryDate
+      summary: Change the date of a posted entry; every change is logged
+      description: Refused (409) while one of its lines is ticked on a reconciliation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [entry_date]
+              properties:
+                entry_date: { type: string, format: date }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JournalEntry' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /unreconciled:
+    get:
+      tags: [Reconciliation]
+      operationId: getUnreconciled
+      summary: What sits in the Unreconciled clearing accounts
+      responses:
+        '200':
+          description: Each Unreconciled account with lines in it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [code, name, currency, balance_cents, line_count]
+                      properties:
+                        code: { $ref: '#/components/schemas/AccountCode' }
+                        name: { type: string }
+                        currency: { $ref: '#/components/schemas/Currency' }
+                        balance_cents: { $ref: '#/components/schemas/SignedCents' }
+                        line_count: { type: integer }
+
   /journal-entries/{entryId}/reverse:
     parameters:
       - $ref: '#/components/parameters/EntryId'
@@ -805,6 +894,12 @@ paths:
       operationId: finishReconciliation
       summary: Finish (the difference must be 0, or posted to Unreconciled)
       description: |
+        The account's lines up to the statement date that weren't ticked move
+        to Unreconciled (each gets a dashboard to-do, and a danger notice stays
+        up until Unreconciled is back at zero); undoing the reconciliation
+        moves back those still there. Lines of reversed entries and reversals
+        stay put.
+
         With a difference left, finishing is refused unless post_difference is
         true: then the difference is posted between the account and Ledger's
         Unreconciled clearing account (in the account's currency) and ticked.
@@ -2783,11 +2878,42 @@ components:
         debit_cents: { $ref: '#/components/schemas/Cents' }
         credit_cents: { $ref: '#/components/schemas/Cents' }
         memo: { type: string }
+        unreconciled: { type: boolean, description: "Set when the line sits in Ledger's Unreconciled clearing account (it can be moved on)" }
     JournalEntry:
       type: object
       required: [id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, entity, posted_at, totals, lines, links, amended]
       properties:
         amended: { type: boolean, description: Whether any of its amounts were changed after it was posted }
+        date_changes:
+          type: array
+          description: Every change to its date, oldest first (only when one entry is fetched)
+          items:
+            type: object
+            required: [id, old_date, new_date, reason, changed_by, changed_at]
+            properties:
+              id: { type: integer }
+              old_date: { type: string, format: date }
+              new_date: { type: string, format: date }
+              reason: { type: string }
+              changed_by: { type: string, nullable: true }
+              changed_at: { type: string, format: date-time }
+        moves:
+          type: array
+          description: Every move of one of its lines to another account, oldest first (only when one entry is fetched)
+          items:
+            type: object
+            required: [id, line_number, from_code, from_name, to_code, to_name, reconciliation_id, reason, changed_by, changed_at]
+            properties:
+              id: { type: integer }
+              line_number: { type: integer }
+              from_code: { type: string }
+              from_name: { type: string }
+              to_code: { type: string }
+              to_name: { type: string }
+              reconciliation_id: { type: integer, nullable: true, description: The reconciliation that moved it, if one did }
+              reason: { type: string }
+              changed_by: { type: string, nullable: true }
+              changed_at: { type: string, format: date-time }
         changes:
           type: array
           description: Every change made to its amounts, oldest first (only when one entry is fetched)

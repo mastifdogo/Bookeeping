@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { afterNavigate, goto, invalidateAll } from '$app/navigation';
 	import { api } from '#lib/api/client.ts';
+	import { formatCents } from '#lib/money.ts';
 	import { ICONS, arrangeNav, pageTitle } from '#lib/nav.ts';
 	import NavIcon from '#lib/components/NavIcon.svelte';
 	import SearchPalette from '#lib/components/SearchPalette.svelte';
@@ -299,6 +300,14 @@
 					<div class="pane-body">
 						{#if p.id === MAIN_ID}
 							<main>
+								{#if data.unreconciled?.length}
+									<div class="notice error unrec" role="alert">
+										<strong>Danger: unreconciled transactions.</strong>
+										{#each data.unreconciled as u, i (u.code)}{i ? '; ' : ' '}{u.line_count} in
+											<a href="/accounts/{encodeURIComponent(u.code)}">{u.name}</a> ({formatCents(u.balance_cents)}
+											{u.currency}){/each}. Move each to the right account until it is back at zero.
+									</div>
+								{/if}
 								{@render children()}
 							</main>
 						{:else}
@@ -511,6 +520,9 @@
 		margin: 0;
 		max-width: 1200px;
 		width: 100%;
+	}
+	.unrec {
+		margin-bottom: 1rem;
 	}
 	main.embedded {
 		max-width: none;

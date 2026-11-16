@@ -322,7 +322,12 @@ with a purpose, not a way around double entry.
 ## Entry amounts can change
 
 Since Ledger 0.19.5 a person can change the amounts of a posted entry on its
-page; the change is logged and the entry reads `amended: true`. Modules
+page; the change is logged and the entry reads `amended: true`. Since 0.20.2
+a person can also change an entry's date (logged in `date_changes`), and
+finishing a reconciliation moves the reconciled account's unticked lines to
+Ledger's Unreconciled clearing account until a person moves each on (logged
+in `moves`): an entry a module posted to the bank may, for a while, have
+that line in Unreconciled instead. Modules
 can't do this, but they see the result: an entry a module posted may no
 longer carry the amounts it posted. Where the figure matters (an invoice's
 balance, a bill marked paid), read it from the entry

@@ -1,6 +1,7 @@
 // HTTP layer. Paths match api/openapi.yaml under /api/v1; everything else
 // serves the built SvelteKit frontend.
 
+import { moveUnreconciledLine, unreconciledSummary } from "./unreconciled.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import type { App } from "./app.ts";
@@ -50,7 +51,7 @@ import {
 	writeUpdateRepo,
 } from "./update.ts";
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listCurrencies, updateAccount } from "./accounts.ts";
-import { amendEntryAmounts, createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry, type EntryFilter } from "./ledger.ts";
+import { amendEntryAmounts, changeEntryDate, createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry, type EntryFilter } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { CSV_FILENAME_RE, MAX_FILE_BYTES, exportGeneralLedger, listCsvFiles, openCsvFile, saveUploadedCsv } from "./files.ts";
 import { importJournalEntries } from "./import.ts";
@@ -874,6 +875,39 @@ async function handleAmendJournalEntry(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await amendEntryAmounts(c.app, id, input, c.user!.id));
 }
 
+async function handleMoveEntryLine(c: Ctx): Promise<void> {
+	const id = pathId(c, "entryId");
+	const n = Number(c.params.lineNumber);
+	if (!Number.isSafeInteger(n) || n < 1) throw new NotFoundError();
+	const body = await decodeBody(c, true, (v) => {
+		if (!v || typeof v !== "object" || Array.isArray(v)) throw new DecodeError("json: body must be an object");
+		const o = v as Record<string, unknown>;
+		for (const k of Object.keys(o)) if (k !== "account_code" && k !== "reason") throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+		if (typeof o.account_code !== "string") throw new DecodeError("json: account_code must be text");
+		if (o.reason !== undefined && typeof o.reason !== "string") throw new DecodeError("json: reason must be text");
+		return { account_code: o.account_code, reason: o.reason as string | undefined };
+	});
+	await moveUnreconciledLine(c.app, id, n, body, c.user!.id);
+	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
+}
+
+async function handleChangeEntryDate(c: Ctx): Promise<void> {
+	const id = pathId(c, "entryId");
+	const body = await decodeBody(c, true, (v) => {
+		if (!v || typeof v !== "object" || Array.isArray(v)) throw new DecodeError("json: body must be an object");
+		const o = v as Record<string, unknown>;
+		for (const k of Object.keys(o)) if (k !== "entry_date" && k !== "reason") throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+		if (typeof o.entry_date !== "string") throw new DecodeError("json: entry_date must be text");
+		if (o.reason !== undefined && typeof o.reason !== "string") throw new DecodeError("json: reason must be text");
+		return { entry_date: o.entry_date, reason: o.reason as string | undefined };
+	});
+	writeJSON(c.res, 200, await changeEntryDate(c.app, id, body, c.user!.id));
+}
+
+async function handleUnreconciled(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, { data: await unreconciledSummary(c.app.db) });
+}
+
 async function handleTrialBalance(c: Ctx): Promise<void> {
 	const asOf = queryDate(c.query, "as_of");
 	const currency = queryCurrency(c.query);
@@ -950,7 +984,7 @@ async function handleFinishReconciliation(c: Ctx): Promise<void> {
 }
 
 async function handleUndoReconciliation(c: Ctx): Promise<void> {
-	writeJSON(c.res, 200, await undoReconciliation(c.app, pathId(c, "reconciliationId")));
+	writeJSON(c.res, 200, await undoReconciliation(c.app, pathId(c, "reconciliationId"), c.user!.id));
 }
 
 async function handleDeleteReconciliation(c: Ctx): Promise<void> {
@@ -2081,6 +2115,9 @@ const ROUTES: Route[] = [
 	route("GET", "/journal-entries/:entryId", true, handleGetJournalEntry),
 	route("POST", "/journal-entries/:entryId/reverse", true, handleReverseJournalEntry),
 	route("PATCH", "/journal-entries/:entryId/amounts", true, handleAmendJournalEntry),
+	route("PATCH", "/journal-entries/:entryId/lines/:lineNumber/account", true, handleMoveEntryLine),
+	route("PATCH", "/journal-entries/:entryId/date", true, handleChangeEntryDate),
+	route("GET", "/unreconciled", true, handleUnreconciled),
 
 	route("GET", "/search", true, handleSearch),
 	route("GET", "/dashboard", true, handleGetDashboard),

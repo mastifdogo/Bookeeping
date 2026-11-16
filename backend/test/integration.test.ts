@@ -1100,10 +1100,33 @@ test("reconciliation: debits and credits, and finishing with a difference posts 
 	const posted = d.lines.find((l: any) => l.description.startsWith("Reconciliation difference"));
 	assert.deepEqual([posted.entry_date, posted.amount_cents, posted.cleared], ["2026-09-30", -1000, true]);
 	assert.deepEqual(d.totals.cleared, { debit_count: 1, debit_cents: 100000, credit_count: 2, credit_cents: 3500 });
-	// The cheque not on the statement stays unticked for the next one.
-	assert.equal(d.lines.find((l: any) => l.description === "Cheque not cashed yet").cleared, false);
+	// The cheque not on the statement isn't ticked: its line moves from the bank to Unreconciled, with a to-do and a danger notice.
+	assert.equal(d.lines.find((l: any) => l.description === "Cheque not cashed yet"), undefined);
 	const unrec = (await call("GET", "/accounts?include_inactive=true")).json().data.find((a: any) => a.module_id === "ledger");
-	assert.deepEqual([unrec.code, unrec.name, unrec.kind, unrec.module_key, unrec.hidden, unrec.balance_cents], ["CLR-LEDGER-UNRECONCILED", "Unreconciled", "clearing", "unreconciled", true, 1000]);
+	assert.deepEqual([unrec.code, unrec.name, unrec.kind, unrec.module_key, unrec.hidden, unrec.balance_cents], ["CLR-LEDGER-UNRECONCILED", "Unreconciled", "clearing", "unreconciled", true, 1000 - 4000]);
+	assert.equal((await call("GET", "/accounts/1000")).json().balance_cents, 100000 - 2500 - 1000);
+	const cheque = (await call("GET", "/journal-entries?limit=50")).json().data.find((e: any) => e.description === "Cheque not cashed yet");
+	let je = (await call("GET", `/journal-entries/${cheque.id}`)).json();
+	assert.deepEqual(je.lines.map((l: any) => [l.account_code, l.unreconciled ?? false]), [["6100", false], [unrec.code, true]]);
+	assert.deepEqual(je.moves.map((m: any) => [m.line_number, m.from_code, m.to_code, m.reconciliation_id, m.changed_by]), [[2, "1000", unrec.code, id, "tester"]]);
+	let dash = (await call("GET", "/dashboard")).json();
+	const openTodos = () => dash.todos.filter((x: any) => x.source === "ledger" && x.key.startsWith("unreconciled-") && !x.closed_at);
+	assert.equal(openTodos().length, 2);
+	assert.ok(openTodos().every((x: any) => x.level === "danger"));
+	assert.ok(openTodos().some((x: any) => x.link === `/journal/${cheque.id}` && /Moved from 1000 Chequing/.test(x.body)));
+	const notice = () => dash.notifications.find((x: any) => x.source === "ledger" && x.key === "unreconciled");
+	assert.equal(notice()?.level, "danger");
+	assert.match(notice().title, /Danger: unreconciled transactions/);
+	assert.deepEqual((await call("GET", "/unreconciled")).json().data, [{ code: unrec.code, name: "Unreconciled", currency: "CAD", balance_cents: -3000, line_count: 2 }]);
+	// A line ticked on a reconciliation can't move, and only lines in Unreconciled can be moved this way.
+	expectStatus(await call("PATCH", `/journal-entries/${cheque.id}/lines/1/account`, { account_code: "1000" }), 409);
+	expectStatus(await call("PATCH", `/journal-entries/${cheque.id}/lines/2/account`, { account_code: "nope" }), 422);
+	// The cheque clears in October: it moves back to the bank, and its to-do closes.
+	r = await call("PATCH", `/journal-entries/${cheque.id}/lines/2/account`, { account_code: "1000", reason: "cashed in October" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().lines.map((l: any) => l.account_code), ["6100", "1000"]);
+	dash = (await call("GET", "/dashboard")).json();
+	assert.equal(openTodos().length, 1);
 
 	// Next statement: two lines the AI read aren't in the books and make up exactly the difference, so each gets its own entry.
 	r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-10-31", statement_balance_cents: 91800 });
@@ -1140,6 +1163,41 @@ test("reconciliation: debits and credits, and finishing with a difference posts 
 		],
 	);
 	assert.equal((await call("GET", `/accounts/${unrec.code}`)).json().balance_cents, 1700);
+
+	// Moving everything out of Unreconciled closes the to-dos and the notice.
+	for (const e of (await call("GET", `/journal-entries?account_code=${unrec.code}&limit=50`)).json().data) {
+		const n = e.lines.find((l: any) => l.account_code === unrec.code).line_number;
+		expectStatus(await call("PATCH", `/journal-entries/${e.id}/lines/${n}/account`, { account_code: "6100" }), 200);
+	}
+	dash = (await call("GET", "/dashboard")).json();
+	assert.deepEqual([openTodos().length, notice()], [0, undefined]);
+	assert.deepEqual((await call("GET", "/unreconciled")).json().data, []);
+
+	// Undoing a reconciliation brings back the lines it moved.
+	expectStatus(await call("POST", "/journal-entries", entry("2026-11-10", "Cheque 13", dr("6100", 3000), cr("1000", 3000))), 201);
+	r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-11-30", statement_balance_cents: 91800 });
+	const id3 = r.json().reconciliation.id;
+	expectStatus(await call("POST", `/reconciliations/${id3}/finish`), 200);
+	assert.equal((await call("GET", `/accounts/${unrec.code}`)).json().balance_cents, -3000);
+	r = await call("POST", `/reconciliations/${id3}/undo`);
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().lines.map((l: any) => [l.description, l.cleared]), [["Cheque 13", false]]);
+	assert.equal((await call("GET", `/accounts/${unrec.code}`)).json().balance_cents, 0);
+	dash = (await call("GET", "/dashboard")).json();
+	assert.equal(notice(), undefined);
+
+	// An entry's date can change (logged with the old and new date), unless a line of it is ticked on a reconciliation.
+	const c13 = (await call("GET", "/journal-entries?limit=50")).json().data.find((e: any) => e.description === "Cheque 13");
+	r = await call("PATCH", `/journal-entries/${c13.id}/date`, { entry_date: "2026-11-12", reason: "dated the 12th" });
+	expectStatus(r, 200);
+	assert.equal(r.json().entry_date, "2026-11-12");
+	assert.deepEqual(r.json().date_changes.map((x: any) => [x.old_date, x.new_date, x.reason, x.changed_by]), [["2026-11-10", "2026-11-12", "dated the 12th", "tester"]]);
+	expectStatus(await call("PATCH", `/journal-entries/${c13.id}/date`, { entry_date: "2026-11-12" }), 422);
+	expectStatus(await call("PATCH", `/journal-entries/${c13.id}/date`, { entry_date: "2026-02-30" }), 422);
+	await call("POST", `/reconciliations/${id3}/cleared`, { clear: [r.json().lines.find((l: any) => l.account_code === "1000").id] });
+	r = await call("PATCH", `/journal-entries/${c13.id}/date`, { entry_date: "2026-11-13" });
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /ticked on the reconciliation to 2026-11-30; untick it there/);
 
 	// Clearing accounts are hidden unless shown; other accounts aren't.
 	r = await call("POST", "/accounts", { code: "1950", name: "Transfers in transit", type: "asset", currency: "CAD", description: "", kind: "clearing" });
