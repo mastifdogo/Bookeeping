@@ -73,6 +73,17 @@
 		if (data.preselect && !accountCode) accountCode = data.preselect;
 	});
 
+	// Starting more than a month (and a week) after the account's last reconciled statement: one may have been skipped.
+	let gap = $derived.by(() => {
+		const last = byAccount.get(accountCode)?.last?.statement_date;
+		if (!last || !statementDate) return null;
+		const limit = new Date(`${last}T00:00:00Z`);
+		limit.setUTCMonth(limit.getUTCMonth() + 1);
+		limit.setUTCDate(limit.getUTCDate() + 7);
+		const days = Math.round((Date.parse(`${statementDate}T00:00:00Z`) - Date.parse(`${last}T00:00:00Z`)) / 86400000);
+		return statementDate > limit.toISOString().slice(0, 10) ? { last, days } : null;
+	});
+
 	function startFor(a: Account) {
 		accountCode = a.code;
 		form?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -180,6 +191,12 @@
 		</label>
 		<button disabled={busy || !accountCode}>Start</button>
 	</div>
+	{#if gap}
+		<p class="notice warn small" role="alert" style="margin-bottom:0">
+			<strong>Gap since the last reconciliation.</strong> This account was last reconciled to {gap.last}, {gap.days} days before {statementDate}. A
+			statement in between may have been skipped.
+		</p>
+	{/if}
 	<p class="muted small" style="margin-bottom:0">
 		For a credit card or loan, enter the amount owed as a positive number. Reading a statement uses the LLM connection for
 		images and documents (Settings → LLM API); what it ticks is a first pass that you check before finishing.

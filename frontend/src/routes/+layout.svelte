@@ -22,6 +22,20 @@
 		document.documentElement.classList.toggle('root', data.user?.root === true);
 	});
 
+	// The user's background picture (Settings → Background), under a veil of the page colour so text stays readable.
+	$effect(() => {
+		const el = document.documentElement;
+		const bg = data.background;
+		el.classList.toggle('has-bg', !!bg);
+		if (bg) {
+			el.style.setProperty('--bg-image', `url("/api/v1/settings/background/image?v=${bg.version}")`);
+			el.style.setProperty('--bg-dim', `${bg.dim}%`);
+		} else {
+			el.style.removeProperty('--bg-image');
+			el.style.removeProperty('--bg-dim');
+		}
+	});
+
 	// Root console beside the page: open or closed and its width, remembered on this device.
 	let consoleOn = $state(false);
 	let consoleWidth = $state(42);

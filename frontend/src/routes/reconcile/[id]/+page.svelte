@@ -226,6 +226,13 @@
 
 <ErrorNotice {error} />
 
+{#if d.gap_warning && open}
+	<div class="notice warn" role="alert">
+		<strong>Gap since the last reconciliation.</strong> This account was last reconciled to {d.previous_statement_date}, {d.gap_days} days before this
+		statement ({rec.statement_date}). A statement in between may have been skipped; reconcile it first, or carry on if this one covers the whole time.
+	</div>
+{/if}
+
 {#if rec.document_url === null}
 	{#if open}
 		<div class="card attach">

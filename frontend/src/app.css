@@ -292,6 +292,11 @@ tfoot td {
 	background: var(--danger-bg);
 	color: var(--danger);
 }
+.notice.warn {
+	background: var(--warn-bg);
+	color: var(--text);
+	border-color: var(--warn);
+}
 .notice ul {
 	margin: 0.4rem 0 0;
 	padding-left: 1.2rem;
@@ -370,4 +375,12 @@ html.root .tabs a[aria-current='page'] {
 	html.root .tabs a[aria-current='page'] {
 		border-bottom-color: #fde8e8;
 	}
+}
+
+/* A background picture (Settings → Background). Root mode's red wins over it. */
+html.has-bg:not(.root) body {
+	background:
+		linear-gradient(color-mix(in srgb, var(--bg) var(--bg-dim, 70%), transparent), color-mix(in srgb, var(--bg) var(--bg-dim, 70%), transparent)),
+		var(--bg-image) center / cover fixed no-repeat,
+		var(--bg);
 }

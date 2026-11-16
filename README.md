@@ -490,6 +490,10 @@ match a statement line (same amount, close in date). Each ticked line shows
 the statement line it was paired with, and statement lines missing from the
 books are listed. The AI finishes nothing: you check the ticks against the
 statement and press Finish, which takes you back to the Reconcile page.
+Starting a reconciliation more than a month (and a week) after the account's
+last reconciled statement shows a warning, on the start form and on the
+reconciliation itself: a statement in between may have been skipped.
+
 The Reconcile page and its account dropdown list bank accounts and credit
 cards (accounts tagged chequing, savings or credit card); **Add account…**
 pulls any other account into the list. While a reconciliation is in
@@ -520,6 +524,18 @@ it beside** the current page. Panes fill the window's height and sit side by
 side: drag a pane's header onto another to move it, drag the edge between two
 to resize, ✕ to close, or ⤢ to open it full width. Each browser remembers its
 panes.
+
+### Background picture
+
+**Settings → Background** puts a picture behind Ledger's pages, searched
+on [Wallhaven](https://wallhaven.cc). Each person chooses their own. The
+server asks Wallhaven (safe-for-work pictures only), downloads the picture
+you choose once and serves it itself (kept under `.backgrounds` in the data
+directory), so pages don't load anything from Wallhaven. A slider sets how
+much of the page colour is laid over the picture to keep text readable. In
+root mode the red background takes its place. The server needs to reach
+`wallhaven.cc` and `w.wallhaven.cc`; `LEDGER_WALLHAVEN_API_KEY`, if set, is
+sent with searches.
 
 ### Automatic updates
 

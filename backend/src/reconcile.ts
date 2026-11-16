@@ -91,6 +91,11 @@ export interface ReconciliationDetail {
 	/** Debits and credits of the lines ticked on this statement, and of those not ticked. */
 	totals: { cleared: SideTotals; uncleared: SideTotals };
 	reading: StatementReading | null;
+	/** The account's last finished statement before this one, and how far apart they are. */
+	previous_statement_date: string | null;
+	gap_days: number | null;
+	/** More than a month (and a week) since the last reconciled statement: one may have been skipped. */
+	gap_warning: boolean;
 }
 
 const SELECT = `
@@ -206,6 +211,14 @@ export async function getReconciliation(app: App, id: bigint, db: Queryable = ap
 			cleared: l.cleared,
 		};
 	});
+	const prev = await queryRow<{ date: string; days: number; late: boolean }>(
+		db,
+		`SELECT p.statement_date AS date, ($2::date - p.statement_date)::int AS days, (p.statement_date + interval '1 month 7 days')::date < $2::date AS late
+		   FROM reconciliations p
+		  WHERE p.account_id = $1 AND p.status = 'finished' AND p.id <> $3 AND p.statement_date <= $2
+		  ORDER BY p.statement_date DESC, p.id DESC LIMIT 1`,
+		[r.account_id, r.statement_date, id],
+	);
 	const side = (ls: ReconciliationLine[]): SideTotals => ({
 		debit_count: ls.filter((l) => l.debit_cents > 0n).length,
 		debit_cents: ls.reduce((t, l) => t + l.debit_cents, 0n),
@@ -220,6 +233,9 @@ export async function getReconciliation(app: App, id: bigint, db: Queryable = ap
 		lines: out,
 		totals: { cleared: side(out.filter((l) => l.cleared)), uncleared: side(out.filter((l) => !l.cleared)) },
 		reading: (await queryRow<{ reading: StatementReading | null }>(db, `SELECT reading FROM reconciliations WHERE id = $1`, [id]))?.reading ?? null,
+		previous_statement_date: prev?.date ?? null,
+		gap_days: prev?.days ?? null,
+		gap_warning: prev?.late === true,
 	};
 }
 

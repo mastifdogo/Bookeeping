@@ -1,6 +1,7 @@
 // HTTP layer. Paths match api/openapi.yaml under /api/v1; everything else
 // serves the built SvelteKit frontend.
 
+import { backgroundImage, chooseBackground, dimBackground, getBackground, removeBackground, searchWallhaven } from "./wallhaven.ts";
 import { MAX_CENTS } from "./money.ts";
 import { closeSession, consoleOpen, emit, installConsole, listen, onSessionClose, withConsoleContext } from "./console.ts";
 import { leaveRootMode, listRootActions, previewAccountDelete, requireRoot, reverseRootAction, RootNotIntactError, rootDeleteAccount, rootDeleteEntry, rootDeleteLine, rootDeleteUser, rootProblems, rootRenameUser, rootUpdateAccount, rootUpdateLine } from "./root.ts";
@@ -765,6 +766,34 @@ async function handleGetSidebar(c: Ctx): Promise<void> {
 async function handlePutSidebar(c: Ctx): Promise<void> {
 	const items = await decodeBody(c, true, decodeSidebar);
 	writeJSON(c.res, 200, await putSidebar(c.app, c.user!.id, items));
+}
+
+// Backgrounds from Wallhaven (wallhaven.ts): each user's own.
+
+async function handleWallhavenSearch(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await searchWallhaven(c.query.get("q") ?? "", Number(c.query.get("page") ?? "1"), c.query.get("sorting") || "toplist"));
+}
+
+async function handleGetBackground(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, { background: await getBackground(c.app, c.user!.id) });
+}
+
+async function handlePutBackground(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, objectBody(["id", "dim"]));
+	const num = (v: unknown) => (v === undefined ? undefined : Number(typeof v === "object" && v !== null ? (v as { source?: unknown }).source : v));
+	const dim = num(b.dim);
+	writeJSON(c.res, 200, { background: typeof b.id === "string" ? await chooseBackground(c.app, c.user!.id, { id: b.id, dim }) : await dimBackground(c.app, c.user!.id, dim) });
+}
+
+async function handleDeleteBackground(c: Ctx): Promise<void> {
+	await removeBackground(c.app, c.user!.id);
+	c.res.writeHead(204).end();
+}
+
+async function handleBackgroundImage(c: Ctx): Promise<void> {
+	const img = await backgroundImage(c.app, c.user!.id);
+	c.res.writeHead(200, { "Content-Type": img.type, "Content-Length": img.data.length, "Cache-Control": "private, max-age=31536000, immutable" });
+	c.res.end(img.data);
 }
 
 async function handleChangePassword(c: Ctx): Promise<void> {
@@ -2227,6 +2256,11 @@ const ROUTES: Route[] = [
 	route("PATCH", "/organizations/:orgId", "server", handleUpdateOrg),
 	route("POST", "/auth/password", "viewer", handleChangePassword),
 	route("GET", "/settings/sidebar", true, handleGetSidebar),
+	route("GET", "/settings/background", true, handleGetBackground),
+	route("PUT", "/settings/background", "viewer", handlePutBackground),
+	route("DELETE", "/settings/background", "viewer", handleDeleteBackground),
+	route("GET", "/settings/background/image", true, handleBackgroundImage),
+	route("GET", "/wallhaven/search", true, handleWallhavenSearch),
 	route("GET", "/users", "users", handleListUsers),
 	route("POST", "/users", "users", handleCreateUser),
 	route("PATCH", "/users/:username", "users", handleUpdateUser),

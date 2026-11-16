@@ -1296,6 +1296,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallhaven/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Wallhaven for a background (safe-for-work pictures only; the server asks Wallhaven) */
+        get: operations["searchWallhaven"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/background": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The user's background picture, if they chose one */
+        get: operations["getBackground"];
+        /** Choose a Wallhaven picture (the server downloads and keeps it), or change how much the page colour covers it */
+        put: operations["putBackground"];
+        post?: never;
+        /** Remove the background picture */
+        delete: operations["deleteBackground"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/root-actions": {
         parameters: {
             query?: never;
@@ -1916,6 +1952,18 @@ export interface components {
                 kind: components["schemas"]["OrgKind"];
             };
             organizations: components["schemas"]["OrgAccess"][];
+        };
+        BackgroundSetting: {
+            background: {
+                id: string;
+                resolution: string;
+                /** @description The picture's page on Wallhaven */
+                url: string;
+                /** @description How much of the page colour is laid over the picture, percent */
+                dim: number;
+                /** Format: int64 */
+                version: number;
+            } | null;
         };
         RootAction: {
             id: number;
@@ -2596,6 +2644,15 @@ export interface components {
             cleared: boolean;
         };
         ReconciliationDetail: {
+            /**
+             * Format: date
+             * @description The account's last finished statement before this one
+             */
+            previous_statement_date: string | null;
+            /** @description Days between that statement and this one */
+            gap_days: number | null;
+            /** @description More than a month and a week since the last reconciled statement: one may have been skipped */
+            gap_warning: boolean;
             reconciliation: components["schemas"]["Reconciliation"];
             /** @description Cleared on earlier statements */
             opening_balance_cents: components["schemas"]["SignedCents"];
@@ -5551,6 +5608,109 @@ export interface operations {
                 };
             };
             403: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    searchWallhaven: {
+        parameters: {
+            query?: {
+                q?: string;
+                page?: number;
+                sorting?: "toplist" | "relevance" | "date_added" | "views" | "favorites" | "random";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pictures */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        page: number;
+                        last_page: number;
+                        data: {
+                            id: string;
+                            thumb: string;
+                            resolution: string;
+                            url: string;
+                        }[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getBackground: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Background */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundSetting"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putBackground: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description A Wallhaven picture's id; leave out to change only dim */
+                    id?: string;
+                    dim?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Background */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundSetting"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteBackground: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             default: components["responses"]["Error"];
         };
     };

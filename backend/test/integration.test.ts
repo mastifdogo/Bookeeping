@@ -1034,9 +1034,14 @@ test("reconciliation", async (t) => {
 	r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-10-31", statement_balance_cents: 96500 });
 	expectStatus(r, 201);
 	d = r.json();
+	// A month after the last statement: no gap warning.
+	assert.deepEqual([d.previous_statement_date, d.gap_days, d.gap_warning], ["2026-09-30", 31, false]);
 	assert.equal(d.opening_balance_cents, 97500);
 	assert.equal(d.lines.length, 1);
 	assert.equal(d.difference_cents, -1000);
+	// Moved two months on, a statement may have been skipped: a warning.
+	r = await call("PATCH", `/reconciliations/${d.reconciliation.id}`, { statement_date: "2026-11-30" });
+	assert.deepEqual([r.json().previous_statement_date, r.json().gap_days, r.json().gap_warning], ["2026-09-30", 61, true]);
 	// The earlier one can't be undone while this one is open; delete this one, then undo.
 	expectStatus(await call("POST", `/reconciliations/${id}/undo`), 409);
 	expectStatus(await call("DELETE", `/reconciliations/${d.reconciliation.id}`), 204);
@@ -4113,4 +4118,69 @@ test("root mode: delete anything, unbalanced entries while working, and leaving 
 	await sweepRootSessions(app);
 	assert.equal((await call("GET", `/journal-entries/${e1.id}`)).json().lines.length, 2);
 	assert.deepEqual(await balances(), { ...before, "6100": 3700, "1000": before["1000"] - 500 });
+});
+
+test("a background from Wallhaven: searched by the server, downloaded once, served by Ledger, each user's own", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call, request, token } = ta;
+	const { createServer } = await import("node:http");
+	const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+	const asked: string[] = [];
+	let base = "";
+	const wh = createServer((req, res) => {
+		asked.push(req.url ?? "");
+		const json = (o: unknown) => res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(o));
+		const pic = (id: string, purity = "sfw") => ({ id, purity, resolution: "1920x1080", url: `${base}/w/${id}`, path: `${base}/full/${id}.png`, thumbs: { large: `${base}/th/${id}.jpg`, small: `${base}/th/s-${id}.jpg` } });
+		if (req.url?.startsWith("/api/v1/search")) return json({ data: [pic("abc123"), pic("nsfw01", "nsfw"), { ...pic("evil01"), thumbs: { large: "https://elsewhere.example/x.jpg" } }], meta: { current_page: 2, last_page: 9 } });
+		if (req.url === "/api/v1/w/abc123") return json({ data: pic("abc123") });
+		if (req.url === "/api/v1/w/nsfw01") return json({ data: pic("nsfw01", "nsfw") });
+		if (req.url === "/full/abc123.png") return res.writeHead(200, { "Content-Type": "image/png" }).end(png);
+		res.writeHead(404).end();
+	});
+	await new Promise<void>((r) => wh.listen(0, "127.0.0.1", r));
+	t.after(() => wh.close());
+	base = `http://127.0.0.1:${(wh.address() as any).port}`;
+	process.env.LEDGER_WALLHAVEN_URL = base;
+	t.after(() => delete process.env.LEDGER_WALLHAVEN_URL);
+
+	// Searching: safe-for-work only is asked for, and anything else that comes back is left out.
+	let r = await call("GET", "/wallhaven/search?q=mountains&page=2");
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { data: [{ id: "abc123", thumb: `${base}/th/abc123.jpg`, resolution: "1920x1080", url: `${base}/w/abc123` }], page: 2, last_page: 9 });
+	const sent = new URL(asked[0]!, base).searchParams;
+	assert.deepEqual([sent.get("q"), sent.get("purity"), sent.get("page"), sent.get("sorting")], ["mountains", "100", "2", "relevance"]);
+	expectStatus(await call("GET", "/wallhaven/search?sorting=worst"), 422);
+
+	// Nothing chosen yet.
+	assert.equal((await call("GET", "/settings/background")).json().background, null);
+	expectStatus(await call("GET", "/settings/background/image"), 404);
+	// Choosing one downloads it to the server.
+	r = await call("PUT", "/settings/background", { id: "abc123", dim: 60 });
+	expectStatus(r, 200);
+	const bg = r.json().background;
+	assert.deepEqual([bg.id, bg.resolution, bg.dim, bg.url], ["abc123", "1920x1080", 60, `${base}/w/abc123`]);
+	r = await call("GET", "/settings/background/image");
+	assert.deepEqual([r.status, r.headers["content-type"], r.body.equals(png)], [200, "image/png", true]);
+	// Only the veil changes; the picture isn't fetched again.
+	const n = asked.length;
+	r = await call("PUT", "/settings/background", { dim: 85 });
+	assert.deepEqual([r.json().background.dim, r.json().background.version, asked.length], [85, bg.version, n]);
+	expectStatus(await call("PUT", "/settings/background", { dim: 150 }), 422);
+	expectStatus(await call("PUT", "/settings/background", { id: "../etc" }), 422);
+	expectStatus(await call("PUT", "/settings/background", { id: "nsfw01" }), 422);
+	expectStatus(await call("PUT", "/settings/background", { id: "gone99" }), 404);
+
+	// Another user has none of it.
+	expectStatus(await call("POST", "/users", { username: "dana", password: "correct horse battery 4", role: "viewer" }), 201);
+	r = await request("POST", "/api/v1/auth/login", { body: { username: "dana", password: "correct horse battery 4" } });
+	const dana = `${SESSION_COOKIE}=${sessionFrom(r).value}`;
+	assert.equal((await request("GET", "/api/v1/settings/background", { cookie: dana })).json().background, null);
+	expectStatus(await request("GET", "/api/v1/settings/background/image", { cookie: dana }), 404);
+
+	// Removing it.
+	expectStatus(await call("DELETE", "/settings/background"), 204);
+	assert.equal((await call("GET", "/settings/background")).json().background, null);
+	expectStatus(await call("GET", "/settings/background/image"), 404);
+	void token;
 });

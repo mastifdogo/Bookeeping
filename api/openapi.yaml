@@ -1956,6 +1956,79 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /wallhaven/search:
+    get:
+      tags: [Settings]
+      operationId: searchWallhaven
+      summary: Search Wallhaven for a background (safe-for-work pictures only; the server asks Wallhaven)
+      parameters:
+        - { name: q, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: sorting, in: query, schema: { type: string, enum: [toplist, relevance, date_added, views, favorites, random], default: toplist } }
+      responses:
+        '200':
+          description: Pictures
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page, last_page]
+                properties:
+                  page: { type: integer }
+                  last_page: { type: integer }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, thumb, resolution, url]
+                      properties:
+                        id: { type: string }
+                        thumb: { type: string }
+                        resolution: { type: string }
+                        url: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+
+  /settings/background:
+    get:
+      tags: [Settings]
+      operationId: getBackground
+      summary: The user's background picture, if they chose one
+      responses:
+        '200':
+          description: Background
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackgroundSetting' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Settings]
+      operationId: putBackground
+      summary: Choose a Wallhaven picture (the server downloads and keeps it), or change how much the page colour covers it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                id: { type: string, description: A Wallhaven picture's id; leave out to change only dim }
+                dim: { type: integer, minimum: 0, maximum: 95 }
+      responses:
+        '200':
+          description: Background
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackgroundSetting' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Settings]
+      operationId: deleteBackground
+      summary: Remove the background picture
+      responses:
+        '204': { description: Removed }
+        default: { $ref: '#/components/responses/Error' }
+
   /root-actions:
     get:
       tags: [Root]
@@ -2872,6 +2945,20 @@ components:
                 name: { type: string }
                 kind: { $ref: '#/components/schemas/OrgKind' }
             organizations: { type: array, items: { $ref: '#/components/schemas/OrgAccess' } }
+    BackgroundSetting:
+      type: object
+      required: [background]
+      properties:
+        background:
+          type: object
+          nullable: true
+          required: [id, resolution, url, dim, version]
+          properties:
+            id: { type: string }
+            resolution: { type: string }
+            url: { type: string, description: "The picture's page on Wallhaven" }
+            dim: { type: integer, description: 'How much of the page colour is laid over the picture, percent' }
+            version: { type: integer, format: int64 }
     RootAction:
       type: object
       required: [id, scope, action, target, summary, done_by, done_at, reversed_by, reversed_at]
@@ -3613,8 +3700,11 @@ components:
         cleared: { type: boolean }
     ReconciliationDetail:
       type: object
-      required: [reconciliation, opening_balance_cents, cleared_balance_cents, difference_cents, lines, totals, reading]
+      required: [reconciliation, opening_balance_cents, cleared_balance_cents, difference_cents, lines, totals, reading, previous_statement_date, gap_days, gap_warning]
       properties:
+        previous_statement_date: { type: string, format: date, nullable: true, description: "The account's last finished statement before this one" }
+        gap_days: { type: integer, nullable: true, description: Days between that statement and this one }
+        gap_warning: { type: boolean, description: 'More than a month and a week since the last reconciled statement: one may have been skipped' }
         reconciliation: { $ref: '#/components/schemas/Reconciliation' }
         opening_balance_cents:
           allOf: [{ $ref: '#/components/schemas/SignedCents' }]
