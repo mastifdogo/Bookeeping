@@ -336,7 +336,7 @@ and show a difference to the user rather than overwriting either side.
 
 ## Root mode can delete things
 
-Since Ledger 0.20.3 an admin in root mode can delete an account with every
+Since Ledger 0.21.0 an admin in root mode can delete an account with every
 journal entry posted to it, and delete users; each can be reversed from the
 root log, which puts back the same ids. A module may therefore find that an
 account code, an entry id or a user it kept no longer exists (and later
