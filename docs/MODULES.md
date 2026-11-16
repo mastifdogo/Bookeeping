@@ -338,7 +338,7 @@ and show a difference to the user rather than overwriting either side.
 
 Since Ledger 0.21.0 an admin can turn on root mode: they can delete an
 account with every journal entry posted to it, and delete users. Since
-0.22.0 they can delete any entry or line and move a line to any account, so
+0.21.1 they can delete any entry or line and move a line to any account, so
 an entry may be unbalanced, or have one line, for a while; root mode can
 only be left once the books are intact again, or everything done in that
 root session is reversed. Each root action can also be reversed from the
@@ -349,7 +349,7 @@ Treat a missing account or entry as gone, not as an error that stops the
 module, and don't delete your own records because of it.
 
 **Modules give root the same power over their own records** (Ledger
-0.22.0). `req.user.root` is true while the person asking has root mode on.
+0.21.1). `req.user.root` is true while the person asking has root mode on.
 When it is, the module's page offers to delete or change any of its records,
 including ones it normally protects (a sent invoice, a paid bill, a posted
 pay run), and does it through `ctx.root`, never with its own DELETE or

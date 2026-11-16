@@ -152,14 +152,14 @@ Decide, and state briefly to the user:
   Since 0.20.2 an entry's date can change too (`date_changes`), and a
   finished reconciliation moves a bank account's unticked lines to Ledger's
   Unreconciled clearing account until a person moves them on (`moves`).
-- **Root mode** (Ledger 0.21.0, wider in 0.22.0): an admin in root mode
+- **Root mode** (Ledger 0.21.0, wider in 0.21.1): an admin in root mode
   can delete any account, entry, line or user and move a line to any
   account; entries may be unbalanced until root mode is left, and anything
   can be reversed later (same ids come back). Treat a missing account,
   entry or user as gone for now; don't fail or delete the module's own
   records because of it.
-- **Root can do the same to the module's records** (Ledger 0.22.0; needs
-  `"ledger": ">=0.22.0"`). When `req.user.root` is true, let the admin
+- **Root can do the same to the module's records** (Ledger 0.21.1; needs
+  `"ledger": ">=0.21.1"`). When `req.user.root` is true, let the admin
   delete or change any record of the module, including ones the module
   normally protects (sent, paid, posted). Do it only through
   `ctx.root.remove(req, table, id, summary)` and

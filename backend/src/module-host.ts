@@ -171,7 +171,7 @@ function makeContext(app: App, m: LoadedModule) {
 			},
 		},
 		/**
-		 * Root mode (Ledger 0.22.0): while an admin has root mode on (req.user.root),
+		 * Root mode (Ledger 0.21.1): while an admin has root mode on (req.user.root),
 		 * the module lets them delete or change any of its records. Do it through
 		 * these, so Ledger keeps the row as it was and can put it back when the
 		 * action, or the whole root session, is reversed. The table is one of the

@@ -399,7 +399,7 @@ const c = await ctx.ledger.clearingAccount({ key: "card_payouts", name: "Card pa
 const all = await ctx.ledger.clearingAccounts(); // every module's: find another module's by module_id + module_key
 ```
 
-### Root mode (Ledger 0.22.0)
+### Root mode (Ledger 0.21.1)
 
 ```js
 req.user.root                                  // true while the admin asking has root mode on
