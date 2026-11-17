@@ -31,6 +31,7 @@ import { parseListenAddr } from "./config.ts";
 import { githubHeaders, githubProblem, repoIdentity } from "./github.ts";
 import {
 	EMPTY_STATUS,
+	REBOOT_NOW_FILE,
 	RUN_NOW_FILE,
 	baseUpdateRepo,
 	readUpdateRepo,
@@ -238,6 +239,7 @@ async function runCore(
  *   run-now          ("Check for updates now"): Ledger, then modules
  *   modules-run-now  (a module was added or removed): modules only
  *   a due slot       (the schedule): Ledger, then modules, then the reboot policy
+ *   reboot-now       ("Reboot now"): reboots once everything else is done
  */
 export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 	const now = (o.now ?? Date.now)();
@@ -248,6 +250,7 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 		);
 	const manual = await take(RUN_NOW_FILE);
 	const modulesRequested = await take(MODULES_RUN_NOW_FILE);
+	const rebootRequested = await take(REBOOT_NOW_FILE);
 	const schedule: UpdateSchedule = await readSchedule(o.dirs);
 	// The first run after the container starts: checks once if "on startup" is on.
 	const firstSinceBoot = o.bootMarker ? await markBooted(o.bootMarker) : false;
@@ -255,7 +258,12 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 	const prev = (await readStatus(o.dirs)) ?? { ...EMPTY_STATUS };
 	const slot = dueSlot(schedule, now, prev.last_scheduled_for);
 	const core = manual || startup || slot !== null;
-	if (!core && !modulesRequested) return { ran: false, installed: null, rebooted: false };
+	if (!core && !modulesRequested) {
+		if (!rebootRequested) return { ran: false, installed: null, rebooted: false };
+		log.info("rebooting the container (requested in the app)");
+		await o.sys.reboot();
+		return { ran: false, installed: null, rebooted: true };
+	}
 
 	const trigger = manual ? "manual" : slot !== null ? "scheduled" : "startup";
 	const result = core ? await runCore(o, trigger, now, slot, prev) : null;
@@ -280,10 +288,15 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 		await o.notify?.(n).catch((err: Error) => log.warn("could not post the update to the dashboard", { err: err.message }));
 	};
 	if (result && !result.ok) await notify({ title: "Update failed", body: result.status.message, level: "danger" });
-	if (!result || !result.ok) return { ran: true, installed: null, rebooted: false };
+	if (!result || !result.ok) {
+		if (rebootRequested) await o.sys.reboot();
+		return { ran: true, installed: null, rebooted: rebootRequested };
+	}
 	if (installed) await notify({ title: `Ledger updated to ${installed}`, body: result.status.message, level: "success" });
 	// Manual and startup checks reboot only to finish an install; scheduled runs follow the policy.
-	const reboot = schedule.reboot === "always" ? trigger === "scheduled" || installed !== null : schedule.reboot === "after_update" && installed !== null;
+	const reboot =
+		rebootRequested ||
+		(schedule.reboot === "always" ? trigger === "scheduled" || installed !== null : schedule.reboot === "after_update" && installed !== null);
 	await result.save({
 		state: "ok",
 		finished_at: new Date().toISOString(),

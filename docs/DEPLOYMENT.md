@@ -552,6 +552,11 @@ At the scheduled time, `ledger-update.service` (root) runs:
    A manual or startup check reboots only after installing an update (so
    a startup check can't reboot in a loop).
 
+**Reboot now** on the same page reboots the container straight away. The
+app writes `/var/lib/ledger/update-config/reboot-now`; `ledger-update.path`
+starts the updater, which finishes anything else it was asked to do and then
+runs `systemctl reboot`. It is refused while an update is installing.
+
 The timer wakes every 5 minutes and exits at once when nothing is due. A
 run missed by more than 6 hours (the container was off, say) waits for the
 next slot. The updater needs outbound HTTPS to `api.github.com` and
@@ -559,7 +564,7 @@ GitHub's download hosts (`*.githubusercontent.com`). Its log is in
 `journalctl -u ledger-update`.
 
 The web app never installs anything itself. It only writes the schedule
-and a "check now" request; the root service validates them and installs
+and "check now" and "reboot now" requests; the root service validates them and installs
 only official releases from the configured repository.
 
 ### By hand

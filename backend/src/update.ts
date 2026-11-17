@@ -17,6 +17,8 @@ import { ValidationError } from "./errors.ts";
 
 export const SCHEDULE_FILE = "schedule.json";
 export const RUN_NOW_FILE = "run-now";
+/** Written by the app's "Reboot now" button; the root updater reboots the container. */
+export const REBOOT_NOW_FILE = "reboot-now";
 /** Ledger's own repository, as renamed in the app (only renames of the same repository are honoured). */
 export const REPO_FILE = "repo";
 export const DEFAULT_UPDATE_REPO = "mastifdogo/Bookeeping";
@@ -236,6 +238,11 @@ export async function updaterInstalled(dirs: UpdateDirs): Promise<boolean> {
 /** Asks the updater to run now (picked up by ledger-update.path). */
 export async function requestRunNow(dirs: UpdateDirs): Promise<void> {
 	await writeFileAtomic(path.join(dirs.config, RUN_NOW_FILE), new Date().toISOString() + "\n", 0o640);
+}
+
+/** Asks the updater to reboot the container (picked up by ledger-update.path). */
+export async function requestReboot(dirs: UpdateDirs): Promise<void> {
+	await writeFileAtomic(path.join(dirs.config, REBOOT_NOW_FILE), new Date().toISOString() + "\n", 0o640);
 }
 
 /** The installed release version (lib/ledger/VERSION), or "dev". */

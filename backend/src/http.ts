@@ -49,6 +49,7 @@ import {
 	readSchedule,
 	readUpdateRepo,
 	readStatus,
+	requestReboot,
 	requestRunNow,
 	updaterInstalled,
 	validateSchedule,
@@ -1977,13 +1978,25 @@ async function handlePutUpdateRepo(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await updateInfo(c));
 }
 
-async function handleCheckUpdate(c: Ctx): Promise<void> {
-	await requireUpdater(c);
+/** Refuses while the updater is installing (a run that never finished, after power loss say, stops blocking after an hour). */
+async function requireNoUpdateRunning(c: Ctx): Promise<void> {
 	const status = await readStatus(c.app.update);
-	// A run that never finished (power loss, say) stops blocking after an hour.
 	const started = Date.parse(status?.started_at ?? "");
 	if (status?.state === "running" && Date.now() - started < 3600_000) throw new ConflictError("an update is already running");
+}
+
+async function handleCheckUpdate(c: Ctx): Promise<void> {
+	await requireUpdater(c);
+	await requireNoUpdateRunning(c);
 	await requestRunNow(c.app.update);
+	writeJSON(c.res, 202, await updateInfo(c));
+}
+
+/** Reboots the container: the root updater does it within seconds (ledger-update.path). */
+async function handleRebootServer(c: Ctx): Promise<void> {
+	await requireUpdater(c);
+	await requireNoUpdateRunning(c);
+	await requestReboot(c.app.update);
 	writeJSON(c.res, 202, await updateInfo(c));
 }
 
@@ -2398,6 +2411,7 @@ const ROUTES: Route[] = [
 	route("GET", "/system/update", "server", handleGetUpdate),
 	route("PUT", "/system/update/schedule", "server", handlePutUpdateSchedule),
 	route("POST", "/system/update/check", "server", handleCheckUpdate),
+	route("POST", "/system/update/reboot", "server", handleRebootServer),
 	route("PUT", "/system/update/repo", "server", handlePutUpdateRepo),
 
 	route("GET", "/modules", true, handleListModules),

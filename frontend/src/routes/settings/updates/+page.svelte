@@ -90,6 +90,41 @@
 		}
 	}
 
+	// Reboot: the root updater does it; wait for the server to go away and come back.
+	let rebooting = $state<'idle' | 'waiting' | 'back'>('idle');
+	let rebootTimer: ReturnType<typeof setInterval> | undefined;
+	onDestroy(() => clearInterval(rebootTimer));
+	async function rebootNow() {
+		if (!confirm('Reboot the container now? Ledger is unavailable for a minute or two while it restarts.')) return;
+		error = null;
+		busy = true;
+		try {
+			info = unwrap(await api().POST('/system/update/reboot'));
+			rebooting = 'waiting';
+			let wentDown = false;
+			let rounds = 0;
+			clearInterval(rebootTimer);
+			rebootTimer = setInterval(async () => {
+				rounds++;
+				try {
+					const next = unwrap(await api().GET('/system/update'));
+					if (wentDown) {
+						info = next;
+						rebooting = 'back';
+						clearInterval(rebootTimer);
+					}
+				} catch {
+					wentDown = true;
+				}
+				if (rounds > 200) clearInterval(rebootTimer);
+			}, 3000);
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function checkNow() {
 		error = null;
 		busy = true;
@@ -150,8 +185,17 @@
 			<p class="muted">The updater hasn't run yet.</p>
 		{/if}
 		<p class="muted small">Next scheduled run: {info.next_run_at ? fmt(info.next_run_at) : 'none (schedule off)'}</p>
-		<button onclick={checkNow} disabled={busy || running}>Check for updates now</button>
+		<button onclick={checkNow} disabled={busy || running || rebooting === 'waiting'}>Check for updates now</button>
 		<span class="muted small">Installs a newer release if there is one. Reboots only if it installed one (and reboot isn't set to never).</span>
+		<div class="reboot">
+			<button class="danger" onclick={rebootNow} disabled={busy || running || rebooting === 'waiting'}>Reboot now</button>
+			<span class="muted small">Restarts the whole container, PostgreSQL included.</span>
+		</div>
+		{#if rebooting === 'waiting'}
+			<div class="notice">Rebooting… This page carries on once the server is back.</div>
+		{:else if rebooting === 'back'}
+			<div class="notice ok">The server is back up.</div>
+		{/if}
 	{/if}
 </div>
 
@@ -209,6 +253,9 @@
 	.repo-edit input {
 		flex: 1;
 		min-width: 14rem;
+	}
+	.reboot {
+		margin-top: 0.75rem;
 	}
 	button.link {
 		background: none;

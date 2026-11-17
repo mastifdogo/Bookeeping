@@ -2,7 +2,7 @@
 # The app writes run-now when you press "Check for updates now", and
 # modules-run-now when you add or remove a module, and orgs-run-now when an
 # organization's books need a database, and restore-run-now when you restore
-# from a backup.
+# from a backup, and reboot-now when you press "Reboot now".
 [Unit]
 Description=Run a Ledger update check when the app requests one
 
@@ -11,6 +11,7 @@ PathExists=/var/lib/ledger/update-config/run-now
 PathExists=/var/lib/ledger/update-config/modules-run-now
 PathExists=/var/lib/ledger/update-config/orgs-run-now
 PathExists=/var/lib/ledger/update-config/restore-run-now
+PathExists=/var/lib/ledger/update-config/reboot-now
 Unit=ledger-update.service
 
 [Install]

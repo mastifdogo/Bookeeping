@@ -268,6 +268,40 @@ test("updater: checks once after the container starts, when asked to", async (t)
 	assert.equal((await runUpdater({ ...opts(f, "v0.7.0", at), bootMarker: marker })).ran, false);
 });
 
+test("updater: Reboot now reboots, after any other request", async (t) => {
+	const f = await fakeWorld(t);
+	await f.setLatest("v0.7.0");
+	await writeSchedule(f.dirs, sched({ enabled: false, reboot: "never" }));
+	await writeFile(path.join(f.dirs.config, "reboot-now"), "x");
+	let out = await runUpdater(opts(f, "v0.7.0", Date.now()));
+	assert.deepEqual(out, { ran: false, installed: null, rebooted: true });
+	assert.deepEqual(f.calls, ["reboot"]);
+	await assert.rejects(access(path.join(f.dirs.config, "reboot-now")), Error, "request file removed");
+	assert.equal(await readStatus(f.dirs), null, "the update status is left alone");
+
+	// Once: the next run does nothing.
+	f.calls.length = 0;
+	out = await runUpdater(opts(f, "v0.7.0", Date.now()));
+	assert.deepEqual(out, { ran: false, installed: null, rebooted: false });
+
+	// With a check waiting: install first, then reboot even with "never".
+	await writeFile(path.join(f.dirs.config, "run-now"), "x");
+	await writeFile(path.join(f.dirs.config, "reboot-now"), "x");
+	out = await runUpdater(opts(f, "v0.6.0", Date.now()));
+	assert.deepEqual(out, { ran: true, installed: "v0.7.0", rebooted: true });
+	assert.deepEqual(f.calls, ["backup", "snapshot", "install ledger-v0.7.0-linux-amd64", "restart", "health", "reboot"]);
+	assert.match((await readStatus(f.dirs))!.message, /Rebooting the container/);
+
+	// A failed update still reboots when asked.
+	f.calls.length = 0;
+	await f.setLatest("v0.8.0", { corrupt: true });
+	await writeFile(path.join(f.dirs.config, "run-now"), "x");
+	await writeFile(path.join(f.dirs.config, "reboot-now"), "x");
+	out = await runUpdater(opts(f, "v0.7.0", Date.now()));
+	assert.deepEqual(out, { ran: true, installed: null, rebooted: true });
+	assert.deepEqual(f.calls, ["reboot"]);
+});
+
 test("updater: bad checksum installs nothing", async (t) => {
 	const f = await fakeWorld(t);
 	await f.setLatest("v0.7.0", { corrupt: true });

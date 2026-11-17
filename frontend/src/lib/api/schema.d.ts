@@ -1779,6 +1779,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system/update/reboot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reboot the container
+         * @description Queues a reboot by the root updater (it starts within seconds, after
+         *     anything else it has been asked to do). Refused while an update is
+         *     installing. The app is unreachable until the container is back up;
+         *     poll `GET /system/update` to see when it is.
+         */
+        post: operations["rebootServer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/modules": {
         parameters: {
             query?: never;
@@ -6574,6 +6597,29 @@ export interface operations {
         };
     };
     checkForUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    rebootServer: {
         parameters: {
             query?: never;
             header?: never;

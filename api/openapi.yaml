@@ -2631,6 +2631,26 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /system/update/reboot:
+    post:
+      tags: [System]
+      operationId: rebootServer
+      summary: Reboot the container
+      description: |
+        Queues a reboot by the root updater (it starts within seconds, after
+        anything else it has been asked to do). Refused while an update is
+        installing. The app is unreachable until the container is back up;
+        poll `GET /system/update` to see when it is.
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdateInfo' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /modules:
     get:
       tags: [Modules]

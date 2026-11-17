@@ -610,6 +610,7 @@ test("update settings API", async (t) => {
 	assert.equal(r.json().updater_installed, false);
 	assert.equal(r.json().status, null);
 	expectStatus(await call("POST", "/system/update/check"), 409);
+	expectStatus(await call("POST", "/system/update/reboot"), 409);
 
 	const root = await mkdtemp(path.join(tmpdir(), "ledger-upd-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -640,6 +641,8 @@ test("update settings API", async (t) => {
 
 	expectStatus(await call("POST", "/system/update/check"), 202);
 	await stat(path.join(app.update.config, "run-now"));
+	expectStatus(await call("POST", "/system/update/reboot"), 202);
+	await stat(path.join(app.update.config, "reboot-now"));
 
 	// A run in progress blocks another request.
 	await writeFile(path.join(app.update.status, "status.json"), JSON.stringify({ state: "running", started_at: new Date().toISOString(), message: "Downloading" }));
@@ -647,6 +650,7 @@ test("update settings API", async (t) => {
 	assert.equal(r.json().status.state, "running");
 	assert.equal(r.json().status.installed_version, null); // defaults filled in
 	expectStatus(await call("POST", "/system/update/check"), 409);
+	expectStatus(await call("POST", "/system/update/reboot"), 409);
 
 	// Requires a session, like everything else.
 	expectStatus(await ta.request("GET", "/api/v1/system/update"), 401);
