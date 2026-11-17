@@ -8,8 +8,15 @@
 #
 # Release assets:
 #   ledger-<tag>-linux-amd64.tar.gz           server + Node.js runtime + SQL + deploy scripts
-#   debian-13-ledger_<tag>_amd64.tar.zst       Proxmox CT template (Debian 13)
 #   SHA256SUMS
+#
+# The Proxmox CT template is not rebuilt for every release. It lives in one
+# fixed release, `lxc-template`, under a name that never changes
+# (debian-13-ledger_amd64.tar.zst), and a container made from it installs the
+# latest Ledger release on first boot through the updater. Rebuild it (tick
+# "Rebuild the LXC template" when running this workflow) only when the
+# container itself changes: deploy/lxc-template/, its packages, PostgreSQL's
+# major version or the Debian release.
 name: Release
 
 on:
@@ -21,6 +28,11 @@ on:
         description: 'Release tag to create, e.g. v0.18.0 (a tag with a suffix, such as v0.18.0-test.1, is published as a pre-release)'
         required: true
         type: string
+      template:
+        description: 'Rebuild the LXC template (only needed when the container itself changes, not for new Ledger features)'
+        required: false
+        default: false
+        type: boolean
       suite:
         description: 'Debian release the container template is built on'
         required: false
@@ -43,6 +55,8 @@ jobs:
       VERSION: ${{ inputs.tag || github.ref_name }}
       # The template is built on Debian 13 unless told otherwise.
       SUITE: ${{ inputs.suite || 'trixie' }}
+      TEMPLATE: ${{ inputs.template && 'true' || 'false' }}
+      TEMPLATE_TAG: lxc-template
     services:
       postgres:
         image: postgres:18
@@ -71,6 +85,7 @@ jobs:
             backend/package-lock.json
 
       - name: Install image build tools
+        if: env.TEMPLATE == 'true'
         # mmdebstrap and Debian's archive keyring come straight from Debian's
         # servers (which the template build uses anyway), not from the
         # runner's Ubuntu mirrors, which are often unreachable from GitHub.
@@ -119,43 +134,40 @@ jobs:
       - name: Integration tests (PostgreSQL)
         run: make test-integration TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
 
-      - name: Build LXC templates
+      - name: Build LXC template
+        if: env.TEMPLATE == 'true'
         run: |
+          mkdir -p dist/template
           sudo deploy/lxc-template/build-lxc-template.sh \
-            --suite "$SUITE" --version "$VERSION" \
+            --suite "$SUITE" --version "$VERSION" --out dist/template \
             --release "dist/ledger-$VERSION-linux-amd64.tar.gz"
           sudo chown -R "$(id -u):$(id -g)" dist
+          # The same file name every time, so its download URL never changes.
+          cd dist/template
+          built=$(ls ./*-ledger_"$VERSION"_amd64.tar.zst)
+          stable=$(basename "$built" | sed "s/_${VERSION}_/_/")
+          mv "$built" "$stable"
+          sha256sum -- "$stable" > SHA256SUMS
+          cat SHA256SUMS
+          echo "TEMPLATE_FILE=$stable" >> "$GITHUB_ENV"
 
       - name: Checksums
         working-directory: dist
         run: |
-          sha256sum -- "ledger-$VERSION-linux-amd64.tar.gz" ./*-ledger_"$VERSION"_amd64.tar.zst | sed "s| \./| |" > SHA256SUMS
+          sha256sum -- "ledger-$VERSION-linux-amd64.tar.gz" > SHA256SUMS
           cat SHA256SUMS
 
       - name: Release notes
         run: |
           base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$VERSION"
-          deb="debian-$([ "$SUITE" = trixie ] && echo 13 || echo 12)-ledger_${VERSION}_amd64.tar.zst"
-          sum() { awk -v f="$1" '$2 == f { print $1 }' dist/SHA256SUMS; }
+          tpl="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TEMPLATE_TAG"
           cat > notes.md <<EOF
-          ## Proxmox LXC template (Debian $([ "$SUITE" = trixie ] && echo 13 || echo 12))
+          ## Proxmox LXC template
 
-          On the Proxmox host (as root), download the template into the local template store:
-
-          \`\`\`sh
-          wget -P /var/lib/vz/template/cache $base/$deb
-          echo "$(sum "$deb")  /var/lib/vz/template/cache/$deb" | sha256sum -c
-          \`\`\`
-
-          If your Proxmox version has **local → CT Templates → Download from URL**, you can
-          paste \`$base/$deb\` there instead, with hash algorithm **SHA-256** and checksum
-          \`$(sum "$deb")\`. Otherwise download the file and use **Upload**.
-
-          Then create an unprivileged container from it (enable **nesting**), bind-mount your
-          CSV directory (\`pct set <ctid> -mp0 /mnt/pve/truenas/ledger,mp=/app/csv_data\`),
-          start it, and log in as \`admin\` with the password \`1234\`; Ledger then asks
-          you to choose your own password or 4-digit passcode.
-          Full guide: [docs/DEPLOYMENT.md]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$VERSION/docs/DEPLOYMENT.md#alternative-a-ready-made-lxc-template).
+          The container template is not rebuilt for every release: download it from
+          [the LXC template release]($tpl). A container made from it installs this
+          release (or whatever is newest) on its first boot. Existing containers update
+          from the **Updates** page as usual.
 
           ## Release tarball (one-command deploy or upgrade)
 
@@ -174,7 +186,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=(dist/ledger-"$VERSION"-linux-amd64.tar.gz dist/*-ledger_"$VERSION"_amd64.tar.zst dist/SHA256SUMS)
+          assets=(dist/ledger-"$VERSION"-linux-amd64.tar.gz dist/SHA256SUMS)
           if gh release view "$VERSION" >/dev/null 2>&1; then
             # Re-run: replace the assets, keep the release.
             gh release upload "$VERSION" "${assets[@]}" --clobber
@@ -184,4 +196,47 @@ jobs:
             [[ "$VERSION" == *-* ]] && prerelease=(--prerelease)
             gh release create "$VERSION" "${assets[@]}" \
               --title "Ledger $VERSION" --notes-file notes.md --target "$GITHUB_SHA" "${prerelease[@]}"
+          fi
+
+      - name: Publish the LXC template
+        # Into the fixed `lxc-template` release, which must never become the
+        # "latest" release: the updater installs whatever that one is.
+        if: env.TEMPLATE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TEMPLATE_TAG/$TEMPLATE_FILE"
+          sum=$(awk '{ print $1 }' dist/template/SHA256SUMS)
+          debian="Debian $([ "$SUITE" = trixie ] && echo 13 || echo 12)"
+          cat > template-notes.md <<EOF
+          ## Proxmox LXC template ($debian)
+
+          This file keeps the same name and URL from one release to the next. It was last
+          built with Ledger $VERSION on $(date -u +%Y-%m-%d); a container made from it installs
+          the latest Ledger release on its first boot (watch it on the **Updates** page).
+
+          On the Proxmox host (as root), download the template into the local template store:
+
+          \`\`\`sh
+          wget -O /var/lib/vz/template/cache/$TEMPLATE_FILE $url
+          echo "$sum  /var/lib/vz/template/cache/$TEMPLATE_FILE" | sha256sum -c
+          \`\`\`
+
+          If your Proxmox version has **local → CT Templates → Download from URL**, you can
+          paste \`$url\` there instead, with hash algorithm **SHA-256** and checksum
+          \`$sum\`. Otherwise download the file and use **Upload**.
+
+          Then create an unprivileged container from it (enable **nesting**), bind-mount your
+          CSV directory (\`pct set <ctid> -mp0 /mnt/pve/truenas/ledger,mp=/app/csv_data\`),
+          start it, and log in as \`admin\` with the password \`1234\`; Ledger then asks
+          you to choose your own password or 4-digit passcode.
+          Full guide: [docs/DEPLOYMENT.md]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/main/docs/DEPLOYMENT.md#alternative-a-ready-made-lxc-template).
+          EOF
+          assets=(dist/template/"$TEMPLATE_FILE" dist/template/SHA256SUMS)
+          if gh release view "$TEMPLATE_TAG" >/dev/null 2>&1; then
+            gh release upload "$TEMPLATE_TAG" "${assets[@]}" --clobber
+            gh release edit "$TEMPLATE_TAG" --notes-file template-notes.md --latest=false
+          else
+            gh release create "$TEMPLATE_TAG" "${assets[@]}" --latest=false \
+              --title "Ledger LXC template" --notes-file template-notes.md --target "$GITHUB_SHA"
           fi

@@ -76,17 +76,23 @@ troubleshooting.
 If you prefer the Proxmox GUI, or want to create several containers, use a
 **CT template** with Ledger and PostgreSQL already installed.
 
-**Download it** from the [Releases page](https://github.com/mastifdogo/Bookeeping/releases).
+**Download it** from the [LXC template release](https://github.com/mastifdogo/Bookeeping/releases/tag/lxc-template).
 On the Proxmox host:
 
 ```sh
 cd /var/lib/vz/template/cache
-wget https://github.com/mastifdogo/Bookeeping/releases/download/<version>/debian-13-ledger_<version>_amd64.tar.zst
-sha256sum debian-13-ledger_<version>_amd64.tar.zst     # compare with SHA256SUMS on the release
+wget https://github.com/mastifdogo/Bookeeping/releases/download/lxc-template/debian-13-ledger_amd64.tar.zst
+sha256sum debian-13-ledger_amd64.tar.zst     # compare with SHA256SUMS on that release
 ```
 
-Releases are built by `.github/workflows/release.yml` whenever a `v*` tag is
-pushed. Skip to "Using it" below.
+The template is **not rebuilt for every Ledger release**: it keeps the same
+name and URL, and a container made from it installs the latest Ledger release
+on its first boot (first-boot setup asks the updater for a check; follow it on
+the **Updates** page). So one downloaded template keeps working, and new
+features arrive through the updater. The template is rebuilt, by running
+`.github/workflows/release.yml` with **Rebuild the LXC template** ticked, only
+when the container itself changes (first-boot setup, its packages,
+PostgreSQL's major version or the Debian release). Skip to "Using it" below.
 
 **Or build it yourself:**
 
@@ -110,7 +116,9 @@ which:
 - creates an `admin` login whose first password is `1234`; at the first
   login Ledger asks for a new password (4 or more characters, so a 4-digit
   passcode works) and nothing else can be done until one is chosen
-- checks that `/app/csv_data` is writable, then starts Ledger
+- checks that `/app/csv_data` is writable
+- asks the updater to install the latest Ledger release (if the template's is
+  older; needs internet access), then starts Ledger
 
 Using it:
 

@@ -87,18 +87,20 @@ configuration and port:
 
 ### As a Proxmox LXC template
 
-**Download a ready-made one:** every
-[GitHub Release](https://github.com/mastifdogo/Bookeeping/releases) has a
-Debian 13 CT template (`debian-13-ledger_<version>_amd64.tar.zst`) with Ledger
-and PostgreSQL pre-installed. On the Proxmox host:
+**Download a ready-made one:** the
+[LXC template release](https://github.com/mastifdogo/Bookeeping/releases/tag/lxc-template)
+has a Debian 13 CT template (`debian-13-ledger_amd64.tar.zst`) with Ledger and
+PostgreSQL pre-installed. Its name and URL stay the same from one Ledger
+release to the next, so you only download it once: a container made from it
+installs the latest Ledger release on its first boot. On the Proxmox host:
 
 ```sh
 wget -P /var/lib/vz/template/cache \
-  https://github.com/mastifdogo/Bookeeping/releases/download/<version>/debian-13-ledger_<version>_amd64.tar.zst
+  https://github.com/mastifdogo/Bookeeping/releases/download/lxc-template/debian-13-ledger_amd64.tar.zst
 ```
 
-It then appears under **local → CT Templates**. Each release's notes include
-the exact URL and its SHA-256 checksum.
+It then appears under **local → CT Templates**. The release's notes include
+its SHA-256 checksum.
 
 **Or build it yourself** (needs root and `apt install mmdebstrap zstd`):
 

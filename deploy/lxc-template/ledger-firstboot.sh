@@ -8,6 +8,8 @@
 #     /etc/ledger/ledger.env
 #   - an `admin` login with the password 1234, which must be replaced at the
 #     first login
+# and then asks the updater to install the latest Ledger release, so a
+# template built for an older release still starts on the current version.
 # Safe to re-run: it stops at once if /var/lib/ledger/provisioned exists.
 set -eu
 
@@ -77,6 +79,18 @@ cat >/etc/motd <<MOTD
   CSV files:  $CSV_DIR   (bind-mount your TrueNAS share here)
 
 MOTD
+
+# The template is rebuilt only when the container itself changes, so the
+# Ledger inside it may be older than the latest release: ask the updater
+# (ledger-update.path) to check now. It waits for the network, installs the
+# latest release if it is newer, and its progress shows on the Updates page.
+CONFIG_DIR=/var/lib/ledger/update-config
+if [ -d "$CONFIG_DIR" ]; then
+	log "requesting an update check (installs the latest Ledger release if newer)"
+	date -u +%Y-%m-%dT%H:%M:%SZ >"$CONFIG_DIR/run-now"
+	chown ledger:ledger "$CONFIG_DIR/run-now"
+	chmod 0640 "$CONFIG_DIR/run-now"
+fi
 
 mkdir -p "$(dirname "$STATE")"
 date -u +%Y-%m-%dT%H:%M:%SZ >"$STATE"
