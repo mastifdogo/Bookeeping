@@ -18,12 +18,13 @@ export const load: PageLoad = async ({ fetch, url }) => {
 		from: q.get('from') ?? '',
 		to: q.get('to') ?? '',
 		account_code: q.get('account_code') ?? '',
+		tag: q.get('tag') ?? '',
 		// "Hide reversed" is remembered in this browser; the address can override it.
 		hide_reversed: q.has('hide_reversed') ? q.get('hide_reversed') === '1' : readHideReversed(),
 		offset: Math.max(0, Number.parseInt(q.get('offset') ?? '0', 10) || 0)
 	};
 	const client = api(fetch);
-	const [entries, accounts] = await Promise.all([
+	const [entries, accounts, tags] = await Promise.all([
 		client
 			.GET('/journal-entries', {
 				params: {
@@ -31,6 +32,7 @@ export const load: PageLoad = async ({ fetch, url }) => {
 						from: filter.from || undefined,
 						to: filter.to || undefined,
 						account_code: filter.account_code || undefined,
+						tag: filter.tag || undefined,
 						hide_reversed: filter.hide_reversed || undefined,
 						entity_id: Number(q.get('entity_id')) || undefined,
 						limit: _PAGE_SIZE,
@@ -39,7 +41,8 @@ export const load: PageLoad = async ({ fetch, url }) => {
 				}
 			})
 			.then(unwrapLoad),
-		client.GET('/accounts', { params: { query: { include_inactive: true } } }).then(unwrapLoad)
+		client.GET('/accounts', { params: { query: { include_inactive: true } } }).then(unwrapLoad),
+		client.GET('/tags').then(unwrapLoad)
 	]);
-	return { entries: entries.data, accounts: accounts.data, filter };
+	return { entries: entries.data, accounts: accounts.data, tags: tags.data, filter };
 };

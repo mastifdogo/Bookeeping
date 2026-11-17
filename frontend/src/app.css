@@ -384,3 +384,20 @@ html.has-bg:not(.root) body {
 		var(--bg-image) center / cover fixed no-repeat,
 		var(--bg);
 }
+
+/* Tags on journal entries (shared by Ledger and modules). */
+.badge.tag {
+	margin-left: 0.25rem;
+}
+.badge.tag.paid {
+	background: var(--ok-bg);
+	color: var(--ok);
+}
+.badge.tag.overdue {
+	background: var(--danger-bg);
+	color: var(--danger);
+}
+.badge.tag.billed {
+	background: var(--warn-bg);
+	color: var(--warn);
+}

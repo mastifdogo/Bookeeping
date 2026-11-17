@@ -381,6 +381,17 @@ or "date changed". Amounts can't be changed on an entry that was reversed
 or is a reversal; neither amounts nor the date on an entry with a line
 ticked on a reconciliation (untick it, or undo the reconciliation, first).
 
+### Tags
+
+Journal entries carry **tags** that Ledger and every module share: `paid`,
+`billed`, `overdue`, `customer` and `vendor` (these two say which one), or
+any other word. A module that sends an invoice tags its entry "billed" and
+to the customer; when a payment is matched, by that module, another one or
+you, it is tagged "paid" (which takes "overdue" off). Every module sees the
+same tags and is told when one changes, so what one module knows the others
+can use. On an entry's page you add and take off tags yourself; the Journal
+shows them and filters by tag.
+
 ### Root mode
 
 Admins have a **Root mode** switch under Settings → Account. While it is

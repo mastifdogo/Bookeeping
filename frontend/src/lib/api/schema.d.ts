@@ -404,6 +404,65 @@ export interface paths {
         patch: operations["changeJournalEntryDate"];
         trace?: never;
     };
+    "/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every tag in use, with how many entries carry it (the standard ones always listed) */
+        get: operations["listTags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/journal-entries/{entryId}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tag an entry (shared with every module); "paid" takes "overdue" off */
+        post: operations["setEntryTag"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/journal-entries/{entryId}/tags/{tag}": {
+        parameters: {
+            query?: {
+                /** @description For customer and vendor: which one (all of them when left out) */
+                entity_id?: number;
+            };
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                tag: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Take a tag off an entry */
+        delete: operations["removeEntryTag"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/unreconciled": {
         parameters: {
             query?: never;
@@ -1965,6 +2024,21 @@ export interface components {
                 version: number;
             } | null;
         };
+        EntryTag: {
+            /** @description paid, billed, overdue, customer, vendor, or another lowercase word */
+            tag: string;
+            /** @description Who, for the tags customer and vendor */
+            entity: {
+                id: number;
+                name: string;
+            } | null;
+            note: string;
+            /** @description The module that set it; null when a person did */
+            module_id: string | null;
+            set_by: string | null;
+            /** Format: date-time */
+            set_at: string;
+        };
         RootAction: {
             id: number;
             /** @enum {string} */
@@ -2229,6 +2303,8 @@ export interface components {
             unreconciled?: boolean;
         };
         JournalEntry: {
+            /** @description Tags shared by Ledger and every module (paid, billed, overdue, customer, vendor, and others) */
+            tags: components["schemas"]["EntryTag"][];
             /** @description Whether any of its amounts were changed after it was posted */
             amended: boolean;
             /** @description Every change to its date, oldest first (only when one entry is fetched) */
@@ -3838,6 +3914,8 @@ export interface operations {
                 to?: components["parameters"]["To"];
                 /** @description Only entries with at least one line on this account */
                 account_code?: components["schemas"]["AccountCode"];
+                /** @description Only entries carrying this tag */
+                tag?: string;
                 /** @description Only entries with this customer or vendor */
                 entity_id?: number;
                 /** @description Leave out entries that were reversed and the reversing entries */
@@ -4037,6 +4115,95 @@ export interface operations {
             };
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listTags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tags */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            tag: string;
+                            entries: number;
+                            standard: boolean;
+                        }[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setEntryTag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    tag: string;
+                    /** @description Required for the tags customer and vendor */
+                    entity_id?: number | null;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    removeEntryTag: {
+        parameters: {
+            query?: {
+                /** @description For customer and vendor: which one (all of them when left out) */
+                entity_id?: number;
+            };
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                tag: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
+            404: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

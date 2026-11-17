@@ -1,4 +1,5 @@
 import type { App } from "./app.ts";
+import { tagsOfEntries } from "./tags.ts";
 import { entryMoves } from "./unreconciled.ts";
 import { withTx, queryRow, queryRows, toNumber, type Queryable } from "./db.ts";
 import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
@@ -476,6 +477,7 @@ function toEntry(r: EntryRow): JournalEntry {
 		totals: [],
 		lines: [],
 		links: [],
+		tags: [],
 		amended: (r as EntryRow & { amended?: boolean }).amended === true,
 	};
 }
@@ -630,8 +632,10 @@ export interface EntryFilter {
 	from: string | null;
 	to: string | null;
 	accountCode: string | null;
-	/** Only entries with this entity (vendor, customer). */
+	/** Only entries with this entity (vendor, customer): posted with it, or tagged with it. */
 	entityId?: number | null;
+	/** Only entries carrying this tag. */
+	tag?: string | null;
 	/** Leave out reversed entries and the entries that reverse them. */
 	hideReversed?: boolean;
 	limit: number;
@@ -649,10 +653,11 @@ export async function listJournalEntries(app: App, f: EntryFilter): Promise<Jour
 		        SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id
 		         WHERE t.journal_entry_id = e.id AND a.code = $3))
 		  AND (NOT $6 OR (e.reverses_id IS NULL AND r.id IS NULL))
-		  AND ($7::bigint IS NULL OR e.entity_id = $7)
+		  AND ($7::bigint IS NULL OR e.entity_id = $7 OR EXISTS (SELECT 1 FROM journal_entry_tags jt WHERE jt.entry_id = e.id AND jt.entity_id = $7))
+		  AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM journal_entry_tags jt WHERE jt.entry_id = e.id AND jt.tag = $8))
 		ORDER BY e.entry_date DESC, e.id DESC
 		LIMIT $4 OFFSET $5`,
-		[f.from, f.to, f.accountCode, f.limit, f.offset, f.hideReversed === true, f.entityId ?? null],
+		[f.from, f.to, f.accountCode, f.limit, f.offset, f.hideReversed === true, f.entityId ?? null, f.tag ?? null],
 	);
 	const entries = rows.map(toEntry);
 	await attachLines(app, entries);
@@ -669,6 +674,7 @@ async function attachLines(app: App, entries: JournalEntry[]): Promise<void> {
 		[entries.map((e) => e.id)],
 	);
 	for (const { entry_id, ...l } of links) byId.get(Number(entry_id))!.links.push(l);
+	for (const [entryId, tags] of await tagsOfEntries(app.db, entries.map((e) => e.id))) byId.get(entryId)!.tags = tags;
 	const rows = await queryRows<{
 		journal_entry_id: bigint;
 		id: bigint;

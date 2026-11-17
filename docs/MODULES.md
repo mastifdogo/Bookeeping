@@ -334,6 +334,48 @@ balance, a bill marked paid), read it from the entry
 (`ctx.ledger.linkedEntries(ref)`) instead of trusting the module's own copy,
 and show a difference to the user rather than overwriting either side.
 
+## Tags: one system for every module
+
+Since Ledger 0.23.0 journal entries carry tags shared by Ledger and all
+modules. Use them, and only them, to say that an entry is paid, billed or
+overdue, or which customer or vendor it belongs to: don't keep that only in
+the module's own tables, and don't use entry links for it.
+
+```js
+await ctx.tags.set(entryId, "billed", { note: "Invoice 12" }, req.user);    // user optional: who did it
+await ctx.tags.set(entryId, "customer", { entity_id: customer.entity_id });  // "customer" and "vendor" need the entity
+await ctx.tags.set(entryId, "paid");                                         // takes "overdue" off
+await ctx.tags.remove(entryId, "billed");
+const tags = await ctx.tags.of(entryId);       // [{ tag, entity: { id, name } | null, note, module_id, set_by, set_at }]
+const due = await ctx.tags.entries({ tag: "overdue", entity_id });  // journal entries, newest first; also from, to, limit
+ctx.tags.onChange(async (c) => {               // every change, by any module or a person
+	// c = { entry_id, action: "set" | "removed", tag, entity_id, module_id }  (module_id null: a person)
+});
+ctx.tags.standard;                             // ["paid", "billed", "overdue", "customer", "vendor"]
+```
+
+- **The standard tags mean the same everywhere.** `billed`: the entry was
+  charged to a customer (an invoice exists for it). `paid`: it has been paid
+  in full. `overdue`: payment is past due. `customer` / `vendor`: who it is
+  with (an entity; several are allowed). Other tags are lowercase words of
+  up to 40 characters; pick ones another module could use.
+- **A tag belongs to the entry, not to the module that set it.** Any module
+  or a person can take it off. So the module's own record follows the tag:
+  listen with `onChange` (or read `ctx.tags.of`) and bring the record in
+  line, e.g. an invoice whose entry is tagged "paid" by someone else becomes
+  paid in the module too; if "paid" is taken off, it is open again.
+- **Tag what you post, when you post it** (customer or vendor, billed), and
+  keep the tags true as things change (paid, overdue). Tag the entry the
+  other modules would look at: the invoice's or bill's entry, not the
+  payment's.
+- Don't act on your own changes twice: in `onChange`, skip changes whose
+  `module_id` is your own (`ctx.id`).
+- `ctx.tags.entries({ entity_id })` also finds entries posted with that
+  customer or vendor (`entity_id` on the entry), so tag only where the
+  entry doesn't already say who.
+- Check `ctx.tags` exists before using it if the module still supports an
+  older Ledger.
+
 ## Root mode
 
 Since Ledger 0.21.0 an admin can turn on root mode: they can delete an

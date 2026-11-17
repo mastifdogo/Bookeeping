@@ -192,6 +192,34 @@
 		return out;
 	});
 
+	// Tags: shared by Ledger and every module (paid, billed, overdue, customer, vendor, or another word).
+	const STANDARD = ['paid', 'billed', 'overdue', 'customer', 'vendor'];
+	let newTag = $state('paid');
+	let customTag = $state('');
+	let tagEntity = $state('');
+	let needsEntity = $derived(newTag === 'customer' || newTag === 'vendor');
+	let tagEntities = $derived(data.entities.filter((x) => x.is_active && (newTag === 'customer' ? x.is_customer : x.is_vendor)));
+	async function tagAct(fn: () => Promise<unknown>) {
+		busy = true;
+		error = null;
+		try {
+			await fn();
+			customTag = '';
+			await invalidateAll();
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+	const addTag = (ev: SubmitEvent) => {
+		ev.preventDefault();
+		const tag = (newTag === '' ? customTag : newTag).trim().toLowerCase();
+		return tagAct(async () => unwrap(await api().POST('/journal-entries/{entryId}/tags', { params: { path: { entryId: e.id } }, body: { tag, ...(needsEntity ? { entity_id: Number(tagEntity) || null } : {}) } })));
+	};
+	const dropTag = (t: (typeof e.tags)[number]) =>
+		tagAct(async () => unwrap(await api().DELETE('/journal-entries/{entryId}/tags/{tag}', { params: { path: { entryId: e.id, tag: t.tag }, query: { entity_id: t.entity?.id } } })));
+
 	// One log of what changed after posting: amounts, the date and lines moved to another account.
 	type LogRow = { key: string; at: string; by: string | null; what: string; was: string; now: string; why: string };
 	const money = (c: number) => formatCents(c);
@@ -328,6 +356,35 @@
 	</div>
 </div>
 
+<div class="card tags">
+	<div class="muted small">Tags <span title="Tags are shared with every module: a tag set here, or by a module, is seen by all of them.">(shared with modules)</span></div>
+	<div class="taglist">
+		{#each e.tags as t (t.tag + ':' + (t.entity?.id ?? ''))}
+			<span class="badge tag {t.tag}" title="{t.module_id ? `Set by ${moduleName(t.module_id)}` : `Set by ${t.set_by ?? 'a person'}`}, {new Date(t.set_at).toLocaleString()}{t.note ? `: ${t.note}` : ''}">
+				{t.entity ? `${t.tag}: ${t.entity.name}` : t.tag}{#if canEdit}<button type="button" class="x" disabled={busy} aria-label="Take off the tag {t.tag}" onclick={() => dropTag(t)}>×</button>{/if}
+			</span>
+		{:else}
+			<span class="muted small">None.</span>
+		{/each}
+	</div>
+	{#if canEdit}
+		<form class="toolbar" style="margin:0.5rem 0 0" onsubmit={addTag}>
+			<select bind:value={newTag} aria-label="Tag" style="width:auto">
+				{#each STANDARD as s (s)}<option value={s}>{s}</option>{/each}
+				<option value="">another…</option>
+			</select>
+			{#if newTag === ''}<input bind:value={customTag} placeholder="a word, e.g. disputed" maxlength="40" pattern="[A-Za-z][A-Za-z0-9_\-]*" required style="width:12rem" />{/if}
+			{#if needsEntity}
+				<select bind:value={tagEntity} aria-label="Which {newTag}" required style="width:auto">
+					<option value="" disabled>Which {newTag}…</option>
+					{#each tagEntities as x (x.id)}<option value={String(x.id)}>{x.name}</option>{/each}
+				</select>
+			{/if}
+			<button disabled={busy}>Add tag</button>
+		</form>
+	{/if}
+</div>
+
 {#if e.links.length > 0}
 	<div class="card links">
 		<div class="muted small">Linked records</div>
@@ -449,6 +506,24 @@
 		padding: 0 0 0 0.4rem;
 		color: var(--accent);
 		cursor: pointer;
+	}
+	.taglist {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.3rem;
+		margin-top: 0.3rem;
+	}
+	.taglist .badge.tag {
+		margin-left: 0;
+	}
+	.x {
+		background: none;
+		border: none;
+		padding: 0 0 0 0.3rem;
+		color: inherit;
+		cursor: pointer;
+		font-size: 1em;
+		line-height: 1;
 	}
 	.links ul {
 		list-style: none;

@@ -158,6 +158,20 @@ Decide, and state briefly to the user:
   Since 0.20.2 an entry's date can change too (`date_changes`), and a
   finished reconciliation moves a bank account's unticked lines to Ledger's
   Unreconciled clearing account until a person moves them on (`moves`).
+- **One tag system for every module** (Ledger 0.23.0; needs
+  `"ledger": ">=0.23.0"`). Whether an entry is paid, billed or overdue, and
+  which customer or vendor it is with, is said with Ledger's shared tags,
+  never only in the module's own tables and never with entry links:
+  `ctx.tags.set(entryId, "billed")`, `ctx.tags.set(entryId, "customer",
+  { entity_id })`, `ctx.tags.set(entryId, "paid")` (takes "overdue" off),
+  `ctx.tags.remove`, `ctx.tags.of(entryId)`, `ctx.tags.entries({ tag,
+  entity_id })`. Tag the entry when posting it (who it is with, billed) and
+  keep it true (paid, overdue). A tag belongs to the entry: another module
+  or a person can set or remove it, so register `ctx.tags.onChange` (skip
+  changes whose `module_id` is `ctx.id`) and bring the module's own record
+  in line, e.g. an invoice whose entry gets "paid" becomes paid. Other tags
+  are lowercase words; choose ones another module could use. Details:
+  docs/MODULES.md, "Tags".
 - **Root mode** (Ledger 0.21.0, wider in 0.21.1): an admin in root mode
   can delete any account, entry, line or user and move a line to any
   account; entries may be unbalanced until root mode is left, and anything

@@ -9,5 +9,6 @@ export const load: PageLoad = async ({ fetch, params, parent }) => {
 	const { user } = await parent();
 	// A line in Unreconciled can be moved on, and root mode can move any line: the accounts it can go to.
 	const accounts = user?.root || entry.lines.some((l) => l.unreconciled) ? (unwrapLoad(await api(fetch).GET('/accounts')).data ?? []) : [];
-	return { entry, accounts };
+	const entities = unwrapLoad(await api(fetch).GET('/entities')).data ?? [];
+	return { entry, accounts, entities };
 };

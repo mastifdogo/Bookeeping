@@ -399,6 +399,25 @@ const c = await ctx.ledger.clearingAccount({ key: "card_payouts", name: "Card pa
 const all = await ctx.ledger.clearingAccounts(); // every module's: find another module's by module_id + module_key
 ```
 
+### Tags shared by all modules (Ledger 0.23.0)
+
+```js
+await ctx.tags.set(entryId, "billed", { note: "Invoice 12" }, req.user);
+await ctx.tags.set(entryId, "customer", { entity_id });   // "customer"/"vendor" need entity_id
+await ctx.tags.set(entryId, "paid");                      // takes "overdue" off
+await ctx.tags.remove(entryId, "billed");
+await ctx.tags.of(entryId);                               // [{ tag, entity, note, module_id, set_by, set_at }]
+await ctx.tags.entries({ tag: "overdue", entity_id, from, to, limit }); // journal entries
+ctx.tags.onChange((c) => {});                             // { entry_id, action: "set"|"removed", tag, entity_id, module_id }
+```
+
+Use these, and only these, for paid / billed / overdue and for which
+customer or vendor an entry is with: not the module's own tables alone, not
+entry links. Tags belong to the entry: another module or a person may set
+or remove them, so listen with `onChange` (skip `module_id === ctx.id`) and
+keep the module's record in line with the tag. Every entry also has `tags`
+when read through `ctx.ledger`.
+
 ### Root mode (Ledger 0.21.1)
 
 ```js

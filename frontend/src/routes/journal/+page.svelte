@@ -11,17 +11,20 @@
 	let from = $state('');
 	let to = $state('');
 	let accountCode = $state('');
+	let tag = $state('');
 	$effect.pre(() => {
 		from = data.filter.from;
 		to = data.filter.to;
 		accountCode = data.filter.account_code;
+		tag = data.filter.tag;
 	});
 
-	function href(offset: number, f = { from, to, account_code: accountCode, hide_reversed: data.filter.hide_reversed }) {
+	function href(offset: number, f: { from: string; to: string; account_code: string; hide_reversed: boolean; tag?: string } = { from, to, account_code: accountCode, hide_reversed: data.filter.hide_reversed, tag }) {
 		const q = new URLSearchParams();
 		if (f.from) q.set('from', f.from);
 		if (f.to) q.set('to', f.to);
 		if (f.account_code) q.set('account_code', f.account_code);
+		if (f.tag) q.set('tag', f.tag);
 		q.set('hide_reversed', f.hide_reversed ? '1' : '0');
 		if (offset > 0) q.set('offset', String(offset));
 		return `?${q}`;
@@ -60,8 +63,15 @@
 			{#each data.accounts as a (a.code)}<option value={a.code}>{a.code} — {a.name} ({a.currency})</option>{/each}
 		</select>
 	</label>
+	<label>
+		Tag
+		<select bind:value={tag} style="width:auto">
+			<option value="">Any</option>
+			{#each data.tags as t (t.tag)}<option value={t.tag}>{t.tag}{t.entries ? ` (${t.entries})` : ''}</option>{/each}
+		</select>
+	</label>
 	<button>Filter</button>
-	{#if data.filter.from || data.filter.to || data.filter.account_code}<a class="button" href={href(0, { from: '', to: '', account_code: '', hide_reversed: data.filter.hide_reversed })}>Clear</a>{/if}
+	{#if data.filter.from || data.filter.to || data.filter.account_code || data.filter.tag}<a class="button" href={href(0, { from: '', to: '', account_code: '', hide_reversed: data.filter.hide_reversed })}>Clear</a>{/if}
 	<span class="spacer"></span>
 	<label class="inline"><input type="checkbox" checked={data.filter.hide_reversed} onchange={toggleReversed} /> Hide reversed</label>
 </form>
@@ -82,6 +92,9 @@
 						<td>
 							{e.description}
 							{#if e.entity}<span class="muted small">· {e.entity.name}</span>{/if}
+							{#each e.tags as t (t.tag + ':' + (t.entity?.id ?? ''))}
+								<span class="badge tag {t.tag}" title={t.module_id ? `Set by ${t.module_id}` : 'Set by a person'}>{t.entity ? `${t.tag}: ${t.entity.name}` : t.tag}</span>
+							{/each}
 							{#each e.links as l (l.module_id + ':' + l.ref)}
 								{#if l.href}<a class="link-chip" href={l.href} title="Linked from {l.module_id}">{l.label}</a>{:else}<span class="link-chip" title="Linked from {l.module_id}">{l.label}</span>{/if}
 							{/each}

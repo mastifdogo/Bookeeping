@@ -7,6 +7,7 @@
 // A module that fails to load is reported on the Modules page and skipped;
 // the rest of Ledger keeps running.
 
+import { removeTag, setTag, STANDARD_TAGS, tagsOf, type TagChange } from "./tags.ts";
 import { rootModuleDelete, rootModuleUpdate } from "./root.ts";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
@@ -80,6 +81,8 @@ export interface LoadedModule {
 	accountCodeListeners: ((change: { old_code: string; new_code: string }) => unknown)[];
 	/** ctx.root.onCheck functions: what in the module's records keeps root mode from being left. */
 	rootChecks: (() => unknown)[];
+	/** ctx.tags.onChange listeners: told of every tag set on or taken off an entry, whoever did it. */
+	tagListeners: ((change: TagChange) => unknown)[];
 	/** ctx.search.provide functions. */
 	searchProviders: SearchProvider[];
 	/** ctx.settings.onChange listeners. */
@@ -168,6 +171,39 @@ function makeContext(app: App, m: LoadedModule) {
 			query: async (sql: string, params: unknown[] = []) => {
 				const r = await app.db.query(sql, params);
 				return { rows: r.rows as Record<string, unknown>[], rowCount: r.rowCount ?? 0 };
+			},
+		},
+		/**
+		 * Tags on journal entries, shared by Ledger and every module (Ledger
+		 * 0.23.0): "paid", "billed", "overdue", "customer" and "vendor" (these two
+		 * with entity_id), or any lowercase word modules agree on. A tag is on
+		 * the entry, not owned by the module that set it: any module or a person
+		 * can take it off, and everyone sees it.
+		 */
+		tags: {
+			standard: [...STANDARD_TAGS],
+			/** The entry's tags. */
+			of: (entryId: number | bigint | string) => tagsOf(app, entryIdOf(entryId)),
+			/** Tags the entry: set(entryId, "paid") or set(entryId, "customer", { entity_id }). "paid" takes "overdue" off. Returns its tags. */
+			set: (entryId: number | bigint | string, tag: string, opts: { entity_id?: number | null; note?: string } = {}, user?: { username: string }) =>
+				setTag(app, entryIdOf(entryId), { tag, entity_id: opts?.entity_id, note: opts?.note }, { moduleId: id, userId: actorOf(user) }),
+			/** Takes the tag off (for "customer"/"vendor": that entity, or all when none is given). Returns the entry's tags. */
+			remove: (entryId: number | bigint | string, tag: string, opts: { entity_id?: number | null } = {}) => removeTag(app, entryIdOf(entryId), { tag, entity_id: opts?.entity_id }, { moduleId: id }),
+			/** Entries carrying a tag and/or belonging to a customer or vendor, newest first: { tag?, entity_id?, from?, to?, limit?, offset? }. */
+			entries: (f: { tag?: string; entity_id?: number; from?: string; to?: string; limit?: number; offset?: number } = {}) =>
+				listJournalEntries(app, {
+					from: f.from ?? null,
+					to: f.to ?? null,
+					accountCode: null,
+					tag: typeof f.tag === "string" ? f.tag.trim().toLowerCase() : null,
+					entityId: Number.isSafeInteger(f.entity_id) ? (f.entity_id as number) : null,
+					limit: Math.min(Math.max(Number(f.limit) || 100, 1), 500),
+					offset: Math.max(Number(f.offset) || 0, 0),
+				}),
+			/** fn({ entry_id, action: "set" | "removed", tag, entity_id, module_id }) after every change, by any module or a person. */
+			onChange(fn: (change: TagChange) => unknown) {
+				if (typeof fn !== "function") throw new Error("tags.onChange: expected a function");
+				m.tagListeners.push(fn);
 			},
 		},
 		/**
@@ -454,6 +490,7 @@ export class ModuleHost {
 			documentListeners: [],
 			accountCodeListeners: [],
 			rootChecks: [],
+			tagListeners: [],
 			importer: null,
 		};
 		this.modules.set(m.manifest.id, m);

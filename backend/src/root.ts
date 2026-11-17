@@ -146,6 +146,8 @@ export async function rootDeleteAccount(app: App, code: string, user: User): Pro
 		await keep(tx, id, "dates", `SELECT * FROM journal_entry_date_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "links", `SELECT * FROM journal_entry_links WHERE entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "code_changes", `SELECT * FROM account_code_changes WHERE account_id = $2`, [a]);
+		await keep(tx, id, "tags", `SELECT * FROM journal_entry_tags WHERE entry_id = ANY($2::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entry_tags WHERE entry_id = ANY($1::bigint[])`, [e]);
 
 		await tx.query(
 			`DELETE FROM reconciliation_lines WHERE reconciliation_id IN (SELECT id FROM reconciliations WHERE account_id = $1)
@@ -441,6 +443,7 @@ export async function reverseRootAction(app: App, scope: RootAction["scope"], id
 			await putBack(tx, id, "journal_entry_date_changes", "dates");
 			await putBack(tx, id, "journal_entry_links", "links");
 			await putBack(tx, id, "account_code_changes", "code_changes");
+			await putBack(tx, id, "journal_entry_tags", "tags");
 			const acc = `(SELECT (undo->'account'->0->>'id')::bigint FROM root_actions WHERE id = $1)`;
 			await tx.query(`UPDATE accounts SET parent_id = ${acc} WHERE id IN (SELECT (c->>'id')::bigint FROM jsonb_array_elements((SELECT undo->'children' FROM root_actions WHERE id = $1)) c)`, [id]);
 			await tx.query(`UPDATE documents SET account_id = ${acc} WHERE id IN (SELECT (c->>'id')::bigint FROM jsonb_array_elements((SELECT undo->'documents' FROM root_actions WHERE id = $1)) c)`, [id]);
@@ -463,6 +466,7 @@ async function putBackEntries(tx: Queryable, id: bigint): Promise<void> {
 	await putBack(tx, id, "transaction_moves", "moves");
 	await putBack(tx, id, "journal_entry_date_changes", "dates");
 	await putBack(tx, id, "journal_entry_links", "links");
+	await putBack(tx, id, "journal_entry_tags", "tags");
 }
 
 /** Deletes a journal entry whole (with the entry that reverses it, or that it reverses). */
@@ -480,6 +484,8 @@ export async function rootDeleteEntry(app: App, entryId: bigint, user: User): Pr
 		await keep(tx, id, "moves", `SELECT * FROM transaction_moves WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "dates", `SELECT * FROM journal_entry_date_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "links", `SELECT * FROM journal_entry_links WHERE entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "tags", `SELECT * FROM journal_entry_tags WHERE entry_id = ANY($2::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entry_tags WHERE entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM reconciliation_lines WHERE transaction_id IN (SELECT id FROM transactions WHERE journal_entry_id = ANY($1::bigint[]))`, [e]);
 		await tx.query(`DELETE FROM transaction_changes WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM transaction_moves WHERE journal_entry_id = ANY($1::bigint[])`, [e]);

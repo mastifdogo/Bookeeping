@@ -4184,3 +4184,88 @@ test("a background from Wallhaven: searched by the server, downloaded once, serv
 	expectStatus(await call("GET", "/settings/background/image"), 404);
 	void token;
 });
+
+test("tags on entries are shared: a tag one module sets, another module and people see", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "1200", "Receivable", "asset", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	const acme = (await call("POST", "/entities", { name: "Acme", is_customer: true })).json();
+	const paper = (await call("POST", "/entities", { name: "Paper Co", is_vendor: true })).json();
+	const inv = (await call("POST", "/journal-entries", entry("2026-03-01", "Invoice 12", dr("1200", 50000), cr("4000", 50000)))).json();
+	const other = (await call("POST", "/journal-entries", entry("2026-03-02", "Invoice 13", dr("1200", 7000), cr("4000", 7000)))).json();
+	await loadModules(t, app, {
+		// "sales" tags its invoices; "collect" is another module that picks the tags up.
+		sales: `export default function (ctx) {
+			ctx.route("POST", "/tag", (req) => ctx.tags.set(req.body.entry, req.body.tag, { entity_id: req.body.entity_id, note: req.body.note }, req.user));
+			ctx.route("POST", "/untag", (req) => ctx.tags.remove(req.body.entry, req.body.tag));
+		}`,
+		collect: `const heard = [];
+		export default function (ctx) {
+			ctx.tags.onChange((c) => heard.push([c.action, c.tag, c.entry_id, c.entity_id, c.module_id]));
+			ctx.route("GET", "/heard", () => heard);
+			ctx.route("GET", "/of/:id", (req) => ctx.tags.of(req.params.id));
+			ctx.route("GET", "/entries", async (req) => (await ctx.tags.entries({ tag: req.query.get("tag") || undefined, entity_id: Number(req.query.get("entity")) || undefined })).map((e) => e.id));
+			ctx.route("GET", "/standard", () => ctx.tags.standard);
+			ctx.route("POST", "/paid/:id", (req) => ctx.tags.set(req.params.id, "paid"));
+		}`,
+	});
+	assert.deepEqual((await call("GET", "/m/collect/standard")).json(), ["paid", "billed", "overdue", "customer", "vendor"]);
+
+	// Sales tags the invoice's entry billed, overdue, and to its customer.
+	expectStatus(await call("POST", "/m/sales/tag", { entry: inv.id, tag: "billed", note: "Invoice 12" }), 200);
+	expectStatus(await call("POST", "/m/sales/tag", { entry: inv.id, tag: "overdue" }), 200);
+	let r = await call("POST", "/m/sales/tag", { entry: inv.id, tag: "customer", entity_id: acme.id });
+	assert.deepEqual(r.json().map((x: any) => [x.tag, x.entity?.name ?? null, x.module_id, x.set_by, x.note]), [
+		["billed", null, "sales", "tester", "Invoice 12"],
+		["overdue", null, "sales", "tester", ""],
+		["customer", "Acme", "sales", "tester", ""],
+	]);
+	// Setting it again changes nothing and isn't announced again.
+	expectStatus(await call("POST", "/m/sales/tag", { entry: inv.id, tag: "overdue" }), 200);
+	// What isn't a tag, or lacks its customer, is refused.
+	for (const body of [{ tag: "Paid Up" }, { tag: "customer" }, { tag: "paid", entity_id: acme.id }, { tag: "customer", entity_id: paper.id }, { tag: "vendor", entity_id: 9999 }]) {
+		expectStatus(await call("POST", "/m/sales/tag", { entry: inv.id, ...body }), 422);
+	}
+	expectStatus(await call("POST", "/m/sales/tag", { entry: 9999, tag: "paid" }), 404);
+
+	// The other module sees them, finds entries by tag and by customer, and marks the invoice paid: overdue comes off.
+	assert.deepEqual((await call("GET", `/m/collect/of/${inv.id}`)).json().map((x: any) => x.tag), ["billed", "overdue", "customer"]);
+	assert.deepEqual((await call("GET", "/m/collect/entries?tag=overdue")).json(), [inv.id]);
+	assert.deepEqual((await call("GET", `/m/collect/entries?entity=${acme.id}`)).json(), [inv.id]);
+	r = await call("POST", `/m/collect/paid/${inv.id}`);
+	assert.deepEqual(r.json().map((x: any) => [x.tag, x.module_id]), [["billed", "sales"], ["customer", "sales"], ["paid", "collect"]]);
+	await new Promise((res) => setTimeout(res, 50));
+	assert.deepEqual((await call("GET", "/m/collect/heard")).json(), [
+		["set", "billed", inv.id, null, "sales"],
+		["set", "overdue", inv.id, null, "sales"],
+		["set", "customer", inv.id, acme.id, "sales"],
+		["set", "paid", inv.id, null, "collect"],
+		["removed", "overdue", inv.id, null, "collect"],
+	]);
+
+	// A person tags and untags on the entry's page; modules hear that too (module_id null).
+	r = await call("POST", `/journal-entries/${other.id}/tags`, { tag: "disputed" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().tags.map((x: any) => [x.tag, x.module_id, x.set_by]), [["disputed", null, "tester"]]);
+	r = await call("DELETE", `/journal-entries/${inv.id}/tags/customer?entity_id=${acme.id}`);
+	assert.deepEqual(r.json().tags.map((x: any) => x.tag), ["billed", "paid"]);
+	await new Promise((res) => setTimeout(res, 50));
+	assert.deepEqual((await call("GET", "/m/collect/heard")).json().slice(5), [["set", "disputed", other.id, null, null], ["removed", "customer", inv.id, acme.id, null]]);
+
+	// The journal lists tags, filters by them, and knows which are in use.
+	r = await call("GET", "/journal-entries?tag=paid");
+	assert.deepEqual(r.json().data.map((e: any) => [e.id, e.tags.map((x: any) => x.tag)]), [[inv.id, ["billed", "paid"]]]);
+	assert.deepEqual((await call("GET", "/tags")).json().data.map((x: any) => [x.tag, x.entries]), [["paid", 1], ["billed", 1], ["overdue", 0], ["customer", 0], ["vendor", 0], ["disputed", 1]]);
+	expectStatus(await call("GET", "/journal-entries?tag=Bad%20Tag"), 422);
+
+	// Deleting a tagged entry in root mode and reversing it brings its tags back.
+	await call("POST", "/auth/root", { on: true });
+	r = await call("DELETE", `/journal-entries/${inv.id}/root`);
+	expectStatus(r, 200);
+	expectStatus(await call("POST", `/root-actions/books/${r.json().id}/reverse`), 200);
+	assert.deepEqual((await call("GET", `/journal-entries/${inv.id}`)).json().tags.map((x: any) => [x.tag, x.module_id]), [["billed", "sales"], ["paid", "collect"]]);
+	expectStatus(await call("POST", "/auth/root", { on: false }), 200);
+});

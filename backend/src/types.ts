@@ -137,6 +137,8 @@ export interface JournalEntry {
 	lines: JournalLine[];
 	/** Module records linked to this entry. */
 	links: EntryLink[];
+	/** Tags shared by Ledger and every module: paid, billed, overdue, customer, vendor, and others (tags.ts). */
+	tags: import("./tags.ts").EntryTag[];
 	/** Whether any of its amounts were changed after it was posted. */
 	amended: boolean;
 	/** Every change made to its amounts, oldest first (only when one entry is fetched). */

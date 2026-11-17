@@ -494,6 +494,7 @@ paths:
           in: query
           description: Only entries with at least one line on this account
           schema: { $ref: '#/components/schemas/AccountCode' }
+        - { name: tag, in: query, schema: { type: string }, description: Only entries carrying this tag }
         - name: entity_id
           in: query
           description: Only entries with this customer or vendor
@@ -668,6 +669,78 @@ paths:
               schema: { $ref: '#/components/schemas/JournalEntry' }
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /tags:
+    get:
+      tags: [Journal Entries]
+      operationId: listTags
+      summary: Every tag in use, with how many entries carry it (the standard ones always listed)
+      responses:
+        '200':
+          description: Tags
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [tag, entries, standard]
+                      properties:
+                        tag: { type: string }
+                        entries: { type: integer }
+                        standard: { type: boolean }
+        default: { $ref: '#/components/responses/Error' }
+
+  /journal-entries/{entryId}/tags:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      tags: [Journal Entries]
+      operationId: setEntryTag
+      summary: Tag an entry (shared with every module); "paid" takes "overdue" off
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [tag]
+              properties:
+                tag: { type: string }
+                entity_id: { type: integer, nullable: true, description: Required for the tags customer and vendor }
+                note: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: The entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JournalEntry' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /journal-entries/{entryId}/tags/{tag}:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+      - { name: tag, in: path, required: true, schema: { type: string } }
+      - { name: entity_id, in: query, schema: { type: integer }, description: 'For customer and vendor: which one (all of them when left out)' }
+    delete:
+      tags: [Journal Entries]
+      operationId: removeEntryTag
+      summary: Take a tag off an entry
+      responses:
+        '200':
+          description: The entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JournalEntry' }
+        '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
   /unreconciled:
@@ -2959,6 +3032,23 @@ components:
             url: { type: string, description: "The picture's page on Wallhaven" }
             dim: { type: integer, description: 'How much of the page colour is laid over the picture, percent' }
             version: { type: integer, format: int64 }
+    EntryTag:
+      type: object
+      required: [tag, entity, note, module_id, set_by, set_at]
+      properties:
+        tag: { type: string, description: 'paid, billed, overdue, customer, vendor, or another lowercase word' }
+        entity:
+          type: object
+          nullable: true
+          description: Who, for the tags customer and vendor
+          required: [id, name]
+          properties:
+            id: { type: integer }
+            name: { type: string }
+        note: { type: string }
+        module_id: { type: string, nullable: true, description: The module that set it; null when a person did }
+        set_by: { type: string, nullable: true }
+        set_at: { type: string, format: date-time }
     RootAction:
       type: object
       required: [id, scope, action, target, summary, done_by, done_at, reversed_by, reversed_at]
@@ -3258,8 +3348,12 @@ components:
         unreconciled: { type: boolean, description: "Set when the line sits in Ledger's Unreconciled clearing account (it can be moved on)" }
     JournalEntry:
       type: object
-      required: [id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, entity, posted_at, totals, lines, links, amended]
+      required: [id, entry_date, description, reference, reverses_id, reversed_by_id, import_id, created_by, entity, posted_at, totals, lines, links, tags, amended]
       properties:
+        tags:
+          type: array
+          description: Tags shared by Ledger and every module (paid, billed, overdue, customer, vendor, and others)
+          items: { $ref: '#/components/schemas/EntryTag' }
         amended: { type: boolean, description: Whether any of its amounts were changed after it was posted }
         date_changes:
           type: array

@@ -1,6 +1,7 @@
 // HTTP layer. Paths match api/openapi.yaml under /api/v1; everything else
 // serves the built SvelteKit frontend.
 
+import { listTags, removeTag, setTag } from "./tags.ts";
 import { backgroundImage, chooseBackground, dimBackground, getBackground, removeBackground, searchWallhaven } from "./wallhaven.ts";
 import { MAX_CENTS } from "./money.ts";
 import { closeSession, consoleOpen, emit, installConsole, listen, onSessionClose, withConsoleContext } from "./console.ts";
@@ -1002,6 +1003,11 @@ async function handleListJournalEntries(c: Ctx): Promise<void> {
 		if (n === null || n < 1) v.add("entity_id", "must be a customer's or vendor's id");
 		else f.entityId = n;
 	}
+	const tag = c.query.get("tag") ?? "";
+	if (tag !== "") {
+		if (!/^[a-z][a-z0-9_-]{0,39}$/.test(tag)) v.add("tag", "is not a tag");
+		else f.tag = tag;
+	}
 	const limit = c.query.get("limit") ?? "";
 	if (limit !== "") {
 		const n = atoi(limit);
@@ -1067,6 +1073,27 @@ async function handleChangeEntryDate(c: Ctx): Promise<void> {
 		return { entry_date: o.entry_date, reason: o.reason as string | undefined };
 	});
 	writeJSON(c.res, 200, await changeEntryDate(c.app, id, body, c.user!.id));
+}
+
+// Tags on entries, shared with modules (tags.ts).
+
+async function handleSetTag(c: Ctx): Promise<void> {
+	const id = pathId(c, "entryId");
+	const b = await decodeBody(c, true, objectBody(["tag", "entity_id", "note"]));
+	const num = (v: unknown) => (v === undefined || v === null ? null : Number(typeof v === "object" ? (v as { source?: unknown }).source : v));
+	await setTag(c.app, id, { tag: b.tag as string, entity_id: num(b.entity_id), note: b.note as string | undefined }, { moduleId: null, userId: c.user!.id });
+	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
+}
+
+async function handleRemoveTag(c: Ctx): Promise<void> {
+	const id = pathId(c, "entryId");
+	const e = c.query.get("entity_id");
+	await removeTag(c.app, id, { tag: c.params.tag ?? "", entity_id: e ? Number(e) : null }, { moduleId: null });
+	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
+}
+
+async function handleListTags(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, { data: await listTags(c.app) });
 }
 
 async function handleUnreconciled(c: Ctx): Promise<void> {
@@ -2301,6 +2328,9 @@ const ROUTES: Route[] = [
 	route("PATCH", "/journal-entries/:entryId/lines/:lineNumber/account", true, handleMoveEntryLine),
 	route("PATCH", "/journal-entries/:entryId/date", true, handleChangeEntryDate),
 	route("GET", "/unreconciled", true, handleUnreconciled),
+	route("GET", "/tags", true, handleListTags),
+	route("POST", "/journal-entries/:entryId/tags", true, handleSetTag),
+	route("DELETE", "/journal-entries/:entryId/tags/:tag", true, handleRemoveTag),
 
 	route("GET", "/search", true, handleSearch),
 	route("GET", "/dashboard", true, handleGetDashboard),
