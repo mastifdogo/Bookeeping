@@ -55,3 +55,69 @@ export async function putSidebar(app: App, userId: number, items: SidebarItem[])
 	);
 	return { items };
 }
+
+// The dashboard's tiles (Settings → UI): where each goes on a 12-column grid
+// and how big it is. Tiles not listed are placed after the others.
+
+export const DASHBOARD_TILES = ["summary-CAD", "summary-USD", "notifications", "todos", "entries"] as const;
+export const DASHBOARD_COLUMNS = 12;
+const MAX_ROWS = 60;
+
+export interface DashboardTile {
+	id: (typeof DASHBOARD_TILES)[number];
+	/** Column it starts in, 1-12. */
+	x: number;
+	/** Row it starts in, 1 and up (a row is about 2.5rem). */
+	y: number;
+	/** Width in columns. */
+	w: number;
+	/** Height in rows. */
+	h: number;
+	hidden: boolean;
+}
+
+export function decodeDashboardLayout(v: unknown): { tiles: DashboardTile[] } {
+	const o = (v && typeof v === "object" && !Array.isArray(v) ? v : null) as Record<string, unknown> | null;
+	if (!o) throw new DecodeError("expected an object");
+	for (const k of Object.keys(o)) if (k !== "tiles") throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+	const verr = new ValidationError();
+	if (!Array.isArray(o.tiles)) {
+		verr.add("tiles", "must be a list");
+		verr.throwIfAny();
+	}
+	const seen = new Set<string>();
+	const out: DashboardTile[] = [];
+	const int = (x: unknown) => Number(x && typeof x === "object" ? (x as { source?: unknown }).source : x);
+	(o.tiles as unknown[]).forEach((x, i) => {
+		const t = (x && typeof x === "object" ? x : {}) as Record<string, unknown>;
+		for (const k of Object.keys(t)) if (!["id", "x", "y", "w", "h", "hidden"].includes(k)) throw new DecodeError(`json: unknown field ${JSON.stringify(k)}`);
+		if (!(DASHBOARD_TILES as readonly unknown[]).includes(t.id)) return verr.add(`tiles[${i}].id`, `must be one of ${DASHBOARD_TILES.join(", ")}`);
+		if (seen.has(t.id as string)) return verr.add(`tiles[${i}].id`, "is listed twice");
+		const [px, py, pw, ph] = [int(t.x), int(t.y), int(t.w), int(t.h)];
+		const ok = (n: number, lo: number, hi: number) => Number.isInteger(n) && n >= lo && n <= hi;
+		if (!ok(pw, 1, DASHBOARD_COLUMNS)) return verr.add(`tiles[${i}].w`, `must be 1-${DASHBOARD_COLUMNS} columns`);
+		if (!ok(px, 1, DASHBOARD_COLUMNS - pw + 1)) return verr.add(`tiles[${i}].x`, `must be a column from 1 so the tile fits in ${DASHBOARD_COLUMNS}`);
+		if (!ok(ph, 1, 30)) return verr.add(`tiles[${i}].h`, "must be 1-30 rows");
+		if (!ok(py, 1, MAX_ROWS)) return verr.add(`tiles[${i}].y`, `must be a row from 1 to ${MAX_ROWS}`);
+		if (t.hidden !== undefined && typeof t.hidden !== "boolean") return verr.add(`tiles[${i}].hidden`, "must be true or false");
+		seen.add(t.id as string);
+		out.push({ id: t.id as DashboardTile["id"], x: px, y: py, w: pw, h: ph, hidden: t.hidden === true });
+	});
+	verr.throwIfAny();
+	return { tiles: out };
+}
+
+/** The user's layout; an empty list means the standard one. */
+export async function getDashboardLayout(app: App, userId: number): Promise<{ tiles: DashboardTile[] }> {
+	const r = await queryRow<{ dashboard: { tiles: DashboardTile[] } | null }>(app.main, `SELECT dashboard FROM user_settings WHERE user_id = $1`, [userId]);
+	return { tiles: r?.dashboard?.tiles ?? [] };
+}
+
+export async function putDashboardLayout(app: App, userId: number, layout: { tiles: DashboardTile[] }): Promise<{ tiles: DashboardTile[] }> {
+	await app.main.query(
+		`INSERT INTO user_settings (user_id, dashboard) VALUES ($1, $2::jsonb)
+		 ON CONFLICT (user_id) DO UPDATE SET dashboard = EXCLUDED.dashboard, updated_at = now()`,
+		[userId, layout.tiles.length ? JSON.stringify(layout) : null],
+	);
+	return layout;
+}

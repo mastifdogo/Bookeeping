@@ -792,6 +792,7 @@ test("modules: runtime, UI and management API", async (t) => {
 	r = await request("GET", "/m/hello/", { cookie });
 	expectStatus(r, 200);
 	assert.match(r.text, /Hello from a module/);
+	assert.match(r.text, /<script src="\/ledger-ui.js" defer><\/script>/); // resizable columns and fields, rate-tag form filling
 	assert.equal(r.headers["x-frame-options"], "SAMEORIGIN");
 	expectStatus(await request("GET", "/m/hello", { cookie }), 301);
 	expectStatus(await request("GET", "/m/hello/some/client/route", { cookie }), 200); // index.html
@@ -4216,7 +4217,7 @@ test("tags on entries are shared: a tag one module sets, another module and peop
 			ctx.route("POST", "/paid/:id", (req) => ctx.tags.set(req.params.id, "paid"));
 		}`,
 	});
-	assert.deepEqual((await call("GET", "/m/collect/standard")).json(), ["paid", "billed", "overdue", "customer", "vendor"]);
+	assert.deepEqual((await call("GET", "/m/collect/standard")).json(), ["paid", "billed", "overdue", "customer", "vendor", "rate"]);
 
 	// Sales tags the invoice's entry billed, overdue, and to its customer.
 	expectStatus(await call("POST", "/m/sales/tag", { entry: inv.id, tag: "billed", note: "Invoice 12" }), 200);
@@ -4262,7 +4263,7 @@ test("tags on entries are shared: a tag one module sets, another module and peop
 	// The journal lists tags, filters by them, and knows which are in use.
 	r = await call("GET", "/journal-entries?tag=paid");
 	assert.deepEqual(r.json().data.map((e: any) => [e.id, e.tags.map((x: any) => x.tag)]), [[inv.id, ["billed", "paid"]]]);
-	assert.deepEqual((await call("GET", "/tags")).json().data.map((x: any) => [x.tag, x.entries]), [["paid", 1], ["billed", 1], ["overdue", 0], ["customer", 0], ["vendor", 0], ["disputed", 1]]);
+	assert.deepEqual((await call("GET", "/tags")).json().data.map((x: any) => [x.tag, x.entries]), [["paid", 1], ["billed", 1], ["overdue", 0], ["customer", 0], ["vendor", 0], ["rate", 0], ["disputed", 1]]);
 	expectStatus(await call("GET", "/journal-entries?tag=Bad%20Tag"), 422);
 
 	// Deleting a tagged entry in root mode and reversing it brings its tags back.
@@ -4272,4 +4273,81 @@ test("tags on entries are shared: a tag one module sets, another module and peop
 	expectStatus(await call("POST", `/root-actions/books/${r.json().id}/reverse`), 200);
 	assert.deepEqual((await call("GET", `/journal-entries/${inv.id}`)).json().tags.map((x: any) => [x.tag, x.module_id]), [["billed", "sales"], ["paid", "collect"]]);
 	expectStatus(await call("POST", "/auth/root", { on: false }), 200);
+});
+
+test("rate tags carry quantity and price for forms; batch tagging; dashboard layouts", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1200", "Receivable", "asset", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	const a = (await call("POST", "/journal-entries", entry("2026-04-01", "Consulting", dr("1200", 60000), cr("4000", 60000)))).json();
+	const b = (await call("POST", "/journal-entries", entry("2026-04-02", "Consulting", dr("1200", 8000), cr("4000", 8000)))).json();
+	const c = (await call("POST", "/journal-entries", entry("2026-04-03", "Fuel", dr("1200", 9000), cr("4000", 9000)))).json();
+	await loadModules(t, app, {
+		hours: `const heard = [];
+		export default function (ctx) {
+			ctx.tags.onChange((c) => heard.push([c.action, c.tag, c.entry_id]));
+			ctx.route("GET", "/heard", () => heard);
+			ctx.route("POST", "/rate/:id", (req) => ctx.tags.setRate(req.params.id, req.body));
+			ctx.route("GET", "/rate/:id", (req) => ctx.tags.rate(req.params.id));
+			ctx.route("POST", "/many", (req) => ctx.tags.setMany(req.body.ids, req.body.tag));
+			ctx.route("POST", "/unmany", (req) => ctx.tags.removeMany(req.body.ids, req.body.tag));
+		}`,
+	});
+
+	// A module tags an entry with its rate; another reads it back to fill in a form.
+	let r = await call("POST", `/m/hours/rate/${a.id}`, { quantity: "7.5", unit: "Hours", rate_cents: 8000 });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { quantity: 7.5, unit: "hours", rate_cents: 8000, amount_cents: 60000 });
+	assert.deepEqual((await call("GET", `/m/hours/rate/${b.id}`)).json(), null);
+	// Changing the rate updates it in place, and is announced.
+	r = await call("POST", `/m/hours/rate/${a.id}`, { quantity: 8, unit: "hours", rate_cents: 7500 });
+	assert.equal(r.json().amount_cents, 60000);
+	// People set it too: quantity alone is fine; the entry shows the values.
+	r = await call("POST", `/journal-entries/${c.id}/tags`, { tag: "rate", quantity: 45.123, unit: "litres" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().tags.map((x: any) => [x.tag, x.quantity, x.unit, x.rate_cents]), [["rate", 45.123, "litres", null]]);
+	// Refused: no values, too many decimals, a negative price, values on another tag.
+	for (const body of [{ tag: "rate" }, { tag: "rate", quantity: 1.23456 }, { tag: "rate", rate_cents: -1 }, { tag: "paid", quantity: 2 }, { tag: "rate", quantity: 1, unit: "far too long a unit name" }]) {
+		expectStatus(await call("POST", `/journal-entries/${b.id}/tags`, body), 422);
+	}
+
+	// Batch: tag several entries at once, all or none.
+	r = await call("POST", "/journal-entries/tags", { entry_ids: [a.id, b.id, c.id], action: "set", tag: "billed" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json(), { entries: 3, changed: 3 });
+	r = await call("POST", "/journal-entries/tags", { entry_ids: [a.id, b.id], action: "set", tag: "billed" });
+	assert.deepEqual(r.json(), { entries: 2, changed: 0 });
+	expectStatus(await call("POST", "/journal-entries/tags", { entry_ids: [a.id, 99999], action: "set", tag: "paid" }), 422);
+	assert.deepEqual((await call("GET", `/journal-entries/${a.id}`)).json().tags.map((x: any) => x.tag), ["rate", "billed"]);
+	expectStatus(await call("POST", "/journal-entries/tags", { entry_ids: [], action: "set", tag: "paid" }), 422);
+	expectStatus(await call("POST", "/journal-entries/tags", { entry_ids: [a.id], action: "flip", tag: "paid" }), 422);
+	// Batch rates: the same quantity and price on each.
+	r = await call("POST", "/journal-entries/tags", { entry_ids: [b.id], action: "set", tag: "rate", quantity: 1, unit: "hours", rate_cents: 8000 });
+	assert.deepEqual(r.json(), { entries: 1, changed: 1 });
+	r = await call("POST", "/journal-entries/tags", { entry_ids: [a.id, b.id, c.id], action: "remove", tag: "billed" });
+	assert.deepEqual(r.json(), { entries: 3, changed: 3 });
+	// Modules batch too.
+	assert.deepEqual((await call("POST", "/m/hours/many", { ids: [a.id, c.id], tag: "overdue" })).json(), { entries: 2, changed: 2 });
+	assert.deepEqual((await call("POST", "/m/hours/unmany", { ids: [a.id, b.id, c.id], tag: "overdue" })).json(), { entries: 3, changed: 2 });
+	await new Promise((res) => setTimeout(res, 50));
+	const heard = (await call("GET", "/m/hours/heard")).json();
+	assert.deepEqual(heard.slice(0, 3), [["set", "rate", a.id], ["set", "rate", a.id], ["set", "rate", c.id]]);
+	assert.equal(heard.filter((h: any) => h[1] === "billed").length, 6);
+
+	// Dashboard layout: each user's own; empty is the standard one.
+	assert.deepEqual((await call("GET", "/settings/dashboard-layout")).json(), { tiles: [] });
+	const tiles = [
+		{ id: "entries", x: 1, y: 1, w: 12, h: 6, hidden: false },
+		{ id: "todos", x: 1, y: 7, w: 4, h: 5, hidden: true },
+	];
+	r = await call("PUT", "/settings/dashboard-layout", { tiles });
+	expectStatus(r, 200);
+	assert.deepEqual((await call("GET", "/settings/dashboard-layout")).json(), { tiles });
+	for (const bad of [[{ id: "nope", x: 1, y: 1, w: 1, h: 1 }], [{ id: "todos", x: 10, y: 1, w: 6, h: 2 }], [{ id: "todos", x: 1, y: 1, w: 2, h: 0 }], [tiles[0], tiles[0]]]) {
+		expectStatus(await call("PUT", "/settings/dashboard-layout", { tiles: bad }), 422);
+	}
+	expectStatus(await call("PUT", "/settings/dashboard-layout", { tiles: [] }), 200);
+	assert.deepEqual((await call("GET", "/settings/dashboard-layout")).json(), { tiles: [] });
 });

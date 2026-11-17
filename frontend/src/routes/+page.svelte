@@ -5,6 +5,7 @@
 	import { api, today, unwrap, type DashboardItem } from '#lib/api/client.ts';
 	import { invalidate } from '$app/navigation';
 	import { openRow } from '#lib/rows.ts';
+	import { completeLayout, readingOrder, type Tile, type TileId } from '#lib/dashboard-layout.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -15,6 +16,16 @@
 	let notifications = $derived(data.dashboard.notifications);
 	let todos = $derived(data.dashboard.todos);
 	let openTodos = $derived(todos.filter((t) => t.closed_at === null).length);
+
+	// Tiles where Settings → UI puts them; a currency's summary only when there is one.
+	let currencies: string[] = $derived(summary.currencies.map((c) => c.currency));
+	let tiles = $derived(
+		readingOrder(completeLayout(data.layout as Tile[], currencies)).filter(
+			(t) => !t.hidden && (!t.id.startsWith('summary-') || currencies.includes(t.id.slice(8)))
+		)
+	);
+	const tileStyle = (t: Tile) => `grid-column:${t.x} / span ${t.w};grid-row:${t.y} / span ${t.h}`;
+	const summaryOf = (id: TileId) => summary.currencies.find((c) => 'summary-' + c.currency === id)!;
 
 	const monthName = (d: string) => new Date(d + 'T00:00:00').toLocaleString(undefined, { month: 'long' });
 	const levelClass: Record<DashboardItem['level'], string> = { info: '', success: 'ok', warning: 'warn', danger: 'danger' };
@@ -34,7 +45,7 @@
 	}
 </script>
 
-<h1>Dashboard</h1>
+<h1 class="sr-only">Dashboard</h1>
 
 <ErrorNotice {error} />
 
@@ -49,154 +60,157 @@
 	</div>
 {/if}
 
-{#if summary.currencies.length > 0}
-	<div class="grid">
-		{#each summary.currencies as s (s.currency)}
-			<section class="card">
-				<h2 style="margin-top:0">{s.currency}</h2>
-				<div class="stat">
-					<span class="muted small">Net worth</span>
-					<strong class="big"><Amount cents={s.net_worth_cents} currency={s.currency} /></strong>
-					<span class="muted small">
-						Assets <Amount cents={s.assets_cents} /> · Liabilities <Amount cents={s.liabilities_cents} />
-					</span>
-				</div>
-				<table>
-					<thead>
-						<tr><th></th><th class="num">{monthName(s.month.from)}</th><th class="num">{s.year.from.slice(0, 4)} to date</th></tr>
-					</thead>
-					<tbody>
-						<tr>
-							<td>Revenue</td>
-							<td class="num"><Amount cents={s.month.revenue_cents} /></td>
-							<td class="num"><Amount cents={s.year.revenue_cents} /></td>
-						</tr>
-						<tr>
-							<td>Expenses</td>
-							<td class="num"><Amount cents={s.month.expenses_cents} /></td>
-							<td class="num"><Amount cents={s.year.expenses_cents} /></td>
-						</tr>
-					</tbody>
-					<tfoot>
-						<tr>
-							<td>Net income</td>
-							<td class="num"><Amount cents={s.month.net_income_cents} /></td>
-							<td class="num"><Amount cents={s.year.net_income_cents} /></td>
-						</tr>
-					</tfoot>
-				</table>
-				{#if s.top_expenses.length > 0}
-					<h3 class="small muted">Top expenses this month</h3>
-					<ul class="bars">
-						{#each s.top_expenses as e (e.account_code)}
-							<li>
-								<span class="label"><a href="/accounts/{e.account_code}">{e.account_name}</a></span>
-								<span class="num"><Amount cents={e.amount_cents} /></span>
-								<span
-									class="bar"
-									style="width:{s.top_expenses[0]!.amount_cents > 0
-										? Math.max(2, (100 * e.amount_cents) / s.top_expenses[0]!.amount_cents)
-										: 0}%"
-								></span>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-				<p class="small" style="margin-bottom:0">
-					<a href="/reports">Full reports →</a>
-				</p>
-			</section>
+<div class="tiles-box">
+	<div class="tiles">
+		{#each tiles as t (t.id)}
+			{#if t.id === 'summary-CAD' || t.id === 'summary-USD'}
+				{@const s = summaryOf(t.id)}
+				<section class="card tile" style={tileStyle(t)}>
+					<h2 style="margin-top:0">{s.currency}</h2>
+					<div class="stat">
+						<span class="muted small">Net worth</span>
+						<strong class="big"><Amount cents={s.net_worth_cents} currency={s.currency} /></strong>
+						<span class="muted small">
+							Assets <Amount cents={s.assets_cents} /> · Liabilities <Amount cents={s.liabilities_cents} />
+						</span>
+					</div>
+					<table>
+						<thead>
+							<tr><th></th><th class="num">{monthName(s.month.from)}</th><th class="num">{s.year.from.slice(0, 4)} to date</th></tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>Revenue</td>
+								<td class="num"><Amount cents={s.month.revenue_cents} /></td>
+								<td class="num"><Amount cents={s.year.revenue_cents} /></td>
+							</tr>
+							<tr>
+								<td>Expenses</td>
+								<td class="num"><Amount cents={s.month.expenses_cents} /></td>
+								<td class="num"><Amount cents={s.year.expenses_cents} /></td>
+							</tr>
+						</tbody>
+						<tfoot>
+							<tr>
+								<td>Net income</td>
+								<td class="num"><Amount cents={s.month.net_income_cents} /></td>
+								<td class="num"><Amount cents={s.year.net_income_cents} /></td>
+							</tr>
+						</tfoot>
+					</table>
+					{#if s.top_expenses.length > 0}
+						<h3 class="small muted">Top expenses this month</h3>
+						<ul class="bars">
+							{#each s.top_expenses as e (e.account_code)}
+								<li>
+									<span class="label"><a href="/accounts/{e.account_code}">{e.account_name}</a></span>
+									<span class="num"><Amount cents={e.amount_cents} /></span>
+									<span
+										class="bar"
+										style="width:{s.top_expenses[0]!.amount_cents > 0
+											? Math.max(2, (100 * e.amount_cents) / s.top_expenses[0]!.amount_cents)
+											: 0}%"
+									></span>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+					<p class="small" style="margin-bottom:0">
+						<a href="/reports">Full reports →</a>
+					</p>
+				</section>
+			{:else if t.id === 'notifications'}
+				<section class="card tile" style={tileStyle(t)}>
+					<h2 style="margin-top:0">Notifications</h2>
+					{#if notifications.length === 0}
+						<p class="muted">Nothing new.</p>
+					{:else}
+						<ul class="items">
+							{#each notifications as n (n.id)}
+								<li class="item level-{n.level}">
+									<div class="item-main">
+										<div>
+											{#if n.level !== 'info'}<span class="badge {levelClass[n.level]}">{n.level}</span>{/if}
+											{#if n.link}<a href={n.link}><strong>{n.title}</strong></a>{:else}<strong>{n.title}</strong>{/if}
+										</div>
+										{#if n.body}<div class="body">{n.body}</div>{/if}
+										<div class="muted small">{n.source_name} · {when(n.updated_at)}</div>
+									</div>
+									<button class="link" title="Dismiss" aria-label="Dismiss" disabled={busy === n.id} onclick={() => act(n, 'close')}
+										>✕</button
+									>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				</section>
+			{:else if t.id === 'todos'}
+				<section class="card tile" style={tileStyle(t)}>
+					<h2 style="margin-top:0">To-do {#if openTodos > 0}<span class="badge">{openTodos}</span>{/if}</h2>
+					{#if todos.length === 0}
+						<p class="muted">Nothing to do. Modules add to-dos here.</p>
+					{:else}
+						<ul class="items">
+							{#each todos as t (t.id)}
+								{@const done = t.closed_at !== null}
+								{@const overdue = !done && t.due_date !== null && t.due_date < today()}
+								<li class="item" class:done>
+									<input
+										type="checkbox"
+										checked={done}
+										disabled={busy === t.id}
+										aria-label={done ? 'Mark not done' : 'Mark done'}
+										onchange={() => act(t, done ? 'reopen' : 'close')}
+									/>
+									<div class="item-main">
+										<div>
+											{#if t.link}<a href={t.link}>{t.title}</a>{:else}{t.title}{/if}
+										</div>
+										{#if t.body}<div class="body">{t.body}</div>{/if}
+										<div class="muted small">
+											{t.source_name}
+											{#if t.due_date}· <span class:overdue>due {t.due_date}</span>{/if}
+											{#if done}· {t.closed_by ? `done by ${t.closed_by}` : 'done'}{/if}
+										</div>
+									</div>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				</section>
+			{:else}
+				<section class="card tile entries" style={tileStyle(t)}>
+					<div class="toolbar">
+						<h2 style="margin:0">Recent entries</h2>
+						<span class="spacer"></span>
+						<a class="button" href="/journal/new">+ New entry</a>
+					</div>
+
+					<div class="table-wrap">
+						{#if data.entries.length === 0}
+							<div class="empty">No journal entries yet.</div>
+						{:else}
+							<table>
+								<thead>
+									<tr><th>Date</th><th>#</th><th>Description</th><th class="num">Amount</th></tr>
+								</thead>
+								<tbody>
+									{#each data.entries as e (e.id)}
+										<tr class="clickable" onclick={(ev) => openRow(ev, `/journal/${e.id}`)}>
+											<td class="mono">{e.entry_date}</td>
+											<td><a class="quiet" href="/journal/{e.id}">{e.id}</a></td>
+											<td>{e.description}</td>
+											<td class="num"><EntryTotals totals={e.totals} /></td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						{/if}
+					</div>
+				</section>
+			{/if}
 		{/each}
 	</div>
-{/if}
-
-<div class="grid two">
-	<section class="card">
-		<h2 style="margin-top:0">Notifications</h2>
-		{#if notifications.length === 0}
-			<p class="muted">Nothing new.</p>
-		{:else}
-			<ul class="items">
-				{#each notifications as n (n.id)}
-					<li class="item level-{n.level}">
-						<div class="item-main">
-							<div>
-								{#if n.level !== 'info'}<span class="badge {levelClass[n.level]}">{n.level}</span>{/if}
-								{#if n.link}<a href={n.link}><strong>{n.title}</strong></a>{:else}<strong>{n.title}</strong>{/if}
-							</div>
-							{#if n.body}<div class="body">{n.body}</div>{/if}
-							<div class="muted small">{n.source_name} · {when(n.updated_at)}</div>
-						</div>
-						<button class="link" title="Dismiss" aria-label="Dismiss" disabled={busy === n.id} onclick={() => act(n, 'close')}
-							>✕</button
-						>
-					</li>
-				{/each}
-			</ul>
-		{/if}
-	</section>
-
-	<section class="card">
-		<h2 style="margin-top:0">To-do {#if openTodos > 0}<span class="badge">{openTodos}</span>{/if}</h2>
-		{#if todos.length === 0}
-			<p class="muted">Nothing to do. Modules add to-dos here.</p>
-		{:else}
-			<ul class="items">
-				{#each todos as t (t.id)}
-					{@const done = t.closed_at !== null}
-					{@const overdue = !done && t.due_date !== null && t.due_date < today()}
-					<li class="item" class:done>
-						<input
-							type="checkbox"
-							checked={done}
-							disabled={busy === t.id}
-							aria-label={done ? 'Mark not done' : 'Mark done'}
-							onchange={() => act(t, done ? 'reopen' : 'close')}
-						/>
-						<div class="item-main">
-							<div>
-								{#if t.link}<a href={t.link}>{t.title}</a>{:else}{t.title}{/if}
-							</div>
-							{#if t.body}<div class="body">{t.body}</div>{/if}
-							<div class="muted small">
-								{t.source_name}
-								{#if t.due_date}· <span class:overdue>due {t.due_date}</span>{/if}
-								{#if done}· {t.closed_by ? `done by ${t.closed_by}` : 'done'}{/if}
-							</div>
-						</div>
-					</li>
-				{/each}
-			</ul>
-		{/if}
-	</section>
-</div>
-
-<div class="toolbar">
-	<h2 style="margin:0">Recent entries</h2>
-	<span class="spacer"></span>
-	<a class="button" href="/journal/new">+ New entry</a>
-</div>
-
-<div class="table-wrap">
-	{#if data.entries.length === 0}
-		<div class="empty">No journal entries yet.</div>
-	{:else}
-		<table>
-			<thead>
-				<tr><th>Date</th><th>#</th><th>Description</th><th class="num">Amount</th></tr>
-			</thead>
-			<tbody>
-				{#each data.entries as e (e.id)}
-					<tr class="clickable" onclick={(ev) => openRow(ev, `/journal/${e.id}`)}>
-						<td class="mono">{e.entry_date}</td>
-						<td><a class="quiet" href="/journal/{e.id}">{e.id}</a></td>
-						<td>{e.description}</td>
-						<td class="num"><EntryTotals totals={e.totals} /></td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-	{/if}
 </div>
 
 <style>
@@ -236,8 +250,47 @@
 		background: var(--accent);
 		opacity: 0.6;
 	}
-	.two {
-		margin-top: 1rem;
+	/* Tiles on a 12-column grid (Settings → UI); each scrolls inside if its content is taller. */
+	.tiles-box {
+		container-type: inline-size;
+	}
+	.tiles {
+		display: grid;
+		grid-template-columns: repeat(12, minmax(0, 1fr));
+		grid-auto-rows: 2.5rem;
+		gap: var(--win-gap);
+	}
+	.tile {
+		margin: 0;
+		min-width: 0;
+		overflow: auto;
+		border-radius: var(--win-radius);
+	}
+	.tile h2:first-child {
+		margin-top: 0;
+	}
+	.entries .table-wrap {
+		border: none;
+	}
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+	}
+	/* Narrow windows: one column, top to bottom. */
+	@container (max-width: 640px) {
+		.tiles {
+			grid-template-columns: minmax(0, 1fr);
+			grid-auto-rows: auto;
+		}
+		.tile {
+			grid-column: 1 !important;
+			grid-row: auto !important;
+			max-height: 70vh;
+		}
 	}
 	.items {
 		list-style: none;

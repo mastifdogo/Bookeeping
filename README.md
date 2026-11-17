@@ -356,6 +356,12 @@ the largest expenses this month. Below that are **notifications** and
 installed or fails). Dismiss a notification with ✕; tick a to-do to mark it
 done. Modules post them with `ctx.dashboard` ([docs/MODULES.md](docs/MODULES.md)).
 
+Each of these is a **tile** on a 12-column grid. **Settings → UI** moves
+and resizes them (drag a tile, or its corner, or type its column, row,
+width and height) and hides the ones you don't want; each person has their
+own layout, and **Standard layout** puts it back. In a narrow window the
+tiles stack, top to bottom.
+
 ### Clearing accounts
 
 A clearing account is an in-between account: one side of a transaction is
@@ -390,7 +396,15 @@ to the customer; when a payment is matched, by that module, another one or
 you, it is tagged "paid" (which takes "overdue" off). Every module sees the
 same tags and is told when one changes, so what one module knows the others
 can use. On an entry's page you add and take off tags yourself; the Journal
-shows them and filters by tag.
+shows them and filters by tag. To tag many at once, tick entries in the
+Journal (or the box in the heading for the whole page) and add or take off a
+tag for all of them.
+
+The tag **`rate`** says how many of what at what price: a quantity (7.5), a
+unit (hours) and a rate per unit (80.00), so the entry shows "7.5 hours ×
+80.00 = 600.00". Modules set and read it, and their forms fill themselves in
+from it: a timesheet module tags the hours it posts, and an invoicing module
+puts them on the invoice line without retyping.
 
 ### Root mode
 
@@ -530,20 +544,28 @@ details, settings and, if hidden from the sidebar, its page) and for each
 page hidden from the sidebar. Under **Sidebar** each user chooses which bookkeeping pages and
 modules appear and in what order (saved per user, on the server).
 
-On a wide screen, hover a sidebar entry and click its split icon to **open
-it beside** the current page. Panes fill the window's height and sit side by
-side: drag a pane's header onto another to move it, drag the edge between two
-to resize, ✕ to close, or ⤢ to open it full width. Each browser remembers its
-panes.
+Every page, module page and the sidebar are drawn as **windows**: rounded
+panels filling the screen with a small gap around them (the dashboard's tiles
+are their own panels instead). On a wide screen, hover a sidebar entry and
+click its split icon to **open it beside** the current page. Panes fill the
+window's height and sit side by side with the same gap between them: drag a
+pane's header onto another to move it, drag the gap between two to resize, ✕
+to close, or ⤢ to open it full width. Each browser remembers its panes.
+
+**Columns and fields resize**, in Ledger and in every module: drag the right
+edge of a column heading, or of a text box or dropdown, to make it wider or
+narrower; double-click the edge to put it back. Each browser remembers the
+sizes, page by page.
 
 ### Background picture
 
-**Settings → Background** puts a picture behind Ledger's pages, searched
+**Settings → UI** (once called Background) puts a picture behind Ledger's pages, searched
 on [Wallhaven](https://wallhaven.cc). Each person chooses their own. The
 server asks Wallhaven (safe-for-work pictures only), downloads the picture
 you choose once and serves it itself (kept under `.backgrounds` in the data
 directory), so pages don't load anything from Wallhaven. A slider sets how
-much of the page colour is laid over the picture to keep text readable. In
+much of the page colour is laid over the picture inside windows to keep
+text readable; the picture shows more clearly in the gaps between them. In
 root mode the red background takes its place. The server needs to reach
 `wallhaven.cc` and `w.wallhaven.cc`; `LEDGER_WALLHAVEN_API_KEY`, if set, is
 sent with searches.

@@ -3,6 +3,10 @@
 	import { page } from '$app/state';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, unwrap } from '#lib/api/client.ts';
+	import DashboardLayoutEditor from '#lib/components/DashboardLayoutEditor.svelte';
+	import type { PageProps } from './$types';
+
+	let { data }: PageProps = $props();
 
 	type Wallpaper = { id: string; thumb: string; resolution: string; url: string };
 	const SORTS = [
@@ -65,6 +69,11 @@
 		});
 </script>
 
+<p class="muted" style="margin-top:0">How Ledger looks for you: the dashboard's tiles and a background picture. Both are yours alone.</p>
+
+<DashboardLayoutEditor saved={data.layout} />
+
+<h2>Background</h2>
 <p class="muted" style="margin-top:0">
 	A picture behind Ledger's pages, from <a href="https://wallhaven.cc" target="_blank" rel="noopener">Wallhaven</a>. It is yours alone: each person
 	chooses their own. The server downloads the picture you choose and keeps it, so it loads from Ledger, not from Wallhaven. Only

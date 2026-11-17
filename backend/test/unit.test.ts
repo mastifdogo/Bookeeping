@@ -8,7 +8,7 @@ import { parseImportCSV } from "../src/import.ts";
 import { csvRecord, readCsv } from "../src/csv.ts";
 import { DecodeError, decodeJournalEntryCreate, parseJson } from "../src/decode.ts";
 import { formDataBoundary, parseMultipart } from "../src/multipart.ts";
-import { toJson } from "../src/http.ts";
+import { toJson, withLedgerUI } from "../src/http.ts";
 import type { JournalEntryCreate, JournalLineCreate } from "../src/types.ts";
 
 test("formatCents", () => {
@@ -258,4 +258,14 @@ test("GitHub's hourly limit is explained, and a token is only sent to GitHub", a
 		if (before === undefined) delete process.env.LEDGER_GITHUB_TOKEN;
 		else process.env.LEDGER_GITHUB_TOKEN = before;
 	}
+});
+
+test("module pages get Ledger's page helpers script, once, at the top of <head>", () => {
+	const tag = '<script src="/ledger-ui.js" defer></script>';
+	const put = (html: string, ext = ".html") => withLedgerUI(Buffer.from(html), ext).toString();
+	assert.equal(put('<!doctype html><html lang="en"><head><title>x</title></head></html>'), `<!doctype html><html lang="en"><head>${tag}<title>x</title></head></html>`);
+	assert.equal(put("<html><body>hi</body></html>"), `<html>${tag}<body>hi</body></html>`);
+	assert.equal(put("<p>bare</p>"), `${tag}<p>bare</p>`);
+	assert.equal(put(`<head>${tag}</head>`), `<head>${tag}</head>`);
+	assert.equal(put("body { color: red }", ".css"), "body { color: red }");
 });

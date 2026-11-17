@@ -24,9 +24,9 @@
 	.module {
 		display: block;
 		width: 100%;
-		height: calc(100vh - 2.5rem);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--surface);
+		/* The window around it is the module's frame. */
+		height: 100%;
+		border: 0;
+		background: transparent;
 	}
 </style>

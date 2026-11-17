@@ -9,7 +9,7 @@
 	const ALL = [
 		{ href: '/settings/account', label: 'Account', title: '', admin: false },
 		{ href: '/settings/sidebar', label: 'Sidebar', title: '', admin: false },
-		{ href: '/settings/background', label: 'Background', title: 'A background picture from Wallhaven', admin: false },
+		{ href: '/settings/ui', label: 'UI', title: 'Background picture and the dashboard\'s tiles', admin: false },
 		{ href: '/settings/clearing', label: 'Clearing accounts', title: 'Hide or show clearing accounts', admin: false },
 		{ href: '/settings/users', label: 'Users', title: '', admin: true, org: true },
 		{ href: '/settings/llm', label: 'LLM API', title: '', admin: true },

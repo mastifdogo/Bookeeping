@@ -1,7 +1,7 @@
 // HTTP layer. Paths match api/openapi.yaml under /api/v1; everything else
 // serves the built SvelteKit frontend.
 
-import { listTags, removeTag, setTag } from "./tags.ts";
+import { listTags, removeTag, removeTags, setTag, setTags } from "./tags.ts";
 import { backgroundImage, chooseBackground, dimBackground, getBackground, removeBackground, searchWallhaven } from "./wallhaven.ts";
 import { MAX_CENTS } from "./money.ts";
 import { closeSession, consoleOpen, emit, installConsole, listen, onSessionClose, withConsoleContext } from "./console.ts";
@@ -69,7 +69,7 @@ import { analyzeUpload, cleanMapping, getUpload, MIGRATION_KINDS, planFor, runMi
 import { analyzeImport, cleanImportMapping, getImportUpload, publicPlan } from "./module-import.ts";
 import { applyMailChange, publicMailConfig, readMailConfig, testMail } from "./mail.ts";
 import { applyGmailChange, codeFromPaste, finishAuth, publicGmailConfig, readGmailConfig, REDIRECT_URI, revoke as revokeGmail, startAuth } from "./gmail.ts";
-import { decodeSidebar, getSidebar, putSidebar } from "./settings.ts";
+import { decodeDashboardLayout, decodeSidebar, getDashboardLayout, getSidebar, putDashboardLayout, putSidebar } from "./settings.ts";
 import {
 	applyConfigChange,
 	backupsInstalled,
@@ -770,6 +770,16 @@ async function handlePutSidebar(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await putSidebar(c.app, c.user!.id, items));
 }
 
+// The dashboard's tile layout (settings.ts): each user's own.
+
+async function handleGetDashboardLayout(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await getDashboardLayout(c.app, c.user!.id));
+}
+
+async function handlePutDashboardLayout(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, await putDashboardLayout(c.app, c.user!.id, await decodeBody(c, true, decodeDashboardLayout)));
+}
+
 // Backgrounds from Wallhaven (wallhaven.ts): each user's own.
 
 async function handleWallhavenSearch(c: Ctx): Promise<void> {
@@ -1080,10 +1090,38 @@ async function handleChangeEntryDate(c: Ctx): Promise<void> {
 
 async function handleSetTag(c: Ctx): Promise<void> {
 	const id = pathId(c, "entryId");
-	const b = await decodeBody(c, true, objectBody(["tag", "entity_id", "note"]));
-	const num = (v: unknown) => (v === undefined || v === null ? null : Number(typeof v === "object" ? (v as { source?: unknown }).source : v));
-	await setTag(c.app, id, { tag: b.tag as string, entity_id: num(b.entity_id), note: b.note as string | undefined }, { moduleId: null, userId: c.user!.id });
+	const b = await decodeBody(c, true, objectBody(TAG_FIELDS));
+	await setTag(c.app, id, tagInput(b), { moduleId: null, userId: c.user!.id });
 	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
+}
+
+const TAG_FIELDS = ["tag", "entity_id", "note", "quantity", "unit", "rate_cents"];
+const tagNum = (v: unknown) => (v === undefined || v === null ? null : Number(typeof v === "object" ? (v as { source?: unknown }).source : v));
+function tagInput(b: Record<string, unknown>) {
+	const q = b.quantity;
+	return {
+		tag: b.tag as string,
+		entity_id: tagNum(b.entity_id),
+		note: b.note as string | undefined,
+		// Quantities keep their decimals as written ("7.5"); numbers come through as json.Number-like objects.
+		quantity: q === undefined || q === null ? null : typeof q === "object" ? String((q as { source?: unknown }).source) : (q as string | number),
+		unit: (b.unit ?? null) as string | null,
+		rate_cents: tagNum(b.rate_cents),
+	};
+}
+
+// Many entries at once (the Journal's "Tag selected"): { entry_ids, action: "set" | "remove", tag, entity_id?, note?, quantity?, unit?, rate_cents? }.
+async function handleBatchTags(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, objectBody(["entry_ids", "action", ...TAG_FIELDS]));
+	const ids = Array.isArray(b.entry_ids) ? b.entry_ids.map((x) => (x && typeof x === "object" ? String((x as { source?: unknown }).source) : x)) : b.entry_ids;
+	if (b.action !== "set" && b.action !== "remove") {
+		const v = new ValidationError();
+		v.add("action", 'must be "set" or "remove"');
+		v.throwIfAny();
+	}
+	const input = tagInput(b);
+	const r = b.action === "set" ? await setTags(c.app, ids, input, { moduleId: null, userId: c.user!.id }) : await removeTags(c.app, ids, input, { moduleId: null });
+	writeJSON(c.res, 200, r);
 }
 
 async function handleRemoveTag(c: Ctx): Promise<void> {
@@ -2234,6 +2272,19 @@ async function serveModuleRoute(c: Ctx, segments: string[]): Promise<void> {
 }
 
 /** /m/<id>/...: a module's UI, shown in an iframe inside Ledger. */
+// Every module page gets Ledger's page helpers (frontend/static/ledger-ui.js):
+// resizable columns and form fields, and forms filled in from rate tags.
+const LEDGER_UI_TAG = '<script src="/ledger-ui.js" defer></script>';
+export function withLedgerUI(data: Buffer, ext: string): Buffer {
+	if (ext !== ".html" && ext !== ".htm") return data;
+	const html = data.toString("utf8");
+	if (html.includes("/ledger-ui.js")) return data;
+	// Right after <head>, else after <html>, else first.
+	const open = /<head(\s[^>]*)?>/i.exec(html) ?? /<html(\s[^>]*)?>/i.exec(html);
+	const at = open ? open.index + open[0].length : 0;
+	return Buffer.from(html.slice(0, at) + LEDGER_UI_TAG + html.slice(at), "utf8");
+}
+
 async function serveModuleUI(c: Ctx, pathname: string): Promise<void> {
 	c.res.setHeader("X-Frame-Options", "SAMEORIGIN");
 	c.res.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
@@ -2261,7 +2312,7 @@ async function serveModuleUI(c: Ctx, pathname: string): Promise<void> {
 		c.res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found\n");
 		return;
 	}
-	const data = await fsp.readFile(file);
+	const data = withLedgerUI(await fsp.readFile(file), pathMod.extname(file).toLowerCase());
 	c.res.writeHead(200, {
 		"Content-Type": CONTENT_TYPES[pathMod.extname(file).toLowerCase()] ?? "application/octet-stream",
 		"Content-Length": data.length,
@@ -2296,6 +2347,8 @@ const ROUTES: Route[] = [
 	route("PATCH", "/organizations/:orgId", "server", handleUpdateOrg),
 	route("POST", "/auth/password", "viewer", handleChangePassword),
 	route("GET", "/settings/sidebar", true, handleGetSidebar),
+	route("GET", "/settings/dashboard-layout", true, handleGetDashboardLayout),
+	route("PUT", "/settings/dashboard-layout", "viewer", handlePutDashboardLayout),
 	route("GET", "/settings/background", true, handleGetBackground),
 	route("PUT", "/settings/background", "viewer", handlePutBackground),
 	route("DELETE", "/settings/background", "viewer", handleDeleteBackground),
@@ -2343,6 +2396,7 @@ const ROUTES: Route[] = [
 	route("GET", "/unreconciled", true, handleUnreconciled),
 	route("GET", "/tags", true, handleListTags),
 	route("POST", "/journal-entries/:entryId/tags", true, handleSetTag),
+	route("POST", "/journal-entries/tags", true, handleBatchTags),
 	route("DELETE", "/journal-entries/:entryId/tags/:tag", true, handleRemoveTag),
 
 	route("GET", "/search", true, handleSearch),

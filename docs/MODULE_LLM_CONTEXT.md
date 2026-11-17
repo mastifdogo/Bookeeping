@@ -311,6 +311,23 @@ CREATE TABLE invoices (
   muted `#97a1ad`, border `#2c333c`, accent `#4c8dff`). Must work from
   ~260px wide (panes) up to full width.
 - Show money as `(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })` plus the currency code.
+- Ledger draws the window around the page (rounded, with a gap around it):
+  don't add an outer border, margin or rounded frame of your own, and let
+  the page fill the frame.
+- Ledger adds `/ledger-ui.js` to every HTML page it serves from `ui/`
+  (Ledger 0.24.0): table columns (`th`) and text fields and dropdowns can
+  be resized by dragging their right edge, remembered per page. Use real
+  `<table>`/`<th>` for lists and real `<input>`/`<select>` for fields so this
+  works; put `data-no-resize` on an element to leave it and what is inside
+  it alone.
+- **Forms fill themselves in from the rate tag**: set
+  `data-ledger-entry="<journal entry id>"` on a form and
+  `data-ledger-fill="quantity" | "unit" | "rate" | "rate_cents" | "amount" |
+  "amount_cents" | "description" | "date"` on its fields. Empty fields are
+  filled (with `input`/`change` events) when the attribute is set or
+  changes; add `data-ledger-overwrite` to replace what is there. The form
+  also gets a `ledger-rate` event (`event.detail` is the rate or null), and
+  `await LedgerUI.rateOf(entryId)` returns it directly.
 - Every account dropdown (categorizing transactions, choosing accounts in
   settings-like forms) ends with **"+ New account…"** that calls
   `newAccount()` below, then adds the account to the list and selects it.
@@ -409,6 +426,10 @@ await ctx.tags.remove(entryId, "billed");
 await ctx.tags.of(entryId);                               // [{ tag, entity, note, module_id, set_by, set_at }]
 await ctx.tags.entries({ tag: "overdue", entity_id, from, to, limit }); // journal entries
 ctx.tags.onChange((c) => {});                             // { entry_id, action: "set"|"removed", tag, entity_id, module_id }
+await ctx.tags.setRate(entryId, { quantity: 7.5, unit: "hours", rate_cents: 8000 }, req.user); // Ledger 0.24.0
+await ctx.tags.rate(entryId);                             // { quantity, unit, rate_cents, amount_cents } or null
+await ctx.tags.setMany([12, 13, 14], "billed");           // many entries at once, all or none (≤ 500): { entries, changed }
+await ctx.tags.removeMany([12, 13], "overdue");
 ```
 
 Use these, and only these, for paid / billed / overdue and for which
@@ -417,6 +438,15 @@ entry links. Tags belong to the entry: another module or a person may set
 or remove them, so listen with `onChange` (skip `module_id === ctx.id`) and
 keep the module's record in line with the tag. Every entry also has `tags`
 when read through `ctx.ledger`.
+
+**Rate and quantity (tag `rate`, Ledger 0.24.0)**: when the module posts
+something counted (hours worked, kilometres, litres, items), tag the entry
+with its quantity, unit and price per unit (`setRate`). When a form starts
+from an existing entry (an invoice line from hours, a bill line from a
+delivery), read the rate (`ctx.tags.rate`, or in the page with
+`data-ledger-entry` below) and fill the quantity, unit and rate in instead
+of asking again. `rate_cents` is in the entry's currency; at least one of
+quantity and rate is set; `quantity` has up to 4 decimals.
 
 ### Root mode (Ledger 0.21.1)
 
@@ -731,5 +761,5 @@ database.
 - [ ] tables and columns have clear names: backups also save each module table as a readable CSV (Ledger ≥ 0.13.0); no secrets in tables (use `secret` settings); binary (`bytea`) columns show only their size there (0.13.1), so keep names, sizes and dates in readable columns
 - [ ] money as integer cents, per currency, entries balanced per currency
 - [ ] migrations unqualified, no BEGIN/COMMIT/GRANT
-- [ ] `ui/index.html` self-contained, light + dark, narrow-width friendly
+- [ ] `ui/index.html` self-contained, light + dark, narrow-width friendly, no outer frame (Ledger draws the window); lists in `<table>`/`<th>` and fields as `<input>`/`<select>` (resizable)
 - [ ] README with what it does, which accounts it expects, and how to release

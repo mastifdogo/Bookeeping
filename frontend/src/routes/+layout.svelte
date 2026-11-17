@@ -22,7 +22,7 @@
 		document.documentElement.classList.toggle('root', data.user?.root === true);
 	});
 
-	// The user's background picture (Settings → Background), under a veil of the page colour so text stays readable.
+	// The user's background picture (Settings → UI), under a veil of the page colour so text stays readable.
 	$effect(() => {
 		const el = document.documentElement;
 		const bg = data.background;
@@ -107,6 +107,7 @@
 	// Inside a pane (an iframe of Ledger itself): only the page, and tell the
 	// window around it where we are so the pane is restored there.
 	const embedded = window.self !== window.top && window.parent.location.origin === location.origin;
+	if (embedded) document.documentElement.classList.add('in-pane');
 	afterNavigate(() => {
 		if (embedded) window.parent.postMessage({ type: 'ledger-pane', path: location.pathname + location.search }, location.origin);
 	});
@@ -235,6 +236,15 @@
 		panes.save();
 	}
 
+	// Each window scrolls on its own, so a new page starts at its top.
+	let mainBody: HTMLDivElement | undefined = $state();
+	afterNavigate((nav) => {
+		if (nav.type !== 'popstate' && !nav.to?.url.hash && mainBody) mainBody.scrollTop = 0;
+	});
+	// A module's page fills its window edge to edge; the dashboard's tiles stand on their own, without a window around them.
+	let flush = $derived(/^\/apps\/[^/]+\/?$/.test(page.url.pathname));
+	let bare = $derived(page.url.pathname === '/');
+
 	function openHere(p: Pane) {
 		const path = p.path ?? '/';
 		panes.close(p.id);
@@ -256,7 +266,7 @@
 {#if data.user && !data.user.must_change_password}<NewAccountDialog />{/if}
 
 {#if embedded}
-	<main class="embedded">
+	<main class="embedded" class:flush>
 		{@render children()}
 	</main>
 {:else if data.user && !data.user.must_change_password}
@@ -332,6 +342,7 @@
 				{@const title = pageTitle(p.path ?? page.url.pathname, nav)}
 				<section
 					class="pane"
+					class:bare={p.id === MAIN_ID && bare && !showPanes}
 					class:drop-target={dragId !== null && dragId !== p.id}
 					style:order={p.order}
 					style:flex-grow={p.weight}
@@ -354,9 +365,9 @@
 							{/if}
 						</header>
 					{/if}
-					<div class="pane-body">
+					<div class="pane-body" bind:this={() => (p.id === MAIN_ID ? mainBody : undefined), (el) => p.id === MAIN_ID && (mainBody = el)}>
 						{#if p.id === MAIN_ID}
-							<main class:with-console={showConsole}>
+							<main class:with-console={showConsole} class:flush={flush && !showConsole}>
 								{#snippet pageBody()}
 									{#if data.unreconciled?.length}
 										<div class="notice error unrec" role="alert">
@@ -410,10 +421,14 @@
 {/if}
 
 <style>
+	/* Every window (the sidebar, the page, each pane beside it) is drawn the
+	   same way: a rounded panel with a small gap around it, filling the screen. */
 	.shell {
 		display: grid;
 		grid-template-columns: 13rem minmax(0, 1fr);
-		min-height: 100vh;
+		gap: var(--win-gap);
+		padding: var(--win-gap);
+		height: 100vh;
 		transition: grid-template-columns 0.15s ease;
 	}
 	.shell.collapsed {
@@ -421,16 +436,16 @@
 	}
 	aside {
 		background: var(--surface);
-		border-right: 1px solid var(--border);
+		border: 1px solid var(--border);
+		border-radius: var(--win-radius);
 		min-width: 0;
+		overflow: hidden;
 	}
 	nav {
-		position: sticky;
-		top: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
-		height: 100vh;
+		height: 100%;
 		padding: 0.75rem 0.5rem;
 		overflow-y: auto;
 		overflow-x: hidden;
@@ -591,8 +606,16 @@
 
 	.shell main {
 		margin: 0;
-		max-width: 1200px;
+		max-width: none;
 		width: 100%;
+	}
+	/* A module's page: its frame fills the window. */
+	main.flush {
+		padding: 0;
+		height: 100%;
+	}
+	main.embedded.flush {
+		height: 100vh;
 	}
 	main.with-console {
 		max-width: none;
@@ -617,7 +640,7 @@
 	.console-side {
 		position: sticky;
 		top: 0.5rem;
-		height: calc(100vh - 2rem);
+		height: calc(100vh - 2rem - 2 * var(--win-gap));
 	}
 	.console-open {
 		position: fixed;
@@ -658,30 +681,46 @@
 		height: 16px;
 	}
 
-	/* Panes: full height, side by side, sharing the width by weight. */
+	/* Panes: full height, side by side with a gap between, sharing the width by weight. */
 	.panes {
 		min-width: 0;
+		display: flex;
+		height: 100%;
+		gap: var(--win-gap);
 	}
 	.panes.split {
-		display: flex;
-		height: 100vh;
 		overflow-x: auto;
-		gap: 0;
 	}
-	.panes.split .pane {
+	.pane {
 		position: relative;
 		display: flex;
 		flex-direction: column;
 		flex-basis: 0;
+		min-width: 0;
+		background: var(--win-bg);
+		border: 1px solid var(--border);
+		border-radius: var(--win-radius);
+	}
+	.panes.split .pane {
 		min-width: 260px;
-		border-right: 1px solid var(--border);
 	}
-	.panes.split .pane-body {
+	.pane-body {
 		flex: 1;
+		min-height: 0;
 		overflow: auto;
+		border-radius: inherit;
 	}
-	.panes.split main {
-		max-width: none;
+	.pane header + .pane-body {
+		border-top-left-radius: 0;
+		border-top-right-radius: 0;
+	}
+	/* The dashboard alone: its tiles are the panels. */
+	.pane.bare {
+		background: none;
+		border-color: transparent;
+	}
+	.pane.bare main {
+		padding: 0 0 1rem;
 	}
 	.pane header {
 		min-height: 2.4rem;
@@ -692,6 +731,7 @@
 		padding: 0.3rem 0.4rem 0.3rem 0.6rem;
 		background: var(--surface);
 		border-bottom: 1px solid var(--border);
+		border-radius: var(--win-radius) var(--win-radius) 0 0;
 		color: var(--muted);
 		cursor: grab;
 		user-select: none;
@@ -719,15 +759,16 @@
 		width: 100%;
 		height: 100%;
 		border: 0;
-		background: var(--bg);
+		background: transparent;
 	}
 	.panes.busy iframe {
 		pointer-events: none;
 	}
+	/* The handle sits in the gap between two windows. */
 	.resizer {
 		position: absolute;
 		top: 0;
-		right: -5px;
+		right: calc(-1px - var(--win-gap) / 2 - 4.5px);
 		width: 9px;
 		height: 100%;
 		cursor: col-resize;
@@ -745,14 +786,13 @@
 		.shell,
 		.shell.collapsed {
 			grid-template-columns: minmax(0, 1fr);
+			grid-template-rows: auto minmax(0, 1fr);
 			transition: none;
 		}
 		aside {
-			border-right: none;
-			border-bottom: 1px solid var(--border);
-			position: sticky;
-			top: 0;
+			position: relative;
 			z-index: 10;
+			overflow: visible;
 		}
 		nav {
 			position: static;

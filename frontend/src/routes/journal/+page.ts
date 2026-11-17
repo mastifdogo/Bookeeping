@@ -24,7 +24,7 @@ export const load: PageLoad = async ({ fetch, url }) => {
 		offset: Math.max(0, Number.parseInt(q.get('offset') ?? '0', 10) || 0)
 	};
 	const client = api(fetch);
-	const [entries, accounts, tags] = await Promise.all([
+	const [entries, accounts, tags, entities] = await Promise.all([
 		client
 			.GET('/journal-entries', {
 				params: {
@@ -42,7 +42,9 @@ export const load: PageLoad = async ({ fetch, url }) => {
 			})
 			.then(unwrapLoad),
 		client.GET('/accounts', { params: { query: { include_inactive: true } } }).then(unwrapLoad),
-		client.GET('/tags').then(unwrapLoad)
+		client.GET('/tags').then(unwrapLoad),
+		// For tagging selected entries with a customer or vendor.
+		client.GET('/entities').then((r) => r.data?.data ?? [])
 	]);
-	return { entries: entries.data, accounts: accounts.data, tags: tags.data, filter };
+	return { entries: entries.data, accounts: accounts.data, tags: tags.data, entities, filter };
 };

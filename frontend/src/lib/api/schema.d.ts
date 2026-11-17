@@ -440,6 +440,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/journal-entries/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tag many entries at once, or take a tag off them (all or none) */
+        post: operations["batchEntryTags"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/journal-entries/{entryId}/tags/{tag}": {
         parameters: {
             query?: {
@@ -1372,6 +1389,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/dashboard-layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Where the user's dashboard tiles go and how big they are */
+        get: operations["getDashboardLayout"];
+        /** Save the user's dashboard layout (an empty list goes back to the standard one) */
+        put: operations["putDashboardLayout"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings/background": {
         parameters: {
             query?: never;
@@ -2061,6 +2096,28 @@ export interface components {
             set_by: string | null;
             /** Format: date-time */
             set_at: string;
+            /** @description The tag rate: how many; null for other tags */
+            quantity?: number | null;
+            /** @description The tag rate: of what (hours, km, litres…) */
+            unit?: string | null;
+            /** @description The tag rate: price of one unit in cents, in the entry's currency */
+            rate_cents?: number | null;
+        };
+        DashboardLayout: {
+            /** @description Empty for the standard layout */
+            tiles: {
+                /** @enum {string} */
+                id: "summary-CAD" | "summary-USD" | "notifications" | "todos" | "entries";
+                /** @description Column it starts in */
+                x: number;
+                /** @description Row it starts in */
+                y: number;
+                /** @description Width in columns */
+                w: number;
+                /** @description Height in rows */
+                h: number;
+                hidden?: boolean;
+            }[];
         };
         RootAction: {
             id: number;
@@ -4184,6 +4241,12 @@ export interface operations {
                     /** @description Required for the tags customer and vendor */
                     entity_id?: number | null;
                     note?: string;
+                    /** @description The tag rate only: how many (at most 4 decimals) */
+                    quantity?: number | null;
+                    /** @description The tag rate only: of what, e.g. hours */
+                    unit?: string | null;
+                    /** @description The tag rate only: price of one unit, in cents */
+                    rate_cents?: number | null;
                 };
             };
         };
@@ -4198,6 +4261,46 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    batchEntryTags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    entry_ids: number[];
+                    /** @enum {string} */
+                    action: "set" | "remove";
+                    tag: string;
+                    /** @description customer and vendor: which one (for remove, all when left out) */
+                    entity_id?: number | null;
+                    note?: string;
+                    quantity?: number | null;
+                    unit?: string | null;
+                    rate_cents?: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description How many entries were given, and how many changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        entries: number;
+                        changed: number;
+                    };
+                };
+            };
             422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
@@ -5832,6 +5935,53 @@ export interface operations {
                     };
                 };
             };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDashboardLayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Layout */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardLayout"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putDashboardLayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DashboardLayout"];
+            };
+        };
+        responses: {
+            /** @description Layout */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardLayout"];
+                };
+            };
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

@@ -172,6 +172,14 @@ Decide, and state briefly to the user:
   in line, e.g. an invoice whose entry gets "paid" becomes paid. Other tags
   are lowercase words; choose ones another module could use. Details:
   docs/MODULES.md, "Tags".
+- **Rate and quantity, shared** (Ledger 0.24.0; `"ledger": ">=0.24.0"`):
+  anything counted (hours, km, litres, items) is tagged with the standard
+  tag `rate`: `ctx.tags.setRate(entryId, { quantity, unit, rate_cents })`,
+  read back with `ctx.tags.rate(entryId)` → `{ quantity, unit, rate_cents,
+  amount_cents }` or null. Forms that start from an entry fill quantity,
+  unit and price in from it rather than asking again (in the page:
+  `data-ledger-entry` on the form, `data-ledger-fill` on fields). Tag many
+  entries at once with `ctx.tags.setMany` / `removeMany`.
 - **Root mode** (Ledger 0.21.0, wider in 0.21.1): an admin in root mode
   can delete any account, entry, line or user and move a line to any
   account; entries may be unbalanced until root mode is left, and anything
@@ -288,7 +296,12 @@ Decide, and state briefly to the user:
   Ledger to open its New account dialog over the page with the
   `ledger-new-account` message (Ledger 0.11.3; snippet in the context file)
   and then selects the account it created, so nothing the user filled in is
-  lost.
+  lost. Ledger draws the window frame around the page, so no outer border
+  or frame of its own. Ledger injects `/ledger-ui.js` into the page
+  (0.24.0): lists as real `<table>`/`<th>` and fields as `<input>`/
+  `<select>` get resizable columns and fields for free (`data-no-resize`
+  opts an element out), and forms marked `data-ledger-entry` /
+  `data-ledger-fill` fill themselves in from the entry's rate tag.
 - **Icon**: draw one that says what the module does: `nav.icon` as
   `{"path": "<24x24 SVG path data>"}`, or pick a built-in name.
 

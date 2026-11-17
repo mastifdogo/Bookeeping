@@ -351,7 +351,12 @@ const due = await ctx.tags.entries({ tag: "overdue", entity_id });  // journal e
 ctx.tags.onChange(async (c) => {               // every change, by any module or a person
 	// c = { entry_id, action: "set" | "removed", tag, entity_id, module_id }  (module_id null: a person)
 });
-ctx.tags.standard;                             // ["paid", "billed", "overdue", "customer", "vendor"]
+ctx.tags.standard;                             // ["paid", "billed", "overdue", "customer", "vendor", "rate"]
+// Ledger 0.24.0:
+await ctx.tags.setRate(entryId, { quantity: 7.5, unit: "hours", rate_cents: 8000 }, req.user);
+const r = await ctx.tags.rate(entryId);        // { quantity: 7.5, unit: "hours", rate_cents: 8000, amount_cents: 60000 } or null
+await ctx.tags.setMany([12, 13, 14], "billed", {}, req.user); // all or none, at most 500: { entries: 3, changed: 3 }
+await ctx.tags.removeMany([12, 13], "overdue");               // { entries, changed }
 ```
 
 - **The standard tags mean the same everywhere.** `billed`: the entry was
@@ -373,8 +378,23 @@ ctx.tags.standard;                             // ["paid", "billed", "overdue", 
 - `ctx.tags.entries({ entity_id })` also finds entries posted with that
   customer or vendor (`entity_id` on the entry), so tag only where the
   entry doesn't already say who.
+- **`rate`: quantity and price, shared** (Ledger 0.24.0). It says how many
+  of what at what price: `quantity` (up to 4 decimals, e.g. 7.5), `unit`
+  (a word of up to 20 characters: hours, km, litres, items) and
+  `rate_cents` (the price of one unit, in the entry's currency); at least
+  one of quantity and rate. Tag what you post when it is counted (a
+  timesheet's hours, a mileage claim's kilometres), and when a form starts
+  from an entry, fill it in from the rate instead of asking again. An
+  entry has one rate; setting it again replaces it (and is announced to
+  `onChange`). People set it on the entry's page too. In the page,
+  `data-ledger-entry` fills forms in for you (see "The UI").
+- People tag many entries at once from the Journal (tick them, then add or
+  take off a tag); `POST /api/v1/journal-entries/tags` with `{ entry_ids,
+  action: "set" | "remove", tag, ... }` does the same, and modules use
+  `ctx.tags.setMany` / `removeMany`. Each entry changed is announced to
+  `onChange` on its own.
 - Check `ctx.tags` exists before using it if the module still supports an
-  older Ledger.
+  older Ledger (and `ctx.tags.setRate` for 0.24.0's additions).
 
 ## Root mode
 
@@ -832,6 +852,34 @@ next to the sidebar or in a side-by-side pane (so it should work from about
 - Plain HTML and JavaScript are enough; if you use a framework, commit its
   build output to `ui/`. Releases are installed as-is, with no build step.
 - Supporting `prefers-color-scheme` lets the page match Ledger's dark mode.
+- Ledger draws a window around the page: a rounded panel with a small gap
+  around it (and between panes side by side). Fill the frame; don't draw an
+  outer border or frame of your own.
+- **Resizable columns and fields** (Ledger 0.24.0): Ledger adds
+  `<script src="/ledger-ui.js" defer>` to every HTML page it serves from
+  `ui/`. Users drag the right edge of a column heading (`th`), text field,
+  number box or dropdown to resize it, and double-click it to put it back;
+  sizes are remembered in the browser, per page. Lists as `<table>` with
+  `<th>` and fields as `<input>`/`<select>` get this for free. Put
+  `data-no-resize` on an element to leave it (and everything in it) alone.
+- **Forms filled in from an entry's rate tag** (same script): put
+  `data-ledger-entry="<journal entry id>"` on a form and
+  `data-ledger-fill="…"` on its fields: `quantity`, `unit`, `rate`
+  (e.g. "80.00"), `rate_cents`, `amount` (quantity × rate, "600.00"),
+  `amount_cents`, `description` or `date` (the entry's). Empty fields are
+  filled, with `input` and `change` events, when the attribute is set or
+  changes (`data-ledger-overwrite` on a field replaces what is there). The
+  form also gets a `ledger-rate` event whose `detail` is the rate or null,
+  and `await LedgerUI.rateOf(entryId)` returns the rate directly.
+
+```html
+<form data-ledger-entry="123">  <!-- set it when the user picks the entry to invoice -->
+	<input name="qty" data-ledger-fill="quantity">
+	<input name="unit" data-ledger-fill="unit">
+	<input name="price" data-ledger-fill="rate">
+	<input name="total" data-ledger-fill="amount">
+</form>
+```
 - Account dropdowns should end with **"+ New account…"** (Ledger 0.11.3 and
   later): post a message to the parent window and Ledger opens its own New
   account dialog over the module's page, so whatever the user was filling in

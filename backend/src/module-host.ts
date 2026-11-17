@@ -7,7 +7,10 @@
 // A module that fails to load is reported on the Modules page and skipped;
 // the rest of Ledger keeps running.
 
-import { removeTag, setTag, STANDARD_TAGS, tagsOf, type TagChange } from "./tags.ts";
+import { rateOfTags, removeTag, removeTags, setTag, setTags, STANDARD_TAGS, tagsOf, type TagChange } from "./tags.ts";
+
+type TagOpts = { entity_id?: number | null; note?: string; quantity?: number | string | null; unit?: string | null; rate_cents?: number | null };
+const tagOpts = (o: TagOpts) => ({ entity_id: o?.entity_id, note: o?.note, quantity: o?.quantity, unit: o?.unit, rate_cents: o?.rate_cents });
 import { rootModuleDelete, rootModuleUpdate } from "./root.ts";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
@@ -185,8 +188,21 @@ function makeContext(app: App, m: LoadedModule) {
 			/** The entry's tags. */
 			of: (entryId: number | bigint | string) => tagsOf(app, entryIdOf(entryId)),
 			/** Tags the entry: set(entryId, "paid") or set(entryId, "customer", { entity_id }). "paid" takes "overdue" off. Returns its tags. */
-			set: (entryId: number | bigint | string, tag: string, opts: { entity_id?: number | null; note?: string } = {}, user?: { username: string }) =>
-				setTag(app, entryIdOf(entryId), { tag, entity_id: opts?.entity_id, note: opts?.note }, { moduleId: id, userId: actorOf(user) }),
+			set: (entryId: number | bigint | string, tag: string, opts: TagOpts = {}, user?: { username: string }) =>
+				setTag(app, entryIdOf(entryId), { tag, ...tagOpts(opts) }, { moduleId: id, userId: actorOf(user) }),
+			/** Tags many entries at once, all or none (at most 500): setMany([12, 13], "billed"). Returns { entries, changed }. */
+			setMany: (entryIds: (number | bigint | string)[], tag: string, opts: TagOpts = {}, user?: { username: string }) =>
+				setTags(app, entryIds, { tag, ...tagOpts(opts) }, { moduleId: id, userId: actorOf(user) }),
+			/** Takes the tag off many entries at once. Returns { entries, changed }. */
+			removeMany: (entryIds: (number | bigint | string)[], tag: string, opts: { entity_id?: number | null } = {}) => removeTags(app, entryIds, { tag, entity_id: opts?.entity_id }, { moduleId: id }),
+			/**
+			 * The rate tag (Ledger 0.24.0): how many of what at what price, so forms fill themselves in.
+			 * setRate(entryId, { quantity: 7.5, unit: "hours", rate_cents: 8000 }); rate(entryId) →
+			 * { quantity, unit, rate_cents, amount_cents } or null when the entry has no rate.
+			 */
+			setRate: (entryId: number | bigint | string, r: { quantity?: number | string | null; unit?: string | null; rate_cents?: number | null; note?: string }, user?: { username: string }) =>
+				setTag(app, entryIdOf(entryId), { tag: "rate", ...tagOpts(r ?? {}) }, { moduleId: id, userId: actorOf(user) }).then(rateOfTags),
+			rate: async (entryId: number | bigint | string) => rateOfTags(await tagsOf(app, entryIdOf(entryId))),
 			/** Takes the tag off (for "customer"/"vendor": that entity, or all when none is given). Returns the entry's tags. */
 			remove: (entryId: number | bigint | string, tag: string, opts: { entity_id?: number | null } = {}) => removeTag(app, entryIdOf(entryId), { tag, entity_id: opts?.entity_id }, { moduleId: id }),
 			/** Entries carrying a tag and/or belonging to a customer or vendor, newest first: { tag?, entity_id?, from?, to?, limit?, offset? }. */

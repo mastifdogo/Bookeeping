@@ -5,6 +5,8 @@
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, today, unwrap } from '#lib/api/client.ts';
 	import { centsToInput, formatCents, parseAmount } from '#lib/money.ts';
+	import TagFields from '#lib/components/TagFields.svelte';
+	import { emptyTagForm, tagBody, tagLabel } from '#lib/tags.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -192,19 +194,14 @@
 		return out;
 	});
 
-	// Tags: shared by Ledger and every module (paid, billed, overdue, customer, vendor, or another word).
-	const STANDARD = ['paid', 'billed', 'overdue', 'customer', 'vendor'];
-	let newTag = $state('paid');
-	let customTag = $state('');
-	let tagEntity = $state('');
-	let needsEntity = $derived(newTag === 'customer' || newTag === 'vendor');
-	let tagEntities = $derived(data.entities.filter((x) => x.is_active && (newTag === 'customer' ? x.is_customer : x.is_vendor)));
+	// Tags: shared by Ledger and every module (paid, billed, overdue, customer, vendor, rate, or another word).
+	let tagForm = $state(emptyTagForm());
 	async function tagAct(fn: () => Promise<unknown>) {
 		busy = true;
 		error = null;
 		try {
 			await fn();
-			customTag = '';
+			tagForm = { ...emptyTagForm(), tag: tagForm.tag };
 			await invalidateAll();
 		} catch (err) {
 			error = err;
@@ -214,9 +211,17 @@
 	}
 	const addTag = (ev: SubmitEvent) => {
 		ev.preventDefault();
-		const tag = (newTag === '' ? customTag : newTag).trim().toLowerCase();
-		return tagAct(async () => unwrap(await api().POST('/journal-entries/{entryId}/tags', { params: { path: { entryId: e.id } }, body: { tag, ...(needsEntity ? { entity_id: Number(tagEntity) || null } : {}) } })));
+		const body = tagBody(tagForm);
+		if (typeof body === 'string') {
+			error = new Error(body);
+			return;
+		}
+		return tagAct(async () => unwrap(await api().POST('/journal-entries/{entryId}/tags', { params: { path: { entryId: e.id } }, body })));
 	};
+	// "Edit" on a rate puts its values back in the form.
+	function editRate(t: (typeof e.tags)[number]) {
+		tagForm = { ...emptyTagForm(), tag: 'rate', quantity: t.quantity != null ? String(t.quantity) : '', unit: t.unit ?? '', rate: t.rate_cents != null ? centsToInput(t.rate_cents) : '' };
+	}
 	const dropTag = (t: (typeof e.tags)[number]) =>
 		tagAct(async () => unwrap(await api().DELETE('/journal-entries/{entryId}/tags/{tag}', { params: { path: { entryId: e.id, tag: t.tag }, query: { entity_id: t.entity?.id } } })));
 
@@ -361,7 +366,7 @@
 	<div class="taglist">
 		{#each e.tags as t (t.tag + ':' + (t.entity?.id ?? ''))}
 			<span class="badge tag {t.tag}" title="{t.module_id ? `Set by ${moduleName(t.module_id)}` : `Set by ${t.set_by ?? 'a person'}`}, {new Date(t.set_at).toLocaleString()}{t.note ? `: ${t.note}` : ''}">
-				{t.entity ? `${t.tag}: ${t.entity.name}` : t.tag}{#if canEdit}<button type="button" class="x" disabled={busy} aria-label="Take off the tag {t.tag}" onclick={() => dropTag(t)}>×</button>{/if}
+				{tagLabel(t)}{#if canEdit && t.tag === 'rate'}<button type="button" class="x" disabled={busy} aria-label="Change the rate" title="Change" onclick={() => editRate(t)}>✎</button>{/if}{#if canEdit}<button type="button" class="x" disabled={busy} aria-label="Take off the tag {t.tag}" onclick={() => dropTag(t)}>×</button>{/if}
 			</span>
 		{:else}
 			<span class="muted small">None.</span>
@@ -369,18 +374,8 @@
 	</div>
 	{#if canEdit}
 		<form class="toolbar" style="margin:0.5rem 0 0" onsubmit={addTag}>
-			<select bind:value={newTag} aria-label="Tag" style="width:auto">
-				{#each STANDARD as s (s)}<option value={s}>{s}</option>{/each}
-				<option value="">another…</option>
-			</select>
-			{#if newTag === ''}<input bind:value={customTag} placeholder="a word, e.g. disputed" maxlength="40" pattern="[A-Za-z][A-Za-z0-9_\-]*" required style="width:12rem" />{/if}
-			{#if needsEntity}
-				<select bind:value={tagEntity} aria-label="Which {newTag}" required style="width:auto">
-					<option value="" disabled>Which {newTag}…</option>
-					{#each tagEntities as x (x.id)}<option value={String(x.id)}>{x.name}</option>{/each}
-				</select>
-			{/if}
-			<button disabled={busy}>Add tag</button>
+			<TagFields bind:form={tagForm} entities={data.entities} />
+			<button disabled={busy}>{tagForm.tag === 'rate' && e.tags.some((t) => t.tag === 'rate') ? 'Change rate' : 'Add tag'}</button>
 		</form>
 	{/if}
 </div>
