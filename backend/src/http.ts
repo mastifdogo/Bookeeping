@@ -1095,14 +1095,16 @@ async function handleSetTag(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
 }
 
-const TAG_FIELDS = ["tag", "entity_id", "note", "quantity", "unit", "rate_cents"];
+const TAG_FIELDS = ["tag", "id", "entity_id", "note", "description", "quantity", "unit", "rate_cents"];
 const tagNum = (v: unknown) => (v === undefined || v === null ? null : Number(typeof v === "object" ? (v as { source?: unknown }).source : v));
 function tagInput(b: Record<string, unknown>) {
 	const q = b.quantity;
 	return {
 		tag: b.tag as string,
+		id: tagNum(b.id),
 		entity_id: tagNum(b.entity_id),
 		note: b.note as string | undefined,
+		description: (b.description ?? null) as string | null,
 		// Quantities keep their decimals as written ("7.5"); numbers come through as json.Number-like objects.
 		quantity: q === undefined || q === null ? null : typeof q === "object" ? String((q as { source?: unknown }).source) : (q as string | number),
 		unit: (b.unit ?? null) as string | null,
@@ -1110,7 +1112,7 @@ function tagInput(b: Record<string, unknown>) {
 	};
 }
 
-// Many entries at once (the Journal's "Tag selected"): { entry_ids, action: "set" | "remove", tag, entity_id?, note?, quantity?, unit?, rate_cents? }.
+// Many entries at once (the Journal's "Tag selected"): { entry_ids, action: "set" | "remove", tag, entity_id?, note?, description?, quantity?, unit?, rate_cents? }.
 async function handleBatchTags(c: Ctx): Promise<void> {
 	const b = await decodeBody(c, true, objectBody(["entry_ids", "action", ...TAG_FIELDS]));
 	const ids = Array.isArray(b.entry_ids) ? b.entry_ids.map((x) => (x && typeof x === "object" ? String((x as { source?: unknown }).source) : x)) : b.entry_ids;
@@ -1127,7 +1129,8 @@ async function handleBatchTags(c: Ctx): Promise<void> {
 async function handleRemoveTag(c: Ctx): Promise<void> {
 	const id = pathId(c, "entryId");
 	const e = c.query.get("entity_id");
-	await removeTag(c.app, id, { tag: c.params.tag ?? "", entity_id: e ? Number(e) : null }, { moduleId: null });
+	const t = c.query.get("id");
+	await removeTag(c.app, id, { tag: c.params.tag ?? "", entity_id: e ? Number(e) : null, id: t ? Number(t) : null }, { moduleId: null });
 	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
 }
 

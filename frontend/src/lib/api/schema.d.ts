@@ -462,6 +462,8 @@ export interface paths {
             query?: {
                 /** @description For customer and vendor: which one (all of them when left out) */
                 entity_id?: number;
+                /** @description For rate: which item (all of them when left out) */
+                id?: number;
             };
             header?: never;
             path: {
@@ -2083,7 +2085,9 @@ export interface components {
             } | null;
         };
         EntryTag: {
-            /** @description paid, billed, overdue, customer, vendor, or another lowercase word */
+            /** @description The tag's own number; tells an entry's rate items apart */
+            id: number;
+            /** @description paid, billed, overdue, customer, vendor, rate, or another lowercase word */
             tag: string;
             /** @description Who, for the tags customer and vendor */
             entity: {
@@ -2096,6 +2100,8 @@ export interface components {
             set_by: string | null;
             /** Format: date-time */
             set_at: string;
+            /** @description The tag rate: what the item is (Labour, Fuel…); null for other tags */
+            description?: string | null;
             /** @description The tag rate: how many; null for other tags */
             quantity?: number | null;
             /** @description The tag rate: of what (hours, km, litres…) */
@@ -4241,6 +4247,10 @@ export interface operations {
                     /** @description Required for the tags customer and vendor */
                     entity_id?: number | null;
                     note?: string;
+                    /** @description The tag rate only: the item to change; left out, a new item is added */
+                    id?: number | null;
+                    /** @description The tag rate only: what the item is, e.g. Labour */
+                    description?: string | null;
                     /** @description The tag rate only: how many (at most 4 decimals) */
                     quantity?: number | null;
                     /** @description The tag rate only: of what, e.g. hours */
@@ -4282,6 +4292,7 @@ export interface operations {
                     /** @description customer and vendor: which one (for remove, all when left out) */
                     entity_id?: number | null;
                     note?: string;
+                    description?: string | null;
                     quantity?: number | null;
                     unit?: string | null;
                     rate_cents?: number | null;
@@ -4310,6 +4321,8 @@ export interface operations {
             query?: {
                 /** @description For customer and vendor: which one (all of them when left out) */
                 entity_id?: number;
+                /** @description For rate: which item (all of them when left out) */
+                id?: number;
             };
             header?: never;
             path: {

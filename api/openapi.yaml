@@ -715,6 +715,8 @@ paths:
                 tag: { type: string }
                 entity_id: { type: integer, nullable: true, description: Required for the tags customer and vendor }
                 note: { type: string, maxLength: 200 }
+                id: { type: integer, nullable: true, description: 'The tag rate only: the item to change; left out, a new item is added' }
+                description: { type: string, nullable: true, maxLength: 100, description: 'The tag rate only: what the item is, e.g. Labour' }
                 quantity: { type: number, nullable: true, description: 'The tag rate only: how many (at most 4 decimals)' }
                 unit: { type: string, nullable: true, maxLength: 20, description: 'The tag rate only: of what, e.g. hours' }
                 rate_cents: { type: integer, nullable: true, minimum: 0, description: 'The tag rate only: price of one unit, in cents' }
@@ -747,6 +749,7 @@ paths:
                 tag: { type: string }
                 entity_id: { type: integer, nullable: true, description: 'customer and vendor: which one (for remove, all when left out)' }
                 note: { type: string, maxLength: 200 }
+                description: { type: string, nullable: true, maxLength: 100 }
                 quantity: { type: number, nullable: true }
                 unit: { type: string, nullable: true, maxLength: 20 }
                 rate_cents: { type: integer, nullable: true, minimum: 0 }
@@ -769,6 +772,7 @@ paths:
       - $ref: '#/components/parameters/EntryId'
       - { name: tag, in: path, required: true, schema: { type: string } }
       - { name: entity_id, in: query, schema: { type: integer }, description: 'For customer and vendor: which one (all of them when left out)' }
+      - { name: id, in: query, schema: { type: integer }, description: 'For rate: which item (all of them when left out)' }
     delete:
       tags: [Journal Entries]
       operationId: removeEntryTag
@@ -3123,9 +3127,10 @@ components:
             version: { type: integer, format: int64 }
     EntryTag:
       type: object
-      required: [tag, entity, note, module_id, set_by, set_at]
+      required: [id, tag, entity, note, module_id, set_by, set_at]
       properties:
-        tag: { type: string, description: 'paid, billed, overdue, customer, vendor, or another lowercase word' }
+        id: { type: integer, description: 'The tag''s own number; tells an entry''s rate items apart' }
+        tag: { type: string, description: 'paid, billed, overdue, customer, vendor, rate, or another lowercase word' }
         entity:
           type: object
           nullable: true
@@ -3138,6 +3143,7 @@ components:
         module_id: { type: string, nullable: true, description: The module that set it; null when a person did }
         set_by: { type: string, nullable: true }
         set_at: { type: string, format: date-time }
+        description: { type: string, nullable: true, description: 'The tag rate: what the item is (Labour, Fuel…); null for other tags' }
         quantity: { type: number, nullable: true, description: 'The tag rate: how many; null for other tags' }
         unit: { type: string, nullable: true, description: 'The tag rate: of what (hours, km, litres…)' }
         rate_cents: { type: integer, nullable: true, description: 'The tag rate: price of one unit in cents, in the entry''s currency' }

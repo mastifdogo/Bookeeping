@@ -172,13 +172,17 @@ Decide, and state briefly to the user:
   in line, e.g. an invoice whose entry gets "paid" becomes paid. Other tags
   are lowercase words; choose ones another module could use. Details:
   docs/MODULES.md, "Tags".
-- **Rate and quantity, shared** (Ledger 0.24.0; `"ledger": ">=0.24.0"`):
-  anything counted (hours, km, litres, items) is tagged with the standard
-  tag `rate`: `ctx.tags.setRate(entryId, { quantity, unit, rate_cents })`,
-  read back with `ctx.tags.rate(entryId)` → `{ quantity, unit, rate_cents,
-  amount_cents }` or null. Forms that start from an entry fill quantity,
-  unit and price in from it rather than asking again (in the page:
-  `data-ledger-entry` on the form, `data-ledger-fill` on fields). Tag many
+- **Items: description, quantity and rate, shared** (Ledger 0.25.0;
+  `"ledger": ">=0.25.0"`): anything counted (hours, km, litres, items) is
+  tagged with the standard tag `rate`, one tag per item and as many as the
+  entry needs: `ctx.tags.addRate(entryId, { description, quantity, unit,
+  rate_cents })`, changed with `setRate(entryId, { id, ... })`, read back
+  with `ctx.tags.rates(entryId)` → `[{ id, description, quantity, unit,
+  rate_cents, amount_cents }]` (`rate(entryId)`: the first or null),
+  removed with `removeRate(entryId, id)`. Forms that start from an entry
+  fill their lines in from them rather than asking again (in the page:
+  `data-ledger-entry` on the form, `data-ledger-fill` on fields,
+  `data-ledger-item="n"` per line). Tag many
   entries at once with `ctx.tags.setMany` / `removeMany`.
 - **Root mode** (Ledger 0.21.0, wider in 0.21.1): an admin in root mode
   can delete any account, entry, line or user and move a line to any

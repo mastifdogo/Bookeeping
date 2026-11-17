@@ -7,14 +7,19 @@
 //    in this browser, per page. An element inside [data-no-resize] is left
 //    alone.
 //
-// 2. Forms that fill themselves in from an entry's "rate" tag (quantity,
-//    unit and price, shared by Ledger and every module). Put
-//    data-ledger-entry="<journal entry id>" on a form (or any element), and
-//    data-ledger-fill="quantity" | "unit" | "rate" | "rate_cents" | "amount" |
-//    "amount_cents" | "description" | "date" on fields inside it: empty fields
-//    are filled when the entry is set or changes, and the element gets a
-//    "ledger-rate" event with the rate in event.detail. LedgerUI.rateOf(id)
-//    returns it too: { quantity, unit, rate_cents, amount_cents } or null.
+// 2. Forms that fill themselves in from an entry's "rate" items (description,
+//    quantity, unit and price, shared by Ledger and every module; an entry
+//    can have several). Put data-ledger-entry="<journal entry id>" on a form
+//    (or any element), and data-ledger-fill="quantity" | "unit" | "rate" |
+//    "rate_cents" | "amount" | "amount_cents" | "description" | "date" on
+//    fields inside it: empty fields are filled when the entry is set or
+//    changes, from the first item, or from item n for fields inside an
+//    element with data-ledger-item="n" (0, 1, 2…). "description" is the
+//    item's, or the entry's when the item has none. The element gets a
+//    "ledger-rate" event with the first item (or null) in event.detail, and
+//    a "ledger-items" event with all of them. LedgerUI.rateOf(id) returns the first,
+//    { id, description, quantity, unit, rate_cents, amount_cents } or null;
+//    LedgerUI.itemsOf(id) returns them all.
 (() => {
 	if (window.LedgerUI) return;
 	const EDGE = 6;
@@ -193,9 +198,17 @@
 	`;
 	(document.head || document.documentElement).appendChild(style);
 
-	// ---- Rate tags fill forms in ----
+	// ---- Rate items fill forms in ----
 	const rates = new Map();
-	function rateOf(id) {
+	const itemOf = (t) => ({
+		id: t.id,
+		description: t.description ?? null,
+		quantity: t.quantity,
+		unit: t.unit,
+		rate_cents: t.rate_cents,
+		amount_cents: t.quantity != null && t.rate_cents != null ? Math.round(t.quantity * t.rate_cents) : null
+	});
+	function loadEntry(id) {
 		id = String(id || '').trim();
 		if (!/^[1-9]\d{0,17}$/.test(id)) return Promise.resolve(null);
 		if (!rates.has(id)) {
@@ -205,45 +218,46 @@
 					.then((r) => (r.ok ? r.json() : null))
 					.then((e) => {
 						if (!e) return null;
-						const t = (e.tags || []).find((x) => x.tag === 'rate');
-						const rate = t
-							? { quantity: t.quantity, unit: t.unit, rate_cents: t.rate_cents, amount_cents: t.quantity != null && t.rate_cents != null ? Math.round(t.quantity * t.rate_cents) : null }
-							: null;
-						return { rate, entry: e };
+						return { items: (e.tags || []).filter((x) => x.tag === 'rate').map(itemOf), entry: e };
 					})
 					.catch(() => null)
 			);
 			setTimeout(() => rates.delete(id), 30000);
 		}
-		return rates.get(id).then((x) => (x ? x.rate : null));
+		return rates.get(id);
 	}
+	const itemsOf = (id) => loadEntry(id).then((x) => (x ? x.items : []));
+	const rateOf = (id) => itemsOf(id).then((items) => items[0] || null);
 	const dollars = (c) => (c == null ? '' : (c / 100).toFixed(2));
 	async function fill(box) {
 		const id = box.getAttribute('data-ledger-entry');
 		if (!id || box.dataset.ledgerFilled === id) return;
 		box.dataset.ledgerFilled = id;
-		const rate = await rateOf(id);
-		const got = await rates.get(String(id).trim());
+		const got = await loadEntry(id);
+		const items = got ? got.items : [];
 		const entry = got ? got.entry : null;
 		if (box.getAttribute('data-ledger-entry') !== id) return;
-		const values = {
+		const valuesOf = (rate) => ({
 			quantity: rate && rate.quantity != null ? String(rate.quantity) : '',
 			unit: rate ? rate.unit || '' : '',
 			rate: rate ? dollars(rate.rate_cents) : '',
 			rate_cents: rate && rate.rate_cents != null ? String(rate.rate_cents) : '',
 			amount: rate ? dollars(rate.amount_cents) : '',
 			amount_cents: rate && rate.amount_cents != null ? String(rate.amount_cents) : '',
-			description: entry ? entry.description || '' : '',
+			description: (rate && rate.description) || (entry ? entry.description || '' : ''),
 			date: entry ? entry.entry_date || '' : ''
-		};
+		});
 		for (const f of box.querySelectorAll('[data-ledger-fill]')) {
-			const v = values[f.getAttribute('data-ledger-fill')];
+			const holder = f.closest('[data-ledger-item]');
+			const n = holder && box.contains(holder) ? Number(holder.getAttribute('data-ledger-item')) || 0 : 0;
+			const v = valuesOf(items[n] || null)[f.getAttribute('data-ledger-fill')];
 			if (!v || !('value' in f) || (f.value !== '' && !f.hasAttribute('data-ledger-overwrite'))) continue;
 			f.value = v;
 			f.dispatchEvent(new Event('input', { bubbles: true }));
 			f.dispatchEvent(new Event('change', { bubbles: true }));
 		}
-		box.dispatchEvent(new CustomEvent('ledger-rate', { bubbles: true, detail: rate }));
+		box.dispatchEvent(new CustomEvent('ledger-rate', { bubbles: true, detail: items[0] || null }));
+		box.dispatchEvent(new CustomEvent('ledger-items', { bubbles: true, detail: items }));
 	}
 	const fillAll = () => document.querySelectorAll('[data-ledger-entry]').forEach(fill);
 
@@ -267,5 +281,5 @@
 	// SvelteKit and other client-side routers change pages without a reload: sizes are per page.
 	addEventListener('popstate', later);
 
-	window.LedgerUI = { rateOf, refill: (box) => (delete box.dataset.ledgerFilled, fill(box)), restoreSizes: restore };
+	window.LedgerUI = { rateOf, itemsOf, refill: (box) => (delete box.dataset.ledgerFilled, fill(box)), restoreSizes: restore };
 })();

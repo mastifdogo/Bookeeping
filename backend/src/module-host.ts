@@ -7,10 +7,11 @@
 // A module that fails to load is reported on the Modules page and skipped;
 // the rest of Ledger keeps running.
 
-import { rateOfTags, removeTag, removeTags, setTag, setTags, STANDARD_TAGS, tagsOf, type TagChange } from "./tags.ts";
+import { rateOfTags, ratesOfTags, removeTag, removeTags, setTag, setTags, STANDARD_TAGS, tagsOf, type TagChange } from "./tags.ts";
 
-type TagOpts = { entity_id?: number | null; note?: string; quantity?: number | string | null; unit?: string | null; rate_cents?: number | null };
-const tagOpts = (o: TagOpts) => ({ entity_id: o?.entity_id, note: o?.note, quantity: o?.quantity, unit: o?.unit, rate_cents: o?.rate_cents });
+type TagOpts = { id?: number | null; entity_id?: number | null; note?: string; description?: string | null; quantity?: number | string | null; unit?: string | null; rate_cents?: number | null };
+const tagOpts = (o: TagOpts) => ({ id: o?.id, entity_id: o?.entity_id, note: o?.note, description: o?.description, quantity: o?.quantity, unit: o?.unit, rate_cents: o?.rate_cents });
+type RateOpts = { id?: number | null; description?: string | null; quantity?: number | string | null; unit?: string | null; rate_cents?: number | null; note?: string };
 import { rootModuleDelete, rootModuleUpdate } from "./root.ts";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
@@ -196,15 +197,25 @@ function makeContext(app: App, m: LoadedModule) {
 			/** Takes the tag off many entries at once. Returns { entries, changed }. */
 			removeMany: (entryIds: (number | bigint | string)[], tag: string, opts: { entity_id?: number | null } = {}) => removeTags(app, entryIds, { tag, entity_id: opts?.entity_id }, { moduleId: id }),
 			/**
-			 * The rate tag (Ledger 0.24.0): how many of what at what price, so forms fill themselves in.
-			 * setRate(entryId, { quantity: 7.5, unit: "hours", rate_cents: 8000 }); rate(entryId) →
-			 * { quantity, unit, rate_cents, amount_cents } or null when the entry has no rate.
+			 * Rate items (Ledger 0.24.0; description and several per entry since 0.25.0): description,
+			 * quantity and rate, so forms fill themselves in. addRate(entryId, { description: "Labour",
+			 * quantity: 7.5, unit: "hours", rate_cents: 8000 }) adds one and returns it; setRate does the
+			 * same, or changes the item named by `id`. rates(entryId) → every item,
+			 * [{ id, description, quantity, unit, rate_cents, amount_cents }]; rate(entryId) → the first or null.
+			 * removeRate(entryId, itemId) takes one off.
 			 */
-			setRate: (entryId: number | bigint | string, r: { quantity?: number | string | null; unit?: string | null; rate_cents?: number | null; note?: string }, user?: { username: string }) =>
-				setTag(app, entryIdOf(entryId), { tag: "rate", ...tagOpts(r ?? {}) }, { moduleId: id, userId: actorOf(user) }).then(rateOfTags),
+			addRate: (entryId: number | bigint | string, r: RateOpts, user?: { username: string }) =>
+				setTag(app, entryIdOf(entryId), { tag: "rate", ...tagOpts({ ...(r ?? {}), id: null }) }, { moduleId: id, userId: actorOf(user) }).then((tags) => ratesOfTags(tags).at(-1) ?? null),
+			setRate: (entryId: number | bigint | string, r: RateOpts, user?: { username: string }) =>
+				setTag(app, entryIdOf(entryId), { tag: "rate", ...tagOpts(r ?? {}) }, { moduleId: id, userId: actorOf(user) }).then((tags) => {
+					const all = ratesOfTags(tags);
+					return (r?.id ? all.find((x) => x.id === Number(r.id)) : all.at(-1)) ?? null;
+				}),
+			rates: async (entryId: number | bigint | string) => ratesOfTags(await tagsOf(app, entryIdOf(entryId))),
 			rate: async (entryId: number | bigint | string) => rateOfTags(await tagsOf(app, entryIdOf(entryId))),
-			/** Takes the tag off (for "customer"/"vendor": that entity, or all when none is given). Returns the entry's tags. */
-			remove: (entryId: number | bigint | string, tag: string, opts: { entity_id?: number | null } = {}) => removeTag(app, entryIdOf(entryId), { tag, entity_id: opts?.entity_id }, { moduleId: id }),
+			removeRate: (entryId: number | bigint | string, itemId: number) => removeTag(app, entryIdOf(entryId), { tag: "rate", id: Number(itemId) || -1 }, { moduleId: id }).then(ratesOfTags),
+			/** Takes the tag off (for "customer"/"vendor": that entity, or all when none is given; for "rate": the item `id`, or all). Returns the entry's tags. */
+			remove: (entryId: number | bigint | string, tag: string, opts: { entity_id?: number | null; id?: number | null } = {}) => removeTag(app, entryIdOf(entryId), { tag, entity_id: opts?.entity_id, id: opts?.id }, { moduleId: id }),
 			/** Entries carrying a tag and/or belonging to a customer or vendor, newest first: { tag?, entity_id?, from?, to?, limit?, offset? }. */
 			entries: (f: { tag?: string; entity_id?: number; from?: string; to?: string; limit?: number; offset?: number } = {}) =>
 				listJournalEntries(app, {

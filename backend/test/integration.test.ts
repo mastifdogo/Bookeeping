@@ -4291,19 +4291,42 @@ test("rate tags carry quantity and price for forms; batch tagging; dashboard lay
 			ctx.route("GET", "/heard", () => heard);
 			ctx.route("POST", "/rate/:id", (req) => ctx.tags.setRate(req.params.id, req.body));
 			ctx.route("GET", "/rate/:id", (req) => ctx.tags.rate(req.params.id));
+			ctx.route("POST", "/item/:id", (req) => ctx.tags.addRate(req.params.id, req.body));
+			ctx.route("GET", "/items/:id", (req) => ctx.tags.rates(req.params.id));
+			ctx.route("DELETE", "/item/:id/:item", (req) => ctx.tags.removeRate(req.params.id, Number(req.params.item)));
 			ctx.route("POST", "/many", (req) => ctx.tags.setMany(req.body.ids, req.body.tag));
 			ctx.route("POST", "/unmany", (req) => ctx.tags.removeMany(req.body.ids, req.body.tag));
 		}`,
 	});
 
 	// A module tags an entry with its rate; another reads it back to fill in a form.
-	let r = await call("POST", `/m/hours/rate/${a.id}`, { quantity: "7.5", unit: "Hours", rate_cents: 8000 });
+	let r = await call("POST", `/m/hours/rate/${a.id}`, { description: "  Labour ", quantity: "7.5", unit: "Hours", rate_cents: 8000 });
 	expectStatus(r, 200);
-	assert.deepEqual(r.json(), { quantity: 7.5, unit: "hours", rate_cents: 8000, amount_cents: 60000 });
+	const first = r.json();
+	assert.deepEqual(first, { id: first.id, description: "Labour", quantity: 7.5, unit: "hours", rate_cents: 8000, amount_cents: 60000 });
 	assert.deepEqual((await call("GET", `/m/hours/rate/${b.id}`)).json(), null);
-	// Changing the rate updates it in place, and is announced.
-	r = await call("POST", `/m/hours/rate/${a.id}`, { quantity: 8, unit: "hours", rate_cents: 7500 });
-	assert.equal(r.json().amount_cents, 60000);
+	// Changing an item (by its id) updates it in place, and is announced.
+	r = await call("POST", `/m/hours/rate/${a.id}`, { id: first.id, description: "Labour", quantity: 8, unit: "hours", rate_cents: 7500 });
+	assert.deepEqual([r.json().id, r.json().amount_cents], [first.id, 60000]);
+	// An entry carries several items: description, quantity, rate each.
+	r = await call("POST", `/m/hours/item/${a.id}`, { description: "Travel", quantity: 120, unit: "km", rate_cents: 50 });
+	expectStatus(r, 200);
+	const travel = r.json();
+	r = await call("POST", `/journal-entries/${a.id}/tags`, { tag: "rate", description: "Parts, wiring", quantity: 2, rate_cents: 1250 });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().tags.filter((x: any) => x.tag === "rate").map((x: any) => [x.description, x.quantity, x.rate_cents]), [["Labour", 8, 7500], ["Travel", 120, 50], ["Parts, wiring", 2, 1250]]);
+	assert.equal((await call("GET", `/m/hours/rate/${a.id}`)).json().description, "Labour");
+	// One item comes off; the others stay.
+	r = await call("DELETE", `/journal-entries/${a.id}/tags/rate?id=${travel.id}`);
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().tags.filter((x: any) => x.tag === "rate").map((x: any) => x.description), ["Labour", "Parts, wiring"]);
+	const parts = r.json().tags.find((x: any) => x.description === "Parts, wiring");
+	assert.deepEqual((await call("DELETE", `/m/hours/item/${a.id}/${parts.id}`)).json().map((x: any) => x.description), ["Labour"]);
+	assert.deepEqual((await call("GET", `/m/hours/items/${a.id}`)).json().map((x: any) => x.id), [first.id]);
+	// An item of another entry can't be changed through this one.
+	expectStatus(await call("POST", `/journal-entries/${b.id}/tags`, { tag: "rate", id: first.id, quantity: 1 }), 422);
+	expectStatus(await call("POST", `/journal-entries/${b.id}/tags`, { tag: "rate", description: "x".repeat(101), quantity: 1 }), 422);
+	expectStatus(await call("POST", `/journal-entries/${b.id}/tags`, { tag: "paid", description: "Labour" }), 422);
 	// People set it too: quantity alone is fine; the entry shows the values.
 	r = await call("POST", `/journal-entries/${c.id}/tags`, { tag: "rate", quantity: 45.123, unit: "litres" });
 	expectStatus(r, 200);
@@ -4333,7 +4356,8 @@ test("rate tags carry quantity and price for forms; batch tagging; dashboard lay
 	assert.deepEqual((await call("POST", "/m/hours/unmany", { ids: [a.id, b.id, c.id], tag: "overdue" })).json(), { entries: 3, changed: 2 });
 	await new Promise((res) => setTimeout(res, 50));
 	const heard = (await call("GET", "/m/hours/heard")).json();
-	assert.deepEqual(heard.slice(0, 3), [["set", "rate", a.id], ["set", "rate", a.id], ["set", "rate", c.id]]);
+	assert.deepEqual(heard.slice(0, 4), [["set", "rate", a.id], ["set", "rate", a.id], ["set", "rate", a.id], ["set", "rate", a.id]]);
+	assert.deepEqual(heard.filter((h: any) => h[0] === "removed" && h[1] === "rate").length, 2);
 	assert.equal(heard.filter((h: any) => h[1] === "billed").length, 6);
 
 	// Dashboard layout: each user's own; empty is the standard one.

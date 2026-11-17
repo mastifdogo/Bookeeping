@@ -1,6 +1,8 @@
 <script lang="ts">
 	// The fields to choose a tag: a standard one or another word, which customer
-	// or vendor, and for "rate" the quantity, unit and price. Used on an entry's
+	// or vendor, and for "rate" an item: description, quantity (and unit) and
+	// rate. Typing "Labour, 7.5 hours, 80.00" in the description fills the
+	// rest when they are left empty. Used on an entry's
 	// page and for tagging many entries at once.
 	import { STANDARD_TAGS, type TagForm } from '#lib/tags.ts';
 
@@ -22,6 +24,7 @@
 	</select>
 {/if}
 {#if form.tag === 'rate' && mode === 'set'}
+	<input bind:value={form.description} placeholder="Description, e.g. Labour (or Labour,7.5,80)" maxlength="100" aria-label="Description" style="width:16rem" />
 	<input bind:value={form.quantity} inputmode="decimal" placeholder="Quantity, e.g. 7.5" aria-label="Quantity" style="width:9rem" />
 	<input bind:value={form.unit} placeholder="Unit, e.g. hours" maxlength="20" aria-label="Unit" style="width:8rem" />
 	<input bind:value={form.rate} inputmode="decimal" class="amount" placeholder="Rate per unit" aria-label="Rate per unit" style="width:8rem" />

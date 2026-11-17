@@ -17,6 +17,8 @@ const TAG_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 const CLEARS: Record<string, string[]> = { paid: ["overdue"] };
 
 export interface EntryTag {
+	/** This tag's own number: tells an entry's rate items apart. */
+	id: number;
 	tag: string;
 	/** Who, for the tags "customer" and "vendor"; null for the others. */
 	entity: { id: number; name: string } | null;
@@ -25,6 +27,8 @@ export interface EntryTag {
 	module_id: string | null;
 	set_by: string | null;
 	set_at: Date;
+	/** For the tag "rate": what the item is (e.g. "Labour"); null when not given and for other tags. */
+	description: string | null;
 	/** For the tag "rate": how many (e.g. 7.5); null for other tags. */
 	quantity: number | null;
 	/** For the tag "rate": of what (e.g. "hours"); null for other tags. */
@@ -33,8 +37,11 @@ export interface EntryTag {
 	rate_cents: number | null;
 }
 
-/** What the tag "rate" says: enough for a form to fill in a line (quantity × rate). */
+/** What a tag "rate" says: one item, enough for a form to fill in a line (description, quantity × rate). */
 export interface EntryRate {
+	/** The tag's id: give it to change or take off this item. */
+	id: number;
+	description: string | null;
 	quantity: number | null;
 	unit: string | null;
 	rate_cents: number | null;
@@ -46,6 +53,8 @@ export interface TagChange {
 	entry_id: number;
 	action: "set" | "removed";
 	tag: string;
+	/** For the tag "rate": which item (its id); null for other tags. */
+	tag_id: number | null;
 	entity_id: number | null;
 	/** The module that made the change; null when a person did. */
 	module_id: string | null;
@@ -55,6 +64,10 @@ export interface TagInput {
 	tag: string;
 	entity_id?: number | null;
 	note?: string;
+	/** The tag "rate" only: which item to change; left out, a new item is added. */
+	id?: number | null;
+	/** The tag "rate" only: what the item is, up to 100 characters. */
+	description?: string | null;
 	/** The tag "rate" only: quantity and/or rate_cents (at least one), and optionally a unit. */
 	quantity?: number | string | null;
 	unit?: string | null;
@@ -62,6 +75,7 @@ export interface TagInput {
 }
 
 type Row = {
+	id: bigint;
 	entry_id: bigint;
 	tag: string;
 	entity_id: bigint | null;
@@ -70,33 +84,47 @@ type Row = {
 	module_id: string | null;
 	username: string | null;
 	created_at: Date;
+	description: string | null;
 	quantity: string | null;
 	unit: string | null;
 	rate_cents: bigint | string | null;
 };
 const SELECT = `
-	SELECT t.entry_id, t.tag, t.entity_id, e.name AS entity_name, t.note, t.module_id, u.username, t.created_at, t.quantity, t.unit, t.rate_cents
+	SELECT t.id, t.entry_id, t.tag, t.entity_id, e.name AS entity_name, t.note, t.module_id, u.username, t.created_at, t.description, t.quantity, t.unit, t.rate_cents
 	  FROM journal_entry_tags t
 	  LEFT JOIN entities e ON e.id = t.entity_id
 	  LEFT JOIN users u ON u.id = t.created_by`;
 const toTag = (r: Row): EntryTag => ({
+	id: Number(r.id),
 	tag: r.tag,
 	entity: r.entity_id === null ? null : { id: Number(r.entity_id), name: r.entity_name ?? "" },
 	note: r.note,
 	module_id: r.module_id,
 	set_by: r.username,
 	set_at: r.created_at,
+	description: r.description,
 	quantity: r.quantity === null ? null : Number(r.quantity),
 	unit: r.unit,
 	rate_cents: r.rate_cents === null ? null : Number(r.rate_cents),
 });
 
-/** The rate of an entry's "rate" tag, or null when it has none. */
+const rateOfTag = (t: EntryTag): EntryRate => ({
+	id: t.id,
+	description: t.description,
+	quantity: t.quantity,
+	unit: t.unit,
+	rate_cents: t.rate_cents,
+	amount_cents: t.quantity !== null && t.rate_cents !== null ? Math.round(t.quantity * t.rate_cents) : null,
+});
+
+/** Every "rate" item of an entry, in the order they were added. */
+export function ratesOfTags(tags: EntryTag[]): EntryRate[] {
+	return tags.filter((x) => x.tag === "rate").map(rateOfTag);
+}
+
+/** The entry's first "rate" item, or null when it has none. */
 export function rateOfTags(tags: EntryTag[]): EntryRate | null {
-	const t = tags.find((x) => x.tag === "rate");
-	if (!t) return null;
-	const amount = t.quantity !== null && t.rate_cents !== null ? Math.round(t.quantity * t.rate_cents) : null;
-	return { quantity: t.quantity, unit: t.unit, rate_cents: t.rate_cents, amount_cents: amount };
+	return ratesOfTags(tags)[0] ?? null;
 }
 
 /** The tags of each of the given entries. */
@@ -117,6 +145,9 @@ export async function tagsOf(app: App, entryId: bigint): Promise<EntryTag[]> {
 
 interface Checked {
 	tag: string;
+	/** The rate item to change; null adds one. */
+	id: bigint | null;
+	description: string | null;
 	entityId: number | null;
 	note: string;
 	quantity: string | null;
@@ -132,11 +163,23 @@ function check(v: ValidationError, input: TagInput): Checked {
 	if (!ENTITY_TAGS.has(tag) && entityId !== null) v.add("entity_id", `only goes with the tags "customer" and "vendor"`);
 	const note = input?.note === undefined ? "" : input.note;
 	if (typeof note !== "string" || note.length > 200) v.add("note", "must be text of at most 200 characters");
+	let id: bigint | null = null;
+	let description: string | null = null;
 	let quantity: string | null = null;
 	let unit: string | null = null;
 	let rateCents: number | null = null;
 	const given = (x: unknown) => x !== undefined && x !== null && x !== "";
 	if (tag === "rate") {
+		if (given(input.id)) {
+			const n = Number(input.id);
+			if (!Number.isSafeInteger(n) || n < 1) v.add("id", "must be the number of one of the entry's rate items");
+			else id = BigInt(n);
+		}
+		if (given(input.description)) {
+			const d = typeof input.description === "string" ? input.description.trim().replace(/\s+/g, " ") : "";
+			if (d.length < 1 || d.length > 100) v.add("description", "must be text of up to 100 characters, e.g. Labour");
+			else description = d;
+		}
 		if (given(input.quantity)) {
 			const q = typeof input.quantity === "number" ? input.quantity : Number(String(input.quantity).trim());
 			if (!Number.isFinite(q) || Math.abs(q) >= 1e14 || Math.round(q * 10000) / 10000 !== q) v.add("quantity", "must be a number with at most 4 decimals");
@@ -154,9 +197,9 @@ function check(v: ValidationError, input: TagInput): Checked {
 		}
 		if (!given(input.quantity) && !given(input.rate_cents)) v.add("quantity", `the tag "rate" needs a quantity, a rate (rate_cents) or both`);
 	} else {
-		for (const k of ["quantity", "unit", "rate_cents"] as const) if (given(input?.[k])) v.add(k, `only goes with the tag "rate"`);
+		for (const k of ["id", "description", "quantity", "unit", "rate_cents"] as const) if (given(input?.[k])) v.add(k, `only goes with the tag "rate"`);
 	}
-	return { tag, entityId, note: typeof note === "string" ? note.trim() : "", quantity, unit, rateCents };
+	return { tag, id, description, entityId, note: typeof note === "string" ? note.trim() : "", quantity, unit, rateCents };
 }
 
 /** Tells every module that listens, after the change is saved. */
@@ -174,20 +217,39 @@ function announce(app: App, changes: TagChange[]): void {
 }
 
 async function setTagTx(tx: Queryable, entryId: bigint, t: Checked, by: { moduleId: string | null; userId: number | null }, changes: TagChange[]): Promise<void> {
+	if (t.tag === "rate") {
+		// Rate items: a new one each time, or the one named by its id changed in place.
+		const r = t.id === null
+			? await tx.query(
+					`INSERT INTO journal_entry_tags (entry_id, tag, note, module_id, created_by, description, quantity, unit, rate_cents) VALUES ($1, 'rate', $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+					[entryId, t.note, by.moduleId, by.userId, t.description, t.quantity, t.unit, t.rateCents],
+				)
+			: await tx.query(
+					`UPDATE journal_entry_tags SET note = $3, description = $4, quantity = $5, unit = $6, rate_cents = $7
+					  WHERE id = $1 AND entry_id = $2 AND tag = 'rate' RETURNING id`,
+					[t.id, entryId, t.note, t.description, t.quantity, t.unit, t.rateCents],
+				);
+		if (!r.rows[0]) {
+			const v = new ValidationError();
+			v.add("id", `entry ${entryId} has no rate item ${t.id}`);
+			v.throwIfAny();
+		}
+		// A changed rate is news too: forms that copied it may want the new one.
+		changes.push({ entry_id: Number(entryId), action: "set", tag: "rate", tag_id: Number(r.rows[0].id), entity_id: null, module_id: by.moduleId });
+		return;
+	}
 	const r = await tx.query(
-		`INSERT INTO journal_entry_tags (entry_id, tag, entity_id, note, module_id, created_by, quantity, unit, rate_cents) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 ON CONFLICT ON CONSTRAINT journal_entry_tags_once DO UPDATE
-		   SET note = EXCLUDED.note, quantity = EXCLUDED.quantity, unit = EXCLUDED.unit, rate_cents = EXCLUDED.rate_cents
-		 WHERE (journal_entry_tags.note, journal_entry_tags.quantity, journal_entry_tags.unit, journal_entry_tags.rate_cents)
-		       IS DISTINCT FROM (EXCLUDED.note, EXCLUDED.quantity, EXCLUDED.unit, EXCLUDED.rate_cents)
+		`INSERT INTO journal_entry_tags (entry_id, tag, entity_id, note, module_id, created_by) VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (entry_id, tag, entity_id) WHERE tag <> 'rate' DO UPDATE
+		   SET note = EXCLUDED.note
+		 WHERE journal_entry_tags.note IS DISTINCT FROM EXCLUDED.note
 		 RETURNING (xmax = 0) AS added`,
-		[entryId, t.tag, t.entityId, t.note, by.moduleId, by.userId, t.quantity, t.unit, t.rateCents],
+		[entryId, t.tag, t.entityId, t.note, by.moduleId, by.userId],
 	);
-	// A changed rate is news too: forms that copied it may want the new one.
-	if (r.rows[0] && (r.rows[0].added || t.tag === "rate")) changes.push({ entry_id: Number(entryId), action: "set", tag: t.tag, entity_id: t.entityId, module_id: by.moduleId });
+	if (r.rows[0]?.added) changes.push({ entry_id: Number(entryId), action: "set", tag: t.tag, tag_id: null, entity_id: t.entityId, module_id: by.moduleId });
 	for (const other of CLEARS[t.tag] ?? []) {
 		const d = await tx.query(`DELETE FROM journal_entry_tags WHERE entry_id = $1 AND tag = $2`, [entryId, other]);
-		if ((d.rowCount ?? 0) > 0) changes.push({ entry_id: Number(entryId), action: "removed", tag: other, entity_id: null, module_id: by.moduleId });
+		if ((d.rowCount ?? 0) > 0) changes.push({ entry_id: Number(entryId), action: "removed", tag: other, tag_id: null, entity_id: null, module_id: by.moduleId });
 	}
 }
 
@@ -201,9 +263,10 @@ async function checkEntity(tx: Queryable, v: ValidationError, t: Checked): Promi
 }
 
 /**
- * Tags an entry. Setting a tag it already has changes nothing but the note
- * (and, for "rate", its quantity, unit and rate). "paid" takes "overdue"
- * off. Returns the entry's tags.
+ * Tags an entry. Setting a tag it already has changes nothing but the note.
+ * "rate" is an item (description, quantity, rate): each one set is added,
+ * unless input.id names an item of the entry to change. "paid" takes
+ * "overdue" off. Returns the entry's tags.
  */
 export async function setTag(app: App, entryId: bigint, input: TagInput, by: { moduleId: string | null; userId: number | null }): Promise<EntryTag[]> {
 	const v = new ValidationError();
@@ -247,11 +310,12 @@ async function checkEntries(tx: Queryable, ids: bigint[]): Promise<void> {
 	}
 }
 
-/** Tags many entries at once, all or none. Returns how many entries changed. */
+/** Tags many entries at once, all or none (a "rate" item is added to each). Returns how many entries changed. */
 export async function setTags(app: App, entryIds: unknown, input: TagInput, by: { moduleId: string | null; userId: number | null }): Promise<{ entries: number; changed: number }> {
 	const ids = batchIds(entryIds);
 	const v = new ValidationError();
 	const t = check(v, input);
+	if (t.id !== null) v.add("id", "names one entry's rate item: change it on that entry, not in a batch");
 	v.throwIfAny();
 	const changes: TagChange[] = [];
 	await withTx(app.db, {}, async (tx) => {
@@ -274,24 +338,33 @@ export async function removeTags(app: App, entryIds: unknown, input: { tag: stri
 	v.throwIfAny();
 	const gone = await withTx(app.db, {}, async (tx) => {
 		await checkEntries(tx, ids);
-		return queryRows<{ entry_id: bigint; entity_id: bigint | null }>(
+		return queryRows<{ id: bigint; entry_id: bigint; entity_id: bigint | null }>(
 			tx,
-			`DELETE FROM journal_entry_tags WHERE entry_id = ANY($1::bigint[]) AND tag = $2 AND ($3::bigint IS NULL OR entity_id = $3) RETURNING entry_id, entity_id`,
+			`DELETE FROM journal_entry_tags WHERE entry_id = ANY($1::bigint[]) AND tag = $2 AND ($3::bigint IS NULL OR entity_id = $3) RETURNING id, entry_id, entity_id`,
 			[ids, tag, entityId],
 		);
 	});
-	announce(app, gone.map((g) => ({ entry_id: Number(g.entry_id), action: "removed" as const, tag, entity_id: g.entity_id === null ? null : Number(g.entity_id), module_id: by.moduleId })));
+	announce(app, gone.map((g) => ({ entry_id: Number(g.entry_id), action: "removed" as const, tag, tag_id: tag === "rate" ? Number(g.id) : null, entity_id: g.entity_id === null ? null : Number(g.entity_id), module_id: by.moduleId })));
 	return { entries: ids.length, changed: new Set(gone.map((g) => String(g.entry_id))).size };
 }
 
-/** Takes a tag off an entry (for "customer" and "vendor": that one, or all of them when no entity is given). */
-export async function removeTag(app: App, entryId: bigint, input: { tag: string; entity_id?: number | null }, by: { moduleId: string | null }): Promise<EntryTag[]> {
+/**
+ * Takes a tag off an entry (for "customer" and "vendor": that one, or all of
+ * them when no entity is given; for "rate": the item with that id, or all of
+ * them when no id is given).
+ */
+export async function removeTag(app: App, entryId: bigint, input: { tag: string; entity_id?: number | null; id?: number | null }, by: { moduleId: string | null }): Promise<EntryTag[]> {
 	const tag = typeof input?.tag === "string" ? input.tag.trim().toLowerCase() : "";
 	const entityId = input?.entity_id === undefined || input.entity_id === null ? null : Number(input.entity_id);
-	if (!TAG_RE.test(tag) || (entityId !== null && (!Number.isSafeInteger(entityId) || entityId < 1))) throw new NotFoundError();
+	const tagId = input?.id === undefined || input.id === null ? null : Number(input.id);
+	if (!TAG_RE.test(tag) || (entityId !== null && (!Number.isSafeInteger(entityId) || entityId < 1)) || (tagId !== null && (!Number.isSafeInteger(tagId) || tagId < 1))) throw new NotFoundError();
 	if (!(await queryRow(app.db, `SELECT 1 FROM journal_entries WHERE id = $1`, [entryId]))) throw new NotFoundError();
-	const gone = await queryRows<{ entity_id: bigint | null }>(app.db, `DELETE FROM journal_entry_tags WHERE entry_id = $1 AND tag = $2 AND ($3::bigint IS NULL OR entity_id = $3) RETURNING entity_id`, [entryId, tag, entityId]);
-	announce(app, gone.map((g) => ({ entry_id: Number(entryId), action: "removed" as const, tag, entity_id: g.entity_id === null ? null : Number(g.entity_id), module_id: by.moduleId })));
+	const gone = await queryRows<{ id: bigint; entity_id: bigint | null }>(
+		app.db,
+		`DELETE FROM journal_entry_tags WHERE entry_id = $1 AND tag = $2 AND ($3::bigint IS NULL OR entity_id = $3) AND ($4::bigint IS NULL OR id = $4) RETURNING id, entity_id`,
+		[entryId, tag, entityId, tagId],
+	);
+	announce(app, gone.map((g) => ({ entry_id: Number(entryId), action: "removed" as const, tag, tag_id: tag === "rate" ? Number(g.id) : null, entity_id: g.entity_id === null ? null : Number(g.entity_id), module_id: by.moduleId })));
 	return (await tagsOfEntries(app.db, [entryId])).get(Number(entryId)) ?? [];
 }
 

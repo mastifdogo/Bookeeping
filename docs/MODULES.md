@@ -352,9 +352,13 @@ ctx.tags.onChange(async (c) => {               // every change, by any module or
 	// c = { entry_id, action: "set" | "removed", tag, entity_id, module_id }  (module_id null: a person)
 });
 ctx.tags.standard;                             // ["paid", "billed", "overdue", "customer", "vendor", "rate"]
-// Ledger 0.24.0:
-await ctx.tags.setRate(entryId, { quantity: 7.5, unit: "hours", rate_cents: 8000 }, req.user);
-const r = await ctx.tags.rate(entryId);        // { quantity: 7.5, unit: "hours", rate_cents: 8000, amount_cents: 60000 } or null
+// Ledger 0.24.0 (description and several items per entry: 0.25.0):
+const item = await ctx.tags.addRate(entryId, { description: "Labour", quantity: 7.5, unit: "hours", rate_cents: 8000 }, req.user);
+// → { id, description: "Labour", quantity: 7.5, unit: "hours", rate_cents: 8000, amount_cents: 60000 }
+await ctx.tags.setRate(entryId, { id: item.id, description: "Labour", quantity: 8, rate_cents: 8000 }); // change that item (no id: adds one)
+const items = await ctx.tags.rates(entryId);   // every item, in the order added: [{ id, description, quantity, unit, rate_cents, amount_cents }]
+const r = await ctx.tags.rate(entryId);        // the first item, or null
+await ctx.tags.removeRate(entryId, item.id);   // takes that item off; ctx.tags.remove(entryId, "rate") takes them all
 await ctx.tags.setMany([12, 13, 14], "billed", {}, req.user); // all or none, at most 500: { entries: 3, changed: 3 }
 await ctx.tags.removeMany([12, 13], "overdue");               // { entries, changed }
 ```
@@ -378,16 +382,24 @@ await ctx.tags.removeMany([12, 13], "overdue");               // { entries, chan
 - `ctx.tags.entries({ entity_id })` also finds entries posted with that
   customer or vendor (`entity_id` on the entry), so tag only where the
   entry doesn't already say who.
-- **`rate`: quantity and price, shared** (Ledger 0.24.0). It says how many
-  of what at what price: `quantity` (up to 4 decimals, e.g. 7.5), `unit`
-  (a word of up to 20 characters: hours, km, litres, items) and
-  `rate_cents` (the price of one unit, in the entry's currency); at least
-  one of quantity and rate. Tag what you post when it is counted (a
-  timesheet's hours, a mileage claim's kilometres), and when a form starts
-  from an entry, fill it in from the rate instead of asking again. An
-  entry has one rate; setting it again replaces it (and is announced to
-  `onChange`). People set it on the entry's page too. In the page,
-  `data-ledger-entry` fills forms in for you (see "The UI").
+- **`rate`: items with description, quantity and price, shared** (Ledger
+  0.24.0; description and several per entry since 0.25.0). Each `rate` tag
+  is one item, shown as "Labour, 7.5 hours, 80.00 = 600.00":
+  `description` (up to 100 characters, optional), `quantity` (up to 4
+  decimals, e.g. 7.5), `unit` (a word of up to 20 characters: hours, km,
+  litres, items) and `rate_cents` (the price of one unit, in the entry's
+  currency); at least one of quantity and rate. An entry can have any
+  number of items, each with its own `id` (in `ctx.tags.of` and the
+  entry's `tags`). Tag what you post when it is counted (a timesheet's
+  hours, a mileage claim's kilometres, an invoice's lines), and when a form
+  starts from an entry, fill it in from the items instead of asking again.
+  Setting `rate` without an `id` adds an item; with one, changes it. Each
+  change is announced to `onChange` with `tag_id`, the item's id. Over the
+  API: `POST /journal-entries/{id}/tags` with `{ tag: "rate", id?,
+  description, quantity, unit, rate_cents }`, and `DELETE
+  /journal-entries/{id}/tags/rate?id=<item>`. People add them on the
+  entry's page too. In the page, `data-ledger-entry` fills forms in for you
+  (see "The UI").
 - People tag many entries at once from the Journal (tick them, then add or
   take off a tag); `POST /api/v1/journal-entries/tags` with `{ entry_ids,
   action: "set" | "remove", tag, ... }` does the same, and modules use
@@ -862,18 +874,23 @@ next to the sidebar or in a side-by-side pane (so it should work from about
   sizes are remembered in the browser, per page. Lists as `<table>` with
   `<th>` and fields as `<input>`/`<select>` get this for free. Put
   `data-no-resize` on an element to leave it (and everything in it) alone.
-- **Forms filled in from an entry's rate tag** (same script): put
+- **Forms filled in from an entry's rate items** (same script): put
   `data-ledger-entry="<journal entry id>"` on a form and
-  `data-ledger-fill="…"` on its fields: `quantity`, `unit`, `rate`
-  (e.g. "80.00"), `rate_cents`, `amount` (quantity × rate, "600.00"),
-  `amount_cents`, `description` or `date` (the entry's). Empty fields are
-  filled, with `input` and `change` events, when the attribute is set or
-  changes (`data-ledger-overwrite` on a field replaces what is there). The
-  form also gets a `ledger-rate` event whose `detail` is the rate or null,
-  and `await LedgerUI.rateOf(entryId)` returns the rate directly.
+  `data-ledger-fill="…"` on its fields: `description` (the item's, or the
+  entry's when it has none), `quantity`, `unit`, `rate` (e.g. "80.00"),
+  `rate_cents`, `amount` (quantity × rate, "600.00"), `amount_cents` or
+  `date` (the entry's). Fields take the first item, or item n (0, 1, 2…)
+  when inside an element with `data-ledger-item="n"`, e.g. one invoice
+  line per item. Empty fields are filled, with `input` and `change`
+  events, when the attribute is set or changes (`data-ledger-overwrite` on
+  a field replaces what is there). The form also gets a `ledger-rate`
+  event whose `detail` is the first item or null, and a `ledger-items`
+  event with all of them; `await LedgerUI.rateOf(entryId)` returns the
+  first and `await LedgerUI.itemsOf(entryId)` all of them.
 
 ```html
 <form data-ledger-entry="123">  <!-- set it when the user picks the entry to invoice -->
+	<input name="what" data-ledger-fill="description">
 	<input name="qty" data-ledger-fill="quantity">
 	<input name="unit" data-ledger-fill="unit">
 	<input name="price" data-ledger-fill="rate">

@@ -69,12 +69,14 @@
 	async function batch(action: 'set' | 'remove') {
 		error = null;
 		done = '';
-		const body = action === 'set' ? tagBody(tagForm) : tagBody({ ...tagForm, entity: tagForm.entity || '0', quantity: '', rate: '1' });
+		const body = action === 'set' ? tagBody({ ...tagForm, id: '' }) : tagBody({ ...tagForm, id: '', entity: tagForm.entity || '0', description: '', quantity: '', rate: '1' });
 		if (typeof body === 'string') {
 			error = new Error(body);
 			return;
 		}
+		delete body.id;
 		if (action === 'remove') {
+			delete body.description;
 			delete body.quantity;
 			delete body.rate_cents;
 			delete body.unit;
@@ -162,7 +164,7 @@
 						<td>
 							{e.description}
 							{#if e.entity}<span class="muted small">· {e.entity.name}</span>{/if}
-							{#each e.tags as t (t.tag + ':' + (t.entity?.id ?? ''))}
+							{#each e.tags as t (t.id)}
 								<span class="badge tag {t.tag}" title={t.module_id ? `Set by ${t.module_id}` : 'Set by a person'}>{tagLabel(t)}</span>
 							{/each}
 							{#each e.links as l (l.module_id + ':' + l.ref)}

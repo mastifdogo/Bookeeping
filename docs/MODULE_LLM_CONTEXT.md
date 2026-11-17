@@ -320,14 +320,17 @@ CREATE TABLE invoices (
   `<table>`/`<th>` for lists and real `<input>`/`<select>` for fields so this
   works; put `data-no-resize` on an element to leave it and what is inside
   it alone.
-- **Forms fill themselves in from the rate tag**: set
+- **Forms fill themselves in from the rate items**: set
   `data-ledger-entry="<journal entry id>"` on a form and
-  `data-ledger-fill="quantity" | "unit" | "rate" | "rate_cents" | "amount" |
-  "amount_cents" | "description" | "date"` on its fields. Empty fields are
-  filled (with `input`/`change` events) when the attribute is set or
-  changes; add `data-ledger-overwrite` to replace what is there. The form
-  also gets a `ledger-rate` event (`event.detail` is the rate or null), and
-  `await LedgerUI.rateOf(entryId)` returns it directly.
+  `data-ledger-fill="description" | "quantity" | "unit" | "rate" |
+  "rate_cents" | "amount" | "amount_cents" | "date"` on its fields. They
+  take the entry's first item, or item n inside an element with
+  `data-ledger-item="n"` (one per line). Empty fields are filled (with
+  `input`/`change` events) when the attribute is set or changes; add
+  `data-ledger-overwrite` to replace what is there. The form also gets a
+  `ledger-rate` event (`event.detail`: first item or null) and a
+  `ledger-items` event (all of them); `await LedgerUI.rateOf(entryId)` /
+  `LedgerUI.itemsOf(entryId)` return them directly.
 - Every account dropdown (categorizing transactions, choosing accounts in
   settings-like forms) ends with **"+ New account…"** that calls
   `newAccount()` below, then adds the account to the list and selects it.
@@ -425,9 +428,12 @@ await ctx.tags.set(entryId, "paid");                      // takes "overdue" off
 await ctx.tags.remove(entryId, "billed");
 await ctx.tags.of(entryId);                               // [{ tag, entity, note, module_id, set_by, set_at }]
 await ctx.tags.entries({ tag: "overdue", entity_id, from, to, limit }); // journal entries
-ctx.tags.onChange((c) => {});                             // { entry_id, action: "set"|"removed", tag, entity_id, module_id }
-await ctx.tags.setRate(entryId, { quantity: 7.5, unit: "hours", rate_cents: 8000 }, req.user); // Ledger 0.24.0
-await ctx.tags.rate(entryId);                             // { quantity, unit, rate_cents, amount_cents } or null
+ctx.tags.onChange((c) => {});                             // { entry_id, action: "set"|"removed", tag, tag_id (rate items), entity_id, module_id }
+await ctx.tags.addRate(entryId, { description: "Labour", quantity: 7.5, unit: "hours", rate_cents: 8000 }, req.user); // Ledger 0.25.0: one item more
+await ctx.tags.setRate(entryId, { id, description, quantity, unit, rate_cents }); // changes item `id` (Ledger 0.24.0 without description/id)
+await ctx.tags.rates(entryId);                            // [{ id, description, quantity, unit, rate_cents, amount_cents }], several per entry
+await ctx.tags.rate(entryId);                             // the first item, or null
+await ctx.tags.removeRate(entryId, id);
 await ctx.tags.setMany([12, 13, 14], "billed");           // many entries at once, all or none (≤ 500): { entries, changed }
 await ctx.tags.removeMany([12, 13], "overdue");
 ```

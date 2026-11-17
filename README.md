@@ -400,11 +400,15 @@ shows them and filters by tag. To tag many at once, tick entries in the
 Journal (or the box in the heading for the whole page) and add or take off a
 tag for all of them.
 
-The tag **`rate`** says how many of what at what price: a quantity (7.5), a
-unit (hours) and a rate per unit (80.00), so the entry shows "7.5 hours ×
-80.00 = 600.00". Modules set and read it, and their forms fill themselves in
-from it: a timesheet module tags the hours it posts, and an invoicing module
-puts them on the invoice line without retyping.
+The tag **`rate`** is an item: a description (Labour), a quantity with an
+optional unit (7.5 hours) and a rate per unit (80.00), so the entry shows
+"rate: Labour, 7.5 hours, 80.00 = 600.00". An entry can carry several, one
+per item (labour, travel, parts…); on the entry's page add each with
+**Add item** (or type it in one go in the description box as
+`description,quantity,rate`, e.g. `Labour,7.5,80`), change one with ✎ and
+take one off with ×. Modules set and read them, and their forms fill
+themselves in from them: a timesheet module tags the hours it posts, and an
+invoicing module puts them on the invoice lines without retyping.
 
 ### Root mode
 

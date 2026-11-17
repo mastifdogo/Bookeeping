@@ -218,12 +218,22 @@
 		}
 		return tagAct(async () => unwrap(await api().POST('/journal-entries/{entryId}/tags', { params: { path: { entryId: e.id } }, body })));
 	};
-	// "Edit" on a rate puts its values back in the form.
+	// "Change" on a rate item puts its values back in the form; saving changes that item.
 	function editRate(t: (typeof e.tags)[number]) {
-		tagForm = { ...emptyTagForm(), tag: 'rate', quantity: t.quantity != null ? String(t.quantity) : '', unit: t.unit ?? '', rate: t.rate_cents != null ? centsToInput(t.rate_cents) : '' };
+		tagForm = {
+			...emptyTagForm(),
+			tag: 'rate',
+			id: String(t.id),
+			description: t.description ?? '',
+			quantity: t.quantity != null ? String(t.quantity) : '',
+			unit: t.unit ?? '',
+			rate: t.rate_cents != null ? centsToInput(t.rate_cents) : ''
+		};
 	}
 	const dropTag = (t: (typeof e.tags)[number]) =>
-		tagAct(async () => unwrap(await api().DELETE('/journal-entries/{entryId}/tags/{tag}', { params: { path: { entryId: e.id, tag: t.tag }, query: { entity_id: t.entity?.id } } })));
+		tagAct(async () =>
+			unwrap(await api().DELETE('/journal-entries/{entryId}/tags/{tag}', { params: { path: { entryId: e.id, tag: t.tag }, query: { entity_id: t.entity?.id, id: t.tag === 'rate' ? t.id : undefined } } }))
+		);
 
 	// One log of what changed after posting: amounts, the date and lines moved to another account.
 	type LogRow = { key: string; at: string; by: string | null; what: string; was: string; now: string; why: string };
@@ -364,9 +374,9 @@
 <div class="card tags">
 	<div class="muted small">Tags <span title="Tags are shared with every module: a tag set here, or by a module, is seen by all of them.">(shared with modules)</span></div>
 	<div class="taglist">
-		{#each e.tags as t (t.tag + ':' + (t.entity?.id ?? ''))}
+		{#each e.tags as t (t.id)}
 			<span class="badge tag {t.tag}" title="{t.module_id ? `Set by ${moduleName(t.module_id)}` : `Set by ${t.set_by ?? 'a person'}`}, {new Date(t.set_at).toLocaleString()}{t.note ? `: ${t.note}` : ''}">
-				{tagLabel(t)}{#if canEdit && t.tag === 'rate'}<button type="button" class="x" disabled={busy} aria-label="Change the rate" title="Change" onclick={() => editRate(t)}>✎</button>{/if}{#if canEdit}<button type="button" class="x" disabled={busy} aria-label="Take off the tag {t.tag}" onclick={() => dropTag(t)}>×</button>{/if}
+				{tagLabel(t)}{#if canEdit && t.tag === 'rate'}<button type="button" class="x" disabled={busy} aria-label="Change this item" title="Change" onclick={() => editRate(t)}>✎</button>{/if}{#if canEdit}<button type="button" class="x" disabled={busy} aria-label="Take off the tag {t.tag}" onclick={() => dropTag(t)}>×</button>{/if}
 			</span>
 		{:else}
 			<span class="muted small">None.</span>
@@ -375,7 +385,8 @@
 	{#if canEdit}
 		<form class="toolbar" style="margin:0.5rem 0 0" onsubmit={addTag}>
 			<TagFields bind:form={tagForm} entities={data.entities} />
-			<button disabled={busy}>{tagForm.tag === 'rate' && e.tags.some((t) => t.tag === 'rate') ? 'Change rate' : 'Add tag'}</button>
+			<button disabled={busy}>{tagForm.tag === 'rate' ? (tagForm.id ? 'Change item' : 'Add item') : 'Add tag'}</button>
+			{#if tagForm.id}<button type="button" disabled={busy} onclick={() => (tagForm = { ...emptyTagForm(), tag: 'rate' })}>Cancel</button>{/if}
 		</form>
 	{/if}
 </div>
