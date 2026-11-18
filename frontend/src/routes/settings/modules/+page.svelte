@@ -160,6 +160,11 @@
 							{/if}
 							{#if m.description}<div class="small">{m.description}</div>{/if}
 							{#if m.accepts.length}<div class="muted small">Takes {m.accepts.map((k) => k + 's').join(', ')} from other modules</div>{/if}
+							{#if m.own_files}
+								<div class="small" style="color:var(--warn)">
+									Keeps files of its own, outside Documents. It was built for an older Ledger: update it so its files move into Documents.
+								</div>
+							{/if}
 						</td>
 						<td>{m.version ?? '—'}</td>
 						<td>

@@ -14,10 +14,12 @@
 	--danger-bg: #ffebe9;
 	--row-hover: #f0f3f7;
 	--radius: 6px;
-	/* Windows: the page, each pane beside it and the sidebar. */
+	/* Windows: the page, each pane beside it and the sidebar. Every window is
+	   solid, Ledger's own pages and modules' alike: the page colour (or the
+	   background picture) shows only in the gaps around them. */
 	--win-gap: 0.5rem;
 	--win-radius: 10px;
-	--win-bg: var(--bg);
+	--win-bg: var(--surface);
 	color-scheme: light;
 }
 
@@ -342,10 +344,11 @@ a.link-chip:hover {
 	border-color: var(--accent);
 }
 
-/* Root mode (Settings → Account): the whole background turns red while it is on. */
+/* Root mode (Settings → Account): the whole background turns red while it is on, inside Ledger's own windows too. */
 html.root {
 	--bg: #ef4444;
 	--row-hover: #fde2e2;
+	--win-bg: var(--bg);
 }
 html.root th {
 	background: #fde8e8;
@@ -382,23 +385,17 @@ html.root .tabs a[aria-current='page'] {
 }
 
 /* A background picture (Settings → UI). Root mode's red wins over it. The
-   picture shows clearly in the gaps between windows; inside them the page
-   colour covers it by the chosen amount, so text stays readable. */
+   picture shows in the gaps around the windows, under a light veil of the
+   page colour; the windows themselves stay solid. */
 html.has-bg:not(.root) body {
 	background:
 		linear-gradient(color-mix(in srgb, var(--bg) calc(var(--bg-dim, 70%) / 3), transparent), color-mix(in srgb, var(--bg) calc(var(--bg-dim, 70%) / 3), transparent)),
 		var(--bg-image) center / cover fixed no-repeat,
 		var(--bg);
 }
-html.has-bg:not(.root) {
-	--win-bg: color-mix(in srgb, var(--bg) var(--bg-dim, 70%), transparent);
-}
-/* Inside a pane's frame the window around it already draws the picture. */
-html.has-bg.in-pane:not(.root) body {
-	background: transparent;
-}
-html.has-bg.in-pane:not(.root) {
-	--win-bg: transparent;
+/* A page of Ledger shown in a pane's frame is that window's inside. */
+html.in-pane:not(.root) body {
+	background: var(--win-bg);
 }
 
 /* Tags on journal entries (shared by Ledger and modules). */
@@ -416,4 +413,9 @@ html.has-bg.in-pane:not(.root) {
 .badge.tag.billed {
 	background: var(--warn-bg);
 	color: var(--warn);
+}
+.badge.tag.posted,
+.badge.tag.extracted {
+	background: var(--ok-bg);
+	color: var(--ok);
 }

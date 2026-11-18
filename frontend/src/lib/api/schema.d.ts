@@ -820,12 +820,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** PDFs of receipts, statements and invoices (imported or made in Ledger), newest first, and the folders they are filed in */
+        /** The files kept in Ledger (receipts, statements, invoices and any other file, imported or made in Ledger), newest first, and the folders they are filed in */
         get: operations["listDocuments"];
         put?: never;
         /**
-         * Import a PDF (or a PNG or JPEG picture)
-         * @description The same file can't be imported twice (409).
+         * Import a file of any type
+         * @description What the file is comes from its bytes (PDFs and pictures), then from its name. The same file can't be imported twice (409).
          */
         post: operations["uploadDocument"];
         delete?: never;
@@ -869,6 +869,99 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tag a document (shared with every module); "paid" takes "overdue" off */
+        post: operations["setDocumentTag"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}/tags/{tag}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+                tag: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Take a tag off a document; taking "extracted" off forgets what was read from it */
+        delete: operations["removeDocumentTag"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tag many documents at once, or take a tag off them (all or none) */
+        post: operations["batchDocumentTags"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/document-tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The file tags in use, with how many documents carry each */
+        get: operations["listDocumentTags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}/extracted": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        /** What was read out of the document (404 when nothing has been read yet) */
+        get: operations["getDocumentExtraction"];
+        put?: never;
+        post?: never;
+        /** Forget what was read out of the document, so it is read again */
+        delete: operations["clearDocumentExtraction"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2943,6 +3036,8 @@ export interface components {
             has_settings: boolean;
             /** @description Kinds of files it takes from other modules (ctx.files) */
             accepts: ("transaction" | "receipt" | "statement" | "bill")[];
+            /** @description Built for a Ledger before 0.26.0 and still keeping files outside Documents (a folder of its own, or in its tables): update it */
+            own_files: boolean;
             /**
              * @description running; failed (installed but would not load: see message);
              *     pending (waiting for the installer); error (the installer could
@@ -3353,6 +3448,39 @@ export interface components {
                 status: "done" | "skipped";
                 note: string;
             }[];
+            /** @description Tags shared by Ledger and every module */
+            tags: components["schemas"]["DocumentTag"][];
+            /** @description Set when the document's data has been read out (it then carries the tag "extracted") */
+            extracted: components["schemas"]["DocumentExtractionSummary"] | null;
+        };
+        DocumentTag: {
+            tag: string;
+            note: string;
+            /** @description The module that set it; null when a person did */
+            module_id: string | null;
+            set_by: string | null;
+            /** Format: date-time */
+            set_at: string;
+        };
+        DocumentExtractionSummary: {
+            /** @description The module that read it last */
+            module_id: string | null;
+            /** Format: date-time */
+            extracted_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** @description The top-level keys of the data */
+            keys: string[];
+            has_text: boolean;
+            url: string;
+        };
+        DocumentExtraction: components["schemas"]["DocumentExtractionSummary"] & {
+            document_id: number;
+            data: {
+                [key: string]: unknown;
+            };
+            text: string | null;
+            extracted_by: string | null;
         };
         /** @enum {string} */
         MailSecurity: "starttls" | "tls" | "none";
@@ -4871,6 +4999,12 @@ export interface operations {
                 account_code?: string;
                 /** @description true: only statements already reconciled against; false: only those that are not */
                 reconciled?: boolean;
+                /** @description Only documents carrying this tag */
+                tag?: string;
+                /** @description true: only documents whose data has been read out; false: only those not read yet */
+                extracted?: boolean;
+                /** @description A media type (text/csv) or a family (image/*) */
+                content_type?: string;
                 /** @description Words in the title, file name, note or entity name */
                 q?: string;
                 limit?: number;
@@ -5039,7 +5173,173 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/pdf": string;
+                    "application/octet-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setDocumentTag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description A lowercase word; "extracted" is kept by Ledger and can't be set */
+                    tag: string;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The document */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    removeDocumentTag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+                tag: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The document */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    batchDocumentTags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    document_ids: number[];
+                    /** @enum {string} */
+                    action: "set" | "remove";
+                    tag: string;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description How many documents were named and how many changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        documents: number;
+                        changed: number;
+                    };
+                };
+            };
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listDocumentTags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            tag: string;
+                            documents: number;
+                            standard: boolean;
+                        }[];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDocumentExtraction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentExtraction"];
+                };
+            };
+            404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    clearDocumentExtraction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The document */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
                 };
             };
             default: components["responses"]["Error"];

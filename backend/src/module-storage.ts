@@ -112,6 +112,18 @@ export async function listTree(dir: string): Promise<{ rel: string; full: string
 	return walk(dir);
 }
 
+/** Whether the module still has a file in its old storage folder, in the organization the code runs in. */
+export async function hasStoredFiles(app: App, moduleId: string): Promise<boolean> {
+	const any = async (dir: string): Promise<boolean> => {
+		for (const e of await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+			if (e.name.startsWith(".")) continue;
+			if (e.isFile() || (e.isDirectory() && (await any(path.join(dir, e.name))))) return true;
+		}
+		return false;
+	};
+	return any(moduleStorageDir(await filesDir(app), moduleId));
+}
+
 /** The Ledger version from which modules keep every file in Documents and nothing in storage of their own. */
 export const ONE_FILE_STORE_SINCE = "0.26.0";
 

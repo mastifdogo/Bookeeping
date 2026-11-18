@@ -1234,7 +1234,7 @@ paths:
     get:
       tags: [Documents]
       operationId: listDocuments
-      summary: PDFs of receipts, statements and invoices (imported or made in Ledger), newest first, and the folders they are filed in
+      summary: The files kept in Ledger (receipts, statements, invoices and any other file, imported or made in Ledger), newest first, and the folders they are filed in
       parameters:
         - { name: kind, in: query, schema: { $ref: '#/components/schemas/DocumentKind' } }
         - { name: origin, in: query, schema: { type: string, enum: [imported, created] } }
@@ -1242,6 +1242,9 @@ paths:
         - { name: entity_id, in: query, schema: { type: integer } }
         - { name: account_code, in: query, schema: { type: string }, description: 'Documents of this account; "none" for those without one' }
         - { name: reconciled, in: query, schema: { type: boolean }, description: 'true: only statements already reconciled against; false: only those that are not' }
+        - { name: tag, in: query, schema: { type: string }, description: 'Only documents carrying this tag' }
+        - { name: extracted, in: query, schema: { type: boolean }, description: 'true: only documents whose data has been read out; false: only those not read yet' }
+        - { name: content_type, in: query, schema: { type: string }, description: 'A media type (text/csv) or a family (image/*)' }
         - { name: q, in: query, schema: { type: string }, description: 'Words in the title, file name, note or entity name' }
         - { name: limit, in: query, schema: { type: integer } }
         - { name: offset, in: query, schema: { type: integer } }
@@ -1271,8 +1274,10 @@ paths:
     post:
       tags: [Documents]
       operationId: uploadDocument
-      summary: Import a PDF (or a PNG or JPEG picture)
-      description: The same file can't be imported twice (409).
+      summary: Import a file of any type
+      description: >-
+        What the file is comes from its bytes (PDFs and pictures), then from its
+        name. The same file can't be imported twice (409).
       requestBody:
         required: true
         content:
@@ -1357,7 +1362,135 @@ paths:
         '200':
           description: OK
           content:
-            application/pdf: { schema: { type: string, format: binary } }
+            application/octet-stream: { schema: { type: string, format: binary } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /documents/{documentId}/tags:
+    parameters:
+      - { name: documentId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Documents]
+      operationId: setDocumentTag
+      summary: Tag a document (shared with every module); "paid" takes "overdue" off
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [tag]
+              properties:
+                tag: { type: string, description: 'A lowercase word; "extracted" is kept by Ledger and can''t be set' }
+                note: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: The document
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /documents/{documentId}/tags/{tag}:
+    parameters:
+      - { name: documentId, in: path, required: true, schema: { type: integer } }
+      - { name: tag, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [Documents]
+      operationId: removeDocumentTag
+      summary: Take a tag off a document; taking "extracted" off forgets what was read from it
+      responses:
+        '200':
+          description: The document
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /documents/tags:
+    post:
+      tags: [Documents]
+      operationId: batchDocumentTags
+      summary: Tag many documents at once, or take a tag off them (all or none)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [document_ids, action, tag]
+              properties:
+                document_ids: { type: array, items: { type: integer }, maxItems: 500 }
+                action: { type: string, enum: [set, remove] }
+                tag: { type: string }
+                note: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: How many documents were named and how many changed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documents, changed]
+                properties:
+                  documents: { type: integer }
+                  changed: { type: integer }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /document-tags:
+    get:
+      tags: [Documents]
+      operationId: listDocumentTags
+      summary: The file tags in use, with how many documents carry each
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [tag, documents, standard]
+                      properties:
+                        tag: { type: string }
+                        documents: { type: integer }
+                        standard: { type: boolean }
+        default: { $ref: '#/components/responses/Error' }
+
+  /documents/{documentId}/extracted:
+    parameters:
+      - { name: documentId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Documents]
+      operationId: getDocumentExtraction
+      summary: What was read out of the document (404 when nothing has been read yet)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentExtraction' }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Documents]
+      operationId: clearDocumentExtraction
+      summary: Forget what was read out of the document, so it is read again
+      responses:
+        '200':
+          description: The document
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
         default: { $ref: '#/components/responses/Error' }
 
   /files:
@@ -4053,7 +4186,7 @@ components:
           items: { $ref: '#/components/schemas/DashboardItem' }
     ModuleInfo:
       type: object
-      required: [repo, id, name, version, description, nav_label, has_settings, accepts, state, message]
+      required: [repo, id, name, version, description, nav_label, has_settings, accepts, own_files, state, message]
       properties:
         repo: { type: string, nullable: true }
         id: { type: string, nullable: true }
@@ -4066,6 +4199,7 @@ components:
           type: array
           description: Kinds of files it takes from other modules (ctx.files)
           items: { type: string, enum: [transaction, receipt, statement, bill] }
+        own_files: { type: boolean, description: 'Built for a Ledger before 0.26.0 and still keeping files outside Documents (a folder of its own, or in its tables): update it' }
         state:
           type: string
           enum: [running, failed, pending, error, removing]
@@ -4463,7 +4597,7 @@ components:
       enum: [receipt, statement, invoice, other]
     Document:
       type: object
-      required: [id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url, reconciled, marks]
+      required: [id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url, reconciled, marks, tags, extracted]
       properties:
         id: { type: integer }
         kind: { $ref: '#/components/schemas/DocumentKind' }
@@ -4495,6 +4629,43 @@ components:
               module: { type: string }
               status: { type: string, enum: [done, skipped] }
               note: { type: string }
+        tags:
+          type: array
+          description: Tags shared by Ledger and every module
+          items: { $ref: '#/components/schemas/DocumentTag' }
+        extracted:
+          nullable: true
+          description: Set when the document's data has been read out (it then carries the tag "extracted")
+          allOf: [{ $ref: '#/components/schemas/DocumentExtractionSummary' }]
+    DocumentTag:
+      type: object
+      required: [tag, note, module_id, set_by, set_at]
+      properties:
+        tag: { type: string }
+        note: { type: string }
+        module_id: { type: string, nullable: true, description: The module that set it; null when a person did }
+        set_by: { type: string, nullable: true }
+        set_at: { type: string, format: date-time }
+    DocumentExtractionSummary:
+      type: object
+      required: [module_id, extracted_at, updated_at, keys, has_text, url]
+      properties:
+        module_id: { type: string, nullable: true, description: The module that read it last }
+        extracted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        keys: { type: array, items: { type: string }, description: The top-level keys of the data }
+        has_text: { type: boolean }
+        url: { type: string }
+    DocumentExtraction:
+      allOf:
+        - $ref: '#/components/schemas/DocumentExtractionSummary'
+        - type: object
+          required: [document_id, data, text, extracted_by]
+          properties:
+            document_id: { type: integer }
+            data: { type: object, additionalProperties: true }
+            text: { type: string, nullable: true }
+            extracted_by: { type: string, nullable: true }
     MailSecurity:
       type: string
       enum: [starttls, tls, none]

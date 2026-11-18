@@ -88,11 +88,11 @@
 			<img class="now" src="/api/v1/settings/background/image?v={current.version}" alt="Your background" />
 			<div style="flex:1; min-width:14rem">
 				<label>
-					How much the page colour covers it: {dim}%
+					How much the page colour mutes it: {dim}%
 					<input type="range" min="0" max="95" step="5" bind:value={dim} onchange={saveDim} style="width:100%" />
 				</label>
 				<p class="muted small" style="margin:0.3rem 0 0">
-					Higher is easier to read; lower shows more of the picture.
+					The picture shows around the windows, which stay solid. Higher is calmer; lower shows more of the picture.
 					{#if current.url}<a href={current.url} target="_blank" rel="noopener">The picture on Wallhaven</a>{/if}
 					{#if current.resolution}({current.resolution}){/if}
 				</p>

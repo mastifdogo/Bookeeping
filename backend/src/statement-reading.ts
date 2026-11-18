@@ -6,15 +6,26 @@
 // nearest date). The matches are ticked in the open reconciliation as a
 // first pass; a person checks them against the statement shown beside them
 // and presses Finish.
+//
+// A statement is read once (Ledger 0.26.0): when its transactions were
+// already read out (a module parsed its CSV or OFX file, or a person approved
+// what the AI found), that extraction is used and the AI isn't asked. And
+// when a reconciliation read with the AI is finished, a person has checked
+// the reading against the statement, so it is kept as the document's
+// extraction for every module.
 
 import type { App } from "./app.ts";
 import { ConflictError, HttpError } from "./errors.ts";
 import { getDocument, readDocument } from "./documents.ts";
+import { getExtraction, setExtraction } from "./document-tags.ts";
+import { log } from "./log.ts";
 import { llmComplete, LlmError, pickConnection, PROVIDER_INFO, readLlmConfig } from "./llm.ts";
 import { changeCleared, createReconciliation, getReconciliation, saveReading, type ReconciliationDetail, type ReconciliationLine, type StatementLine, type StatementReading } from "./reconcile.ts";
 
 const MAX_STATEMENT_BYTES = 20 * 1024 * 1024;
 const MAX_LINES = 2000;
+/** How much of a statement kept as text (CSV, OFX, …) is put before the AI. */
+const MAX_STATEMENT_TEXT = 400_000;
 
 const SCHEMA = {
 	type: "object",
@@ -64,24 +75,87 @@ const dayOf = (iso: string) => Math.round(new Date(`${iso}T00:00:00Z`).getTime()
 
 export type Reading = Omit<StatementReading, "matched" | "unmatched">;
 
-/** Asks the AI what the statement says. Nothing is saved or changed. */
+const TEXT_TYPES = /^(text\/|application\/(x-ofx|x-qif|json|xml)$)/;
+const wholeCents = (v: unknown): number | null => (typeof v === "number" && Number.isSafeInteger(v) ? v : null);
+
+/** Opening balance plus the lines should give the closing balance; when only the signs are the wrong way round, they are turned. */
+function addUp(lines: StatementLine[], opening: number | null, closing: number | null): boolean | null {
+	if (opening === null || closing === null) return null;
+	const sum = lines.reduce((n, l) => n + l.amount_cents, 0);
+	if (opening + sum === closing) return true;
+	// The signs came out the other way round (it happens with card statements): the balances say which way is right.
+	if (sum !== 0 && opening - sum === closing) {
+		for (const l of lines) l.amount_cents = -l.amount_cents;
+		return true;
+	}
+	return false;
+}
+
+/**
+ * The reading from what was already read out of the document (the shared keys
+ * transactions, period, opening_balance_cents, closing_balance_cents), or
+ * null when its transactions haven't been. There, money out is negative; on
+ * a statement of a card or loan a purchase makes the balance owed go up.
+ */
+async function readingFromExtraction(app: App, documentId: unknown, account: { type: string }): Promise<Reading | null> {
+	const x = await getExtraction(app, documentId);
+	const list = x?.data.transactions;
+	if (!x || !Array.isArray(list) || list.length === 0) return null;
+	const flip = account.type === "liability" ? -1 : 1;
+	const lines: StatementLine[] = [];
+	for (const t of list.slice(0, MAX_LINES) as Record<string, unknown>[]) {
+		const cents = wholeCents(t?.amount_cents);
+		if (!isDate(t?.date) || cents === null || cents === 0) continue;
+		lines.push({ date: t.date, description: String(t.description ?? "").replace(/\s+/g, " ").trim().slice(0, 300), amount_cents: cents * flip });
+	}
+	if (lines.length === 0) return null;
+	const period = (x.data.period && typeof x.data.period === "object" ? x.data.period : {}) as Record<string, unknown>;
+	const opening = wholeCents(x.data.opening_balance_cents);
+	const closing = wholeCents(x.data.closing_balance_cents);
+	return {
+		read_at: new Date(x.updated_at).toISOString(),
+		model: "",
+		period_start: isDate(period.from) ? period.from : null,
+		end_date: isDate(period.to) ? period.to : null,
+		opening_balance_cents: opening,
+		closing_balance_cents: closing,
+		adds_up: addUp(lines, opening, closing),
+		lines,
+	};
+}
+
+/** What the statement says: from what was already read out of it, else by asking the AI. Nothing is saved or changed. */
 export async function readStatement(app: App, documentId: unknown, account: { name: string; type: string; currency: string }): Promise<Reading> {
 	const doc = await getDocument(app, documentId);
+	const known = await readingFromExtraction(app, doc.id, account);
+	if (known) return known;
 	if (doc.size_bytes > MAX_STATEMENT_BYTES) throw new HttpError(413, `the statement is too large for the AI to read (${MAX_STATEMENT_BYTES / 1024 / 1024} MB at most)`, "payload_too_large");
 	const pdf = doc.content_type === "application/pdf";
-	const cfg = await readLlmConfig(app.integrations.dir);
-	const conn = pickConnection(cfg, "images");
-	if (!conn) throw new LlmError("no LLM connection for images and documents is set up; an admin can add one under Settings → LLM API", 409);
-	if (pdf && !PROVIDER_INFO[conn.provider].pdf) {
-		throw new LlmError(`the connection for images and documents (${conn.name}) can't read PDFs; under Settings → LLM API use a provider that does, or import the statement as a picture`, 409);
+	const picture = /^image\/(png|jpeg|gif|webp)$/.test(doc.content_type);
+	const text = TEXT_TYPES.test(doc.content_type);
+	if (!pdf && !picture && !text) throw new HttpError(422, `the AI can't read this kind of file (${doc.filename}); attach the statement as a PDF, a picture, or a CSV or OFX file`, "validation_failed");
+	const about = `This is a statement for the account "${account.name}" (${account.type === "liability" ? "a credit card or loan: the balance is the amount owed" : "a bank account"}, ${account.currency}). Copy out its period, balances and every transaction line.`;
+	let r;
+	if (text) {
+		// A statement kept as text (CSV, OFX, QFX) goes in the prompt, to the connection for text.
+		const body = (await readDocument(app, doc.id)).toString("utf8");
+		if (body.length > MAX_STATEMENT_TEXT) throw new HttpError(413, "the statement is too long for the AI to read in one go", "payload_too_large");
+		r = await llmComplete(app, "ledger", { system: SYSTEM, prompt: `${about}\n\nThe statement file (${doc.filename}):\n\n${body}`, schema: SCHEMA });
+	} else {
+		const cfg = await readLlmConfig(app.integrations.dir);
+		const conn = pickConnection(cfg, "images");
+		if (!conn) throw new LlmError("no LLM connection for images and documents is set up; an admin can add one under Settings → LLM API", 409);
+		if (pdf && !PROVIDER_INFO[conn.provider].pdf) {
+			throw new LlmError(`the connection for images and documents (${conn.name}) can't read PDFs; under Settings → LLM API use a provider that does, or import the statement as a picture`, 409);
+		}
+		const data = (await readDocument(app, doc.id)).toString("base64");
+		r = await llmComplete(app, "ledger", {
+			system: SYSTEM,
+			prompt: about,
+			schema: SCHEMA,
+			...(pdf ? { documents: [{ media_type: doc.content_type, data, name: doc.filename }] } : { images: [{ media_type: doc.content_type, data }] }),
+		});
 	}
-	const data = (await readDocument(app, doc.id)).toString("base64");
-	const r = await llmComplete(app, "ledger", {
-		system: SYSTEM,
-		prompt: `This is a statement for the account "${account.name}" (${account.type === "liability" ? "a credit card or loan: the balance is the amount owed" : "a bank account"}, ${account.currency}). Copy out its period, balances and every transaction line.`,
-		schema: SCHEMA,
-		...(pdf ? { documents: [{ media_type: doc.content_type, data, name: doc.filename }] } : { images: [{ media_type: doc.content_type, data }] }),
-	});
 	const o = (r.data && typeof r.data === "object" ? r.data : {}) as Record<string, unknown>;
 	const lines: StatementLine[] = [];
 	for (const l of Array.isArray(o.lines) ? o.lines.slice(0, MAX_LINES) : []) {
@@ -92,16 +166,7 @@ export async function readStatement(app: App, documentId: unknown, account: { na
 	}
 	const opening = toCents(o.opening_balance);
 	const closing = toCents(o.closing_balance);
-	let addsUp: boolean | null = null;
-	if (opening !== null && closing !== null) {
-		const sum = lines.reduce((n, l) => n + l.amount_cents, 0);
-		addsUp = opening + sum === closing;
-		// The signs came out the other way round (it happens with card statements): the balances say which way is right.
-		if (!addsUp && sum !== 0 && opening - sum === closing) {
-			for (const l of lines) l.amount_cents = -l.amount_cents;
-			addsUp = true;
-		}
-	}
+	const addsUp = addUp(lines, opening, closing);
 	if (lines.length === 0 && closing === null) throw new LlmError("the AI found no balance and no transactions in that document; is it a statement?", 422);
 	return {
 		read_at: new Date().toISOString(),
@@ -183,4 +248,40 @@ export async function reconcileFromStatement(app: App, input: { account_code: st
 	}
 	const d = await createReconciliation(app, { account_code: input.account_code, statement_date: reading.end_date, statement_balance_cents: BigInt(reading.closing_balance_cents), document_id: input.document_id }, userId);
 	return apply(app, BigInt(d.reconciliation.id), reading);
+}
+
+/**
+ * A finished reconciliation's reading has been checked against the statement
+ * by a person: it is kept as the statement's extraction (unless its
+ * transactions were read out already), so no module reads the file again.
+ * Best effort: never in the way of finishing.
+ */
+export async function keepReading(app: App, d: ReconciliationDetail, userId: number | null): Promise<void> {
+	const rec = d.reconciliation;
+	const reading = d.reading;
+	if (rec.document_id === null || !reading || reading.lines.length === 0) return;
+	try {
+		const have = await getExtraction(app, rec.document_id);
+		if (Array.isArray(have?.data.transactions) && have.data.transactions.length > 0) return;
+		// The shared keys: money out negative, whatever the kind of account.
+		const flip = rec.account_type === "liability" ? -1 : 1;
+		await setExtraction(
+			app,
+			rec.document_id,
+			{
+				data: {
+					type: "statement",
+					currency: rec.currency,
+					account: { name: rec.account_name, account_code: rec.account_code },
+					period: { from: reading.period_start, to: reading.end_date ?? rec.statement_date },
+					opening_balance_cents: reading.opening_balance_cents,
+					closing_balance_cents: reading.closing_balance_cents ?? Number(rec.statement_balance_cents),
+					transactions: reading.lines.map((l) => ({ date: l.date, description: l.description, amount_cents: l.amount_cents * flip })),
+				},
+			},
+			{ moduleId: null, userId },
+		);
+	} catch (err) {
+		log.warn("could not keep a statement's reading with its document", { document: rec.document_id, err: (err as Error).message });
+	}
 }

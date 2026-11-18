@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Chooses the statement a reconciliation is checked against: one already
-	// under Documents, or a PDF imported on the spot (filed as a statement).
+	// under Documents, or a file (PDF, picture, CSV, OFX) imported on the spot (filed as a statement).
 	import { api, unwrap, type Document } from '#lib/api/client.ts';
 
 	// accountCode: only that account's statements are offered, plus those not yet given an account.
@@ -60,8 +60,8 @@
 		{#each all as s (s.id)}<option value={s.id}>{s.title}{s.doc_date ? ` · ${s.doc_date}` : ''}{s.account_code ? '' : ' · no account yet'}</option>{/each}
 	</select>
 	<label class="button" class:busy={uploading}>
-		{uploading ? 'Importing…' : 'Import a PDF…'}
-		<input type="file" accept="application/pdf,image/png,image/jpeg" onchange={upload} disabled={disabled || uploading} />
+		{uploading ? 'Importing…' : 'Import a statement…'}
+		<input type="file" accept="application/pdf,image/png,image/jpeg,.csv,.ofx,.qfx,text/csv" onchange={upload} disabled={disabled || uploading} />
 	</label>
 </span>
 

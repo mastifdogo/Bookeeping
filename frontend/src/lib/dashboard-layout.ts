@@ -60,3 +60,16 @@ export function clamp(t: Tile): Tile {
 export function readingOrder(tiles: Tile[]): Tile[] {
 	return [...tiles].sort((a, b) => a.y - b.y || a.x - b.x);
 }
+
+/**
+ * The tiles that are shown, with grid rows no tile sits on closed up: a
+ * tile that isn't there (hidden, or a currency with no accounts yet) leaves
+ * no hole behind.
+ */
+export function closeEmptyRows(tiles: Tile[]): Tile[] {
+	const used = new Set<number>();
+	for (const t of tiles) for (let r = t.y; r < t.y + t.h; r++) used.add(r);
+	const rows = [...used].sort((a, b) => a - b);
+	const place = new Map(rows.map((r, i) => [r, i + 1]));
+	return tiles.map((t) => ({ ...t, y: place.get(t.y) ?? t.y }));
+}

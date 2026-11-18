@@ -161,8 +161,9 @@
 	</div>
 {/if}
 <p class="muted" style="margin-top:0">
-	Match an account against a bank or card statement. Choose the statement's PDF and the AI reads its closing date,
-	balance and lines, then ticks the transactions that match, with the statement shown beside them for you to check. Or
+	Match an account against a bank or card statement. Choose the statement (a PDF, a picture, or a CSV or OFX file) and
+	its closing date, balance and lines are read from it: by the AI, unless they were read out already. The transactions
+	that match are ticked, with the statement shown beside them for you to check. Or
 	enter the date and balance yourself and tick each transaction. When the difference is 0.00, finish.
 </p>
 

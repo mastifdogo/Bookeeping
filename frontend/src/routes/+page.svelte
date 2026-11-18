@@ -5,7 +5,7 @@
 	import { api, today, unwrap, type DashboardItem } from '#lib/api/client.ts';
 	import { invalidate } from '$app/navigation';
 	import { openRow } from '#lib/rows.ts';
-	import { completeLayout, readingOrder, type Tile, type TileId } from '#lib/dashboard-layout.ts';
+	import { completeLayout, readingOrder, type Tile, type TileId, closeEmptyRows } from '#lib/dashboard-layout.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -20,8 +20,10 @@
 	// Tiles where Settings → UI puts them; a currency's summary only when there is one.
 	let currencies: string[] = $derived(summary.currencies.map((c) => c.currency));
 	let tiles = $derived(
-		readingOrder(completeLayout(data.layout as Tile[], currencies)).filter(
-			(t) => !t.hidden && (!t.id.startsWith('summary-') || currencies.includes(t.id.slice(8)))
+		closeEmptyRows(
+			readingOrder(completeLayout(data.layout as Tile[], currencies)).filter(
+				(t) => !t.hidden && (!t.id.startsWith('summary-') || currencies.includes(t.id.slice(8)))
+			)
 		)
 	);
 	const tileStyle = (t: Tile) => `grid-column:${t.x} / span ${t.w};grid-row:${t.y} / span ${t.h}`;

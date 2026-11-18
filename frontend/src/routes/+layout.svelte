@@ -22,7 +22,7 @@
 		document.documentElement.classList.toggle('root', data.user?.root === true);
 	});
 
-	// The user's background picture (Settings → UI), under a veil of the page colour so text stays readable.
+	// The user's background picture (Settings → UI): it shows around the windows, under a light veil of the page colour.
 	$effect(() => {
 		const el = document.documentElement;
 		const bg = data.background;

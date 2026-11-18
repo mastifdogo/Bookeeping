@@ -2223,6 +2223,20 @@ test("one file store: any file type, tags on files, extracted data, and no files
 	const old = (await db.query(`SELECT document_id, data FROM module_files WHERE filename = 'old.ofx'`)).rows[0];
 	assert.equal(old.data, null);
 	assert.deepEqual([(await call("GET", `/documents/${old.document_id}`)).json().filename, (await call("GET", "/m/taker/inbox")).json()[0][4]], ["old.ofx", "OLD"]);
+
+	// Ledger reads a file once too: Reconcile takes a statement's transactions from what a module read out, without the AI
+	// (none is set up here), and a card statement's purchases (money out, negative) make its balance go up.
+	await createAccount(ta, "2100", "Visa", "liability", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	expectStatus(await call("POST", "/journal-entries", entry("2026-03-01", "Coffee", dr("6100", 450), cr("2100", 450))), 201);
+	expectStatus(await call("POST", "/reconciliations/from-statement", { account_code: "2100", document_id: qfx.id }), 409); // not read yet, and no AI
+	await call("POST", `/m/reader/extract/${qfx.id}`, { data: { type: "statement", period: { from: "2026-03-01", to: "2026-03-31" }, opening_balance_cents: 0, closing_balance_cents: 450, transactions: [{ date: "2026-03-01", description: "Coffee", amount_cents: -450 }] } });
+	r = await call("POST", "/reconciliations/from-statement", { account_code: "2100", document_id: qfx.id });
+	expectStatus(r, 201);
+	assert.deepEqual(
+		[r.json().reconciliation.statement_date, r.json().reconciliation.statement_balance_cents, r.json().reading.adds_up, r.json().reading.lines, r.json().reading.matched.length, r.json().difference_cents],
+		["2026-03-31", 450, true, [{ date: "2026-03-01", description: "Coffee", amount_cents: 450 }], 1, 0],
+	);
 });
 
 test("Reconcile against a statement PDF the AI reads", async (t) => {

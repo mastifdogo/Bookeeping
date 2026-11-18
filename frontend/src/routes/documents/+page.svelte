@@ -1,7 +1,9 @@
 <script lang="ts">
-	// Documents: PDFs of receipts, statements and invoices, imported here or
-	// by a module, and PDFs made in Ledger. Filed in folders by kind and year
-	// on the data share; modules read them through ctx.documents.
+	// Documents: the one file store. Receipts, statements, invoices and any
+	// other file, imported here or by a module, and files made in Ledger.
+	// Filed in folders by kind and year on the data share; modules keep their
+	// files here too (ctx.documents). Each file has tags, shared with every
+	// module, and once its data has been read out, that data.
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
@@ -29,13 +31,14 @@
 	);
 	let all = $derived(data.docs.folders.reduce((n, f) => n + f.count, 0));
 
-	function show(change: { kind?: Kind | null; year?: number | null; origin?: string | null; account?: string; q?: string }) {
+	function show(change: { kind?: Kind | null; year?: number | null; origin?: string | null; account?: string; tag?: string; q?: string }) {
 		const f = { ...data.filter, ...change };
 		const p = new URLSearchParams();
 		if (f.kind) p.set('kind', f.kind);
 		if (f.year) p.set('year', String(f.year));
 		if (f.origin) p.set('origin', f.origin);
 		if (f.account) p.set('account', f.account);
+		if (f.tag) p.set('tag', f.tag);
 		if (f.q) p.set('q', f.q);
 		goto(`?${p}`, { reset: false });
 	}
@@ -129,6 +132,52 @@
 			return `Deleted ${d.title}.`;
 		});
 
+	// Tags, shared with every module. "extracted" is Ledger's own: it is there while the file's data is.
+	const TAGS = ['posted', 'paid', 'billed', 'overdue'];
+	let tagging = $state({ tag: 'posted', custom: '', note: '' });
+	const addTag = (d: Document, ev: SubmitEvent) => {
+		ev.preventDefault();
+		return act(async () => {
+			const tag = (tagging.tag || tagging.custom).trim().toLowerCase();
+			unwrap(await api().POST('/documents/{documentId}/tags', { params: { path: { documentId: d.id } }, body: { tag, note: tagging.note.trim() } }));
+			tagging = { tag: 'posted', custom: '', note: '' };
+			return `Tagged ${d.title} "${tag}".`;
+		});
+	};
+	const removeTag = (d: Document, tag: string) =>
+		act(async () => {
+			if (tag === 'extracted' && !confirm(`Forget the data read from "${d.title}"? A module that needs it will read the file again.`)) return '';
+			unwrap(await api().DELETE('/documents/{documentId}/tags/{tag}', { params: { path: { documentId: d.id, tag } } }));
+			return tag === 'extracted' ? `Forgot the data read from ${d.title}.` : `Took "${tag}" off ${d.title}.`;
+		});
+
+	// What was read out of a file: shown on request.
+	let shown = $state<number | null>(null);
+	let extraction = $state<{ data: Record<string, unknown>; text: string | null } | null>(null);
+	async function showData(d: Document) {
+		if (shown === d.id) {
+			shown = null;
+			return;
+		}
+		error = null;
+		try {
+			extraction = unwrap(await api().GET('/documents/{documentId}/extracted', { params: { path: { documentId: d.id } } }));
+			shown = d.id;
+		} catch (err) {
+			error = err;
+		}
+	}
+	const short = (v: unknown): string => {
+		if (v === null || v === undefined) return '';
+		if (Array.isArray(v)) return `${v.length} ${v.length === 1 ? 'row' : 'rows'}`;
+		if (typeof v === 'object') return Object.entries(v).map(([k, x]) => `${k}: ${typeof x === 'object' && x !== null ? '…' : x}`).join(', ');
+		return String(v);
+	};
+	const label = (k: string) => k.replace(/_cents$/, '').replaceAll('_', ' ');
+	const value = (k: string, v: unknown) => (k.endsWith('_cents') && typeof v === 'number' ? (v / 100).toLocaleString(undefined, { minimumFractionDigits: 2 }) : short(v));
+	const columns = (rows: unknown[]) => [...new Set(rows.slice(0, 50).flatMap((r) => (r && typeof r === 'object' ? Object.keys(r) : [])))].slice(0, 8);
+	const tables = (data: Record<string, unknown>) => Object.entries(data).filter(([, v]) => Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') as [string, Record<string, unknown>[]][];
+
 	const size = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 	const moduleName = (id: string) => page.data.modules?.find((m: { id: string }) => m.id === id)?.label ?? id;
 	const from = (d: Document) => (d.source === 'user' ? (d.added_by ?? 'A user') : moduleName(d.source));
@@ -137,11 +186,12 @@
 <div class="toolbar">
 	<h1 style="margin:0">Documents</h1>
 	<span class="spacer"></span>
-	{#if canEdit}<button class="primary" onclick={startImport}>{importing ? 'Close' : '+ Import PDFs'}</button>{/if}
+	{#if canEdit}<button class="primary" onclick={startImport}>{importing ? 'Close' : '+ Import files'}</button>{/if}
 </div>
 <p class="muted small">
-	Receipts, statements and invoices you import, and PDFs made in Ledger, filed by kind and year. Modules can read them and add
-	their own. The files are on the data share and in every backup.
+	Every file kept in Ledger: receipts, statements and invoices you import, files made in Ledger, and the files modules work with,
+	filed by kind and year. Tags are shared with every module, and data read out of a file is kept with it so it is read once. The
+	files are on the data share and in every backup.
 </p>
 
 {#if notice}<div class="notice ok">{notice}</div>{/if}
@@ -163,8 +213,8 @@
 				pick(e.dataTransfer?.files);
 			}}
 		>
-			<input type="file" multiple accept="application/pdf,image/png,image/jpeg" onchange={(e) => pick(e.currentTarget.files)} />
-			<span><strong>Choose files</strong> or drop them here. PDFs, or PNG and JPEG pictures, up to {Math.round(data.docs.max_bytes / 1024 / 1024)} MB each.</span>
+			<input type="file" multiple onchange={(e) => pick(e.currentTarget.files)} />
+			<span><strong>Choose files</strong> or drop them here. Any kind of file (PDFs, pictures, CSV or OFX statements, spreadsheets, emails), up to {Math.round(data.docs.max_bytes / 1024 / 1024)} MB each.</span>
 		</label>
 		{#if files.length > 0}
 			<ul class="picked small">
@@ -231,6 +281,10 @@
 				{#each data.accounts as a (a.code)}<option value={a.code}>{a.code} {a.name}</option>{/each}
 				<option value="none">No account</option>
 			</select>
+			<select aria-label="Tag" value={data.filter.tag} onchange={(e) => show({ tag: e.currentTarget.value })}>
+				<option value="">All tags</option>
+				{#each data.tags.filter((t) => t.documents > 0 || t.tag === data.filter.tag) as t (t.tag)}<option value={t.tag}>{t.tag} ({t.documents})</option>{/each}
+			</select>
 			<form
 				onsubmit={(e) => {
 					e.preventDefault();
@@ -282,6 +336,19 @@
 												<button type="button" onclick={() => (editing = null)}>Cancel</button>
 											</p>
 										</form>
+										<form class="row tagform" onsubmit={(e) => addTag(d, e)}>
+											<span class="muted small">Tags (every module sees them)</span>
+											{#each d.tags as t (t.tag)}
+												<span class="badge tag {t.tag}">{t.tag}{t.note ? `: ${t.note}` : ''} <button type="button" class="link x" title="Take this tag off" disabled={busy} onclick={() => removeTag(d, t.tag)}>×</button></span>
+											{/each}
+											<select bind:value={tagging.tag} aria-label="Tag" style="width:auto">
+												{#each TAGS as s (s)}<option value={s}>{s}</option>{/each}
+												<option value="">another…</option>
+											</select>
+											{#if tagging.tag === ''}<input bind:value={tagging.custom} placeholder="a word, e.g. disputed" maxlength="40" pattern="[A-Za-z][A-Za-z0-9_\-]*" required style="width:11rem" aria-label="Tag word" />{/if}
+											<input bind:value={tagging.note} placeholder="Note (optional)" maxlength="200" style="width:12rem" aria-label="Note" />
+											<button disabled={busy}>Add tag</button>
+										</form>
 									</td>
 								</tr>
 							{:else}
@@ -290,12 +357,21 @@
 										<a href={d.url} target="_blank" rel="noopener"><strong>{d.title}</strong></a>
 										{#if d.origin === 'created'}<span class="badge ok">made in Ledger</span>{/if}
 										{#if d.reconciled}<span class="badge ok" title="An account has been reconciled against this statement">reconciled</span>{/if}
+										{#each d.tags as t (t.tag)}
+											<span class="badge tag {t.tag}" title="{t.note ? t.note + ' · ' : ''}set by {t.module_id ? moduleName(t.module_id) : (t.set_by ?? 'Ledger')}">{t.tag === 'extracted' ? 'data extracted' : t.tag}</span>
+										{/each}
 										<div class="muted small">
 											{d.path}{#if d.note} · {d.note}{/if}
 										</div>
 										{#each d.marks as m (m.module)}
 											<div class="muted small">{moduleName(m.module)}: {m.status}{m.note ? `, ${m.note}` : ''}</div>
 										{/each}
+										{#if d.extracted}
+											<div class="muted small">
+												Data read out{d.extracted.module_id ? ` by ${moduleName(d.extracted.module_id)}` : ''}
+												<button class="link" onclick={() => showData(d)}>{shown === d.id ? 'hide' : 'show'}</button>
+											</div>
+										{/if}
 									</td>
 									<td>{kindName(d.kind)}</td>
 									<td>{d.doc_date ?? ''}</td>
@@ -311,6 +387,40 @@
 										{/if}
 									</td>
 								</tr>
+								{#if shown === d.id && extraction}
+									<tr>
+										<td colspan="8" class="extracted">
+											<dl>
+												{#each Object.entries(extraction.data).filter(([, v]) => !(Array.isArray(v) && v.length > 0 && typeof v[0] === 'object')) as [k, v] (k)}
+													<div><dt>{label(k)}</dt><dd>{value(k, v)}</dd></div>
+												{/each}
+											</dl>
+											{#each tables(extraction.data) as [k, rows] (k)}
+												<p class="small" style="margin:0.5rem 0 0.2rem"><strong>{label(k)}</strong> <span class="muted">({rows.length})</span></p>
+												<div class="table-wrap inner">
+													<table>
+														<thead><tr>{#each columns(rows) as c (c)}<th class:num={c.endsWith('_cents')}>{label(c)}</th>{/each}</tr></thead>
+														<tbody>
+															{#each rows.slice(0, 200) as r, i (i)}
+																<tr>{#each columns(rows) as c (c)}<td class:num={c.endsWith('_cents')}>{value(c, r[c])}</td>{/each}</tr>
+															{/each}
+														</tbody>
+													</table>
+												</div>
+												{#if rows.length > 200}<p class="muted small">The first 200 of {rows.length}.</p>{/if}
+											{/each}
+											{#if extraction.text}
+												<details><summary class="small">The file's text</summary><pre class="small">{extraction.text.slice(0, 20000)}{extraction.text.length > 20000 ? '\n…' : ''}</pre></details>
+											{/if}
+											{#if canEdit}
+												<p class="small" style="margin:0.5rem 0 0">
+													<button class="link" disabled={busy} onclick={() => removeTag(d, 'extracted')}>Forget this data</button>
+													<span class="muted">(a module that needs it reads the file again)</span>
+												</p>
+											{/if}
+										</td>
+									</tr>
+								{/if}
 							{/if}
 						{/each}
 					</tbody>
@@ -366,6 +476,8 @@
 	@media (max-width: 720px) {
 		.layout {
 			flex-direction: column;
+			/* Stacked, each part is as wide as the window; the table scrolls inside its own box. */
+			align-items: stretch;
 		}
 		.folders {
 			flex-direction: row;
@@ -405,6 +517,46 @@
 	}
 	.actions > * {
 		margin-left: 0.5rem;
+	}
+	.tagform {
+		margin: 0.6rem 0 0;
+		padding-top: 0.6rem;
+		border-top: 1px solid var(--border);
+		align-items: center;
+	}
+	.tagform input {
+		width: auto;
+	}
+	button.link.x {
+		color: inherit;
+		font-weight: 700;
+	}
+	.extracted dl {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+		gap: 0.25rem 1rem;
+		margin: 0;
+	}
+	.extracted dt {
+		font-size: 0.8rem;
+		color: var(--muted);
+		text-transform: capitalize;
+	}
+	.extracted dd {
+		margin: 0;
+		overflow-wrap: anywhere;
+	}
+	.extracted th {
+		text-transform: capitalize;
+	}
+	.extracted pre {
+		white-space: pre-wrap;
+		max-height: 20rem;
+		overflow: auto;
+	}
+	.table-wrap.inner {
+		max-height: 22rem;
+		overflow: auto;
 	}
 	button.link {
 		background: none;

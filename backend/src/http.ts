@@ -10,7 +10,7 @@ import { moveUnreconciledLine, unreconciledSummary } from "./unreconciled.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import type { App } from "./app.ts";
-import { isPgError, withDatabase, withTx } from "./db.ts";
+import { isPgError, queryRows, withDatabase, withTx } from "./db.ts";
 import {
 	BadCredentialsError,
 	ConflictError,
@@ -137,8 +137,8 @@ import { CONTENT_TYPES, staticHandler } from "./static.ts";
 import { promises as fsp } from "node:fs";
 import pathMod from "node:path";
 import { createReadStream } from "node:fs";
-import { INLINE_TYPES, openStored } from "./module-storage.ts";
-import { preReconcile, reconcileFromStatement } from "./statement-reading.ts";
+import { hasStoredFiles, INLINE_TYPES, openStored } from "./module-storage.ts";
+import { preReconcile, reconcileFromStatement, keepReading } from "./statement-reading.ts";
 import { addDocument, deleteDocument, documentFolders, DOCUMENT_KINDS, DOCUMENT_ORIGINS, getDocument, listDocuments, MAX_DOCUMENT_BYTES, openDocument, updateDocument, type DocumentKind, type DocumentOrigin } from "./documents.ts";
 import { clearExtraction, getExtraction, listDocumentTags, removeDocumentTag, removeDocumentTags, setDocumentTag, setDocumentTags } from "./document-tags.ts";
 import { MAX_MODULES, normalizeRepo, readDesired, readModuleResults, requestModuleSync, writeDesired, compatible, type DesiredModule } from "./modules.ts";
@@ -1215,7 +1215,9 @@ async function handleFinishReconciliation(c: Ctx): Promise<void> {
 		if (pd !== undefined && typeof pd !== "boolean") throw new DecodeError("json: post_difference must be true or false");
 		return { postDifference: pd === true };
 	});
-	writeJSON(c.res, 200, await finishReconciliation(c.app, pathId(c, "reconciliationId"), c.user!.id, body));
+	const done = await finishReconciliation(c.app, pathId(c, "reconciliationId"), c.user!.id, body);
+	await keepReading(c.app, done, c.user!.id);
+	writeJSON(c.res, 200, done);
 }
 
 async function handleUndoReconciliation(c: Ctx): Promise<void> {
@@ -2118,6 +2120,17 @@ async function modulesInfo(c: Ctx) {
 	const desired = await readDesired(c.app.update);
 	const results = await readModuleResults(c.app.update);
 	const loaded = [...c.app.modules.modules.values()];
+	// Modules from before 0.26.0 that still keep files outside Documents here: a folder of their own, or a binary column.
+	const ownFiles = new Set<string>();
+	const old = loaded.filter((m) => m.ownFiles);
+	if (old.length) {
+		const blobs = await queryRows<{ s: string }>(c.app.db, `SELECT DISTINCT table_schema AS s FROM information_schema.columns WHERE data_type = 'bytea' AND table_schema = ANY($1::text[])`, [
+			old.map((m) => `mod_${m.manifest.id.replaceAll("-", "_")}`),
+		]);
+		for (const m of old) {
+			if (blobs.some((b) => b.s === `mod_${m.manifest.id.replaceAll("-", "_")}`) || (await hasStoredFiles(c.app, m.manifest.id))) ownFiles.add(m.manifest.id);
+		}
+	}
 	const list: Record<string, unknown>[] = [];
 	const seen = new Set<string>();
 	const resultFor = (repo: string | null, id: string | null) => results.find((r) => (repo && r.repo === repo) || (id && r.id === id)) ?? null;
@@ -2134,7 +2147,7 @@ async function modulesInfo(c: Ctx) {
 			nav_label: m && !m.error ? (m.manifest.nav?.label ?? null) : null,
 			has_settings: !!m && !m.error && !!m.manifest.settings,
 			accepts: m?.manifest.files?.accepts ?? [],
-			own_files: !!m && !m.error && m.ownFiles && !!m.manifest.server,
+			own_files: !!m && ownFiles.has(m.manifest.id),
 			state: m ? (m.error ? "failed" : "running") : last?.state === "error" ? "error" : "pending",
 			message: m?.error ?? (last?.state === "error" ? last.message : m ? "" : "Waiting for the installer…"),
 		});
@@ -2151,7 +2164,7 @@ async function modulesInfo(c: Ctx) {
 			// Still running until the next sync (or, in development, loaded from MODULES_DIR).
 			has_settings: !m.error && !!m.manifest.settings,
 			accepts: m.manifest.files?.accepts ?? [],
-			own_files: !m.error && m.ownFiles && !!m.manifest.server,
+			own_files: ownFiles.has(m.manifest.id),
 			state: "removing",
 			message: "Removed from the list; uninstalls at the next sync.",
 		});

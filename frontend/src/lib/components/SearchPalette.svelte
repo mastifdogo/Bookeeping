@@ -27,7 +27,7 @@
 		{ title: 'Income statement', subtitle: 'Report', href: '/reports/income-statement' },
 		{ title: 'Trial balance', subtitle: 'Report', href: '/reports/trial-balance' },
 		{ title: 'Account settings, password', subtitle: 'Settings', href: '/settings/account' },
-		{ title: 'Documents', subtitle: 'Receipts, statements and invoices as PDFs', href: '/documents' },
+		{ title: 'Documents', subtitle: 'Receipts, statements, invoices and every other file', href: '/documents' },
 		{ title: 'Sidebar', subtitle: 'Settings', href: '/settings/sidebar' },
 		{ title: 'Import & export CSV', subtitle: 'Settings', href: '/settings/import-export' },
 		{ title: 'Migrate from other software', subtitle: 'Settings: import QuickBooks, Xero, Wave… exports', href: '/settings/migrate' }
