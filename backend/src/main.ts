@@ -93,6 +93,11 @@ async function serve(): Promise<void> {
 	};
 	process.on("SIGTERM", shutdown);
 	process.on("SIGINT", shutdown);
+	// A promise nobody awaited that fails (a module's timer, say) would otherwise stop the whole
+	// server. It is a bug in whatever dropped it, and is logged as one; the books stay up.
+	process.on("unhandledRejection", (reason) => {
+		log.error("unhandled rejection (a promise failed with nothing waiting for it)", { err: reason instanceof Error ? (reason.stack ?? reason.message) : String(reason) });
+	});
 }
 
 async function main(): Promise<void> {
