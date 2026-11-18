@@ -213,21 +213,29 @@ export function filesFor(app: App, self: string, actorOf: (u: unknown) => number
  */
 export async function fileOldHandoffs(app: App): Promise<void> {
 	await forEachOrg(app, async () => {
+		// Rows are taken in order; one that can't be filed is logged and passed over, not tried forever.
+		let after = 0n;
 		for (;;) {
 			const rows = await queryRows<{ id: bigint; sender: string; recipient: string; kind: FileKind; filename: string; content_type: string; data: Buffer; note: string }>(
 				app.db,
-				`SELECT id, sender, recipient, kind, filename, content_type, data, note FROM module_files WHERE data IS NOT NULL AND document_id IS NULL ORDER BY id LIMIT 5`,
+				`SELECT id, sender, recipient, kind, filename, content_type, data, note FROM module_files WHERE data IS NOT NULL AND document_id IS NULL AND id > $1 ORDER BY id LIMIT 5`,
+				[after],
 			);
 			if (rows.length === 0) return;
 			for (const r of rows) {
-				// "ledger" (the migration from other software) hands lists over too; a document's source is "user" or a module.
-				const source = /^[a-z][a-z0-9-]{1,31}$/.test(r.sender) && r.sender !== "ledger" ? r.sender : "user";
-				const { document } = await ensureDocument(
-					app,
-					{ kind: DOCUMENT_KIND[r.kind] ?? "other", filename: r.filename, data: r.data, origin: "imported", content_type: r.content_type, note: r.note.slice(0, 2000) },
-					{ source, userId: null, quiet: [...app.modules.modules.keys()] },
-				);
-				await app.db.query(`UPDATE module_files SET document_id = $2, data = NULL WHERE id = $1`, [r.id, document.id]);
+				after = r.id;
+				try {
+					// "ledger" (the migration from other software) hands lists over too; a document's source is "user" or a module.
+					const source = /^[a-z][a-z0-9-]{1,31}$/.test(r.sender) && r.sender !== "ledger" ? r.sender : "user";
+					const { document } = await ensureDocument(
+						app,
+						{ kind: DOCUMENT_KIND[r.kind] ?? "other", filename: r.filename.trim() || "file", data: r.data, origin: "imported", content_type: r.content_type, note: r.note.slice(0, 2000) },
+						{ source, userId: null, quiet: [...app.modules.modules.keys()] },
+					);
+					await app.db.query(`UPDATE module_files SET document_id = $2, data = NULL WHERE id = $1`, [r.id, document.id]);
+				} catch (err) {
+					log.error("could not file a handed-over file in Documents; it stays as it is", { file: Number(r.id), err: (err as Error).message });
+				}
 			}
 		}
 	}).catch((err: Error) => log.error("could not file handed-over files in Documents", { err: err.message }));

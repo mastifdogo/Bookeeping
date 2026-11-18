@@ -177,8 +177,16 @@
 			</div>
 			{#if rec.document_type === 'application/pdf'}
 				<iframe src="{rec.document_url}#view=FitH" title="Statement: {rec.document_title}"></iframe>
-			{:else}
+			{:else if rec.document_type?.startsWith('image/')}
 				<div class="picture"><img src={rec.document_url} alt="Statement: {rec.document_title}" /></div>
+			{:else if rec.document_type === 'text/csv' || rec.document_type === 'text/plain'}
+				<!-- A statement kept as text (a CSV): shown as it is, sandboxed by the server. -->
+				<iframe src={rec.document_url} title="Statement: {rec.document_title}"></iframe>
+			{:else}
+				<p class="muted" style="padding:0.75rem">
+					This statement is a file the browser can't show beside the lines (an OFX or QFX file, say).
+					<a href="{rec.document_url}?download=1">Download it</a> to look at it.
+				</p>
 			{/if}
 		</section>
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->

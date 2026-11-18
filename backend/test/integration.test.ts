@@ -535,10 +535,18 @@ test("authentication", async (t) => {
 	expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: "x".repeat(200_000), password: "y" })), 401);
 	expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: "pin", password: "9".repeat(5000) })), 401);
 	assert.ok(Date.now() - before < 250, "no password hash was computed for them");
-	// One address working through many usernames is stopped too.
+	// One address working through many usernames is stopped by the per-address limit, but not when that
+	// address is this machine's own: behind a reverse proxy every client comes from 127.0.0.1, and a
+	// shared limit there would let anyone lock everyone out. (These requests come from 127.0.0.1.)
 	app.ipLogins = new LoginLimiter(3);
-	for (const u of ["a1", "a2", "a3"]) expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: u, password: "wrong wrong" })), 401);
-	expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: "a4", password: "wrong wrong" })), 429);
+	for (const u of ["a1", "a2", "a3", "a4"]) expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: u, password: "wrong wrong" })), 401);
+	const perAddress = new LoginLimiter(3);
+	for (let i = 0; i < 3; i++) {
+		assert.equal(perAddress.begin("203.0.113.9"), true);
+		perAddress.end("203.0.113.9", "failed");
+	}
+	assert.equal(perAddress.begin("203.0.113.9"), false);
+	assert.equal(perAddress.begin("203.0.113.10"), true);
 });
 
 test("hashes from the Go version keep working", async (t) => {
@@ -2175,6 +2183,12 @@ test("one file store: any file type, tags on files, extracted data, and no files
 	assert.equal((await call("POST", "/m/reader/ensure", { name: "moved.txt", text: "an old file", quiet: true })).json().added, true);
 	assert.deepEqual((await call("GET", "/m/taker/added")).json().filter((x: string) => x === "notes" || x === "moved"), ["notes"]);
 	assert.deepEqual((await call("GET", "/m/reader/csvs")).json(), ["March statement"]);
+	// The same bytes arriving several times at once still make one document.
+	const same = await Promise.all(Array.from({ length: 6 }, () => call("POST", "/m/reader/ensure", { name: "burst.txt", text: "all at once" })));
+	assert.deepEqual([new Set(same.map((x) => x.json().id)).size, same.filter((x) => x.json().added).length], [1, 1]);
+	// A CSV that mentions a PDF header is still a CSV; a type given for a name without an extension names the stored file.
+	assert.equal((await call("POST", "/m/reader/keep", { name: "bank.csv", text: "Date,Text\n2026-01-01,%PDF-1.4 invoice\n" })).json().content_type, "text/csv");
+	assert.match((await call("POST", "/m/reader/keep", { name: "export", text: "x,y\n", type: "text/csv" })).json().path, /-export\.csv$/);
 
 	// No files of a module's own: storage can't be written by a module built for 0.27.0, and one with a binary column isn't started.
 	r = await call("POST", "/m/reader/put");
@@ -2253,11 +2267,14 @@ test("one file store: any file type, tags on files, extracted data, and no files
 	assert.ok(!(await call("GET", "/m/taker/added")).json().includes("lines"), "the receiver isn't also told a document was added");
 	expectStatus(await call("POST", `/m/reader/hand/999999`), 422);
 	// A hand-off from before 0.27.0 (bytes in the database) is filed in Documents at startup.
+	// One that can't be filed (an empty file) is left as it is and doesn't hold up the rest.
+	await db.query(`INSERT INTO module_files (sender, recipient, kind, filename, content_type, size_bytes, sha256, data) VALUES ('reader', 'taker', 'statement', 'empty.csv', 'text/csv', 0, 'e', '')`);
 	await db.query(`INSERT INTO module_files (sender, recipient, kind, filename, content_type, size_bytes, sha256, data) VALUES ('reader', 'taker', 'statement', 'old.ofx', 'application/x-ofx', 3, 'x', 'OLD')`);
 	await fileOldHandoffs(app);
+	assert.equal((await db.query(`SELECT document_id FROM module_files WHERE filename = 'empty.csv'`)).rows[0].document_id, null);
 	const old = (await db.query(`SELECT document_id, data FROM module_files WHERE filename = 'old.ofx'`)).rows[0];
 	assert.equal(old.data, null);
-	assert.deepEqual([(await call("GET", `/documents/${old.document_id}`)).json().filename, (await call("GET", "/m/taker/inbox")).json()[0][4]], ["old.ofx", "OLD"]);
+	assert.deepEqual([(await call("GET", `/documents/${old.document_id}`)).json().filename, (await call("GET", "/m/taker/inbox")).json().find((f: any) => f[1] === "old.ofx")[4]], ["old.ofx", "OLD"]);
 
 	// Ledger reads a file once too: Reconcile takes a statement's transactions from what a module read out, without the AI
 	// (none is set up here), and a card statement's purchases (money out, negative) make its balance go up.

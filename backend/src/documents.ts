@@ -19,11 +19,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import type { App } from "./app.ts";
-import { queryRow, queryRows } from "./db.ts";
+import { queryRow, queryRows, withTx } from "./db.ts";
 import { HttpError, NotFoundError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
 import { filesDir } from "./orgs.ts";
-import { contentTypeOf } from "./module-storage.ts";
+import { contentTypeOf, extensionOf } from "./module-storage.ts";
 import { clearExtraction, documentTagsOf, extractionUrl, getExtraction, removeDocumentTag, removeDocumentTags, setDocumentTag, setDocumentTags, setExtraction, STANDARD_FILE_TAGS, type DocumentTag, type DocumentTagChange, type ExtractionInput, type ExtractionSummary } from "./document-tags.ts";
 
 export const DOCUMENT_KINDS = ["receipt", "statement", "invoice", "other"] as const;
@@ -36,7 +36,7 @@ const FOLDERS: Record<DocumentKind, string> = { receipt: "receipts", statement: 
 
 /** Types told from a file's first bytes. A name that claims one of these is never believed on its own. */
 const SNIFFED: { type: string; ext: string; is: (b: Buffer) => boolean }[] = [
-	{ type: "application/pdf", ext: ".pdf", is: (b) => b.subarray(0, 1024).includes("%PDF-") },
+	{ type: "application/pdf", ext: ".pdf", is: (b) => b.subarray(0, 16).toString("latin1").replace(/^(\xef\xbb\xbf)?\s*/, "").startsWith("%PDF-") },
 	{ type: "image/png", ext: ".png", is: (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
 	{ type: "image/jpeg", ext: ".jpg", is: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
 	{ type: "image/gif", ext: ".gif", is: (b) => ["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString("latin1")) },
@@ -55,12 +55,15 @@ export function fileTypeOf(data: Buffer, filename: string, given?: string): { ty
 	const sniffed = SNIFFED.find((t) => t.is(data));
 	if (sniffed) return { type: sniffed.type, ext: sniffed.ext };
 	const ext = path.extname(filename).toLowerCase();
+	// A PDF may have a few bytes before its header; only a file that says it is a PDF is given that latitude
+	// (a CSV that merely mentions "%PDF-" is not one).
+	if ((ext === ".pdf" || /^application\/pdf\b/i.test(given ?? "")) && data.subarray(0, 1024).includes("%PDF-")) return { type: "application/pdf", ext: ".pdf" };
 	const safeExt = /^\.[a-z0-9]{1,8}$/.test(ext) ? ext : "";
 	const byName = contentTypeOf(filename);
 	if (SNIFFED_TYPES.has(byName)) return { type: "application/octet-stream", ext: ".bin" };
 	if (byName !== "application/octet-stream") return { type: byName, ext: safeExt };
 	const g = typeof given === "string" ? given.trim().toLowerCase().split(";")[0]!.trim() : "";
-	if (MEDIA_TYPE.test(g) && !SNIFFED_TYPES.has(g)) return { type: g, ext: safeExt || ".bin" };
+	if (MEDIA_TYPE.test(g) && !SNIFFED_TYPES.has(g)) return { type: g, ext: safeExt || extensionOf(g) || ".bin" };
 	return { type: "application/octet-stream", ext: safeExt || ".bin" };
 }
 
@@ -338,18 +341,22 @@ export async function addDocument(app: App, input: DocumentAdd, by: { source: st
 	err.throwIfAny();
 
 	const sha256 = createHash("sha256").update(data).digest("hex");
-	const dup = await queryRow<{ id: bigint; title: string }>(app.db, `SELECT id, title FROM documents WHERE sha256 = $1 ORDER BY id LIMIT 1`, [sha256]);
-	if (dup) throw new DuplicateDocumentError(dup.id, dup.title);
-
 	const title = f.title ?? (filename.replace(/\.[A-Za-z0-9]{1,8}$/, "").replace(/[_-]+/g, " ").trim().slice(0, 200) || "Document");
 	const root = await documentsDir(app);
 	// The row comes first (its id names the file); a file that can't be written takes the row back out.
-	const row = await queryRow<{ id: bigint; created_at: Date }>(
-		app.db,
-		`INSERT INTO documents (kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, note, created_by, account_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id, created_at`,
-		[f.kind, f.origin ?? "imported", by.source, title, filename, `pending/${randomBytes(12).toString("hex")}`, type!.type, data.length, sha256, f.doc_date ?? null, f.entity_id ?? null, f.note ?? "", by.userId, accountId ?? null],
-	);
+	// Looking for the same file and adding the row happen under one lock per file, so the same
+	// bytes arriving twice at once still end up as one document.
+	const row = await withTx(app.db, {}, async (tx) => {
+		await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`document:${sha256}`]);
+		const dup = await queryRow<{ id: bigint; title: string }>(tx, `SELECT id, title FROM documents WHERE sha256 = $1 ORDER BY id LIMIT 1`, [sha256]);
+		if (dup) throw new DuplicateDocumentError(dup.id, dup.title);
+		return queryRow<{ id: bigint; created_at: Date }>(
+			tx,
+			`INSERT INTO documents (kind, origin, source, title, filename, path, content_type, size_bytes, sha256, doc_date, entity_id, note, created_by, account_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id, created_at`,
+			[f.kind, f.origin ?? "imported", by.source, title, filename, `pending/${randomBytes(12).toString("hex")}`, type!.type, data.length, sha256, f.doc_date ?? null, f.entity_id ?? null, f.note ?? "", by.userId, accountId ?? null],
+		);
+	});
 	const rel = relPath(row!.id, f.kind!, yearOf(f.doc_date ?? null, row!.created_at), filename, type!.ext);
 	const full = path.join(root, rel);
 	try {

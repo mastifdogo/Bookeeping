@@ -172,7 +172,8 @@ const MAX_HTML = 2 * 1024 * 1024;
  * rest of the text with it, as a browser would.
  */
 function cutSpans(s: string, open: RegExp, closeOf: (m: RegExpExecArray) => string): string {
-	const lower = s.toLowerCase();
+	// ASCII letters only: toLowerCase() can change a string's length ("İ"), and the positions must stay true.
+	const lower = s.replace(/[A-Z]+/g, (x) => x.toLowerCase());
 	let out = "";
 	let pos = 0;
 	open.lastIndex = 0;
@@ -214,7 +215,8 @@ function codePoint(n: number, fallback: string): string {
 export function htmlToText(html: string): string {
 	let s = String(html).slice(0, MAX_HTML);
 	s = cutSpans(s, /<!--/g, () => "-->");
-	s = cutSpans(s, /<(script|style|head|title)\b/gi, (m) => `</${m[1]!.toLowerCase()}`);
+	// Not <head>: its end tag is optional, and without one the whole message would go with it.
+	s = cutSpans(s, /<(script|style|title)\b/gi, (m) => `</${m[1]!.toLowerCase()}`);
 	s = s
 		.replace(/<br\s*\/?>/gi, "\n")
 		.replace(/<\/(td|th)\s*>/gi, "\t")

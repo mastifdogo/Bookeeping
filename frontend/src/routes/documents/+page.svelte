@@ -148,6 +148,7 @@
 		act(async () => {
 			if (tag === 'extracted' && !confirm(`Forget the data read from "${d.title}"? A module that needs it will read the file again.`)) return '';
 			unwrap(await api().DELETE('/documents/{documentId}/tags/{tag}', { params: { path: { documentId: d.id, tag } } }));
+			if (tag === 'extracted' && shown === d.id) shown = null;
 			return tag === 'extracted' ? `Forgot the data read from ${d.title}.` : `Took "${tag}" off ${d.title}.`;
 		});
 
@@ -176,7 +177,9 @@
 	const label = (k: string) => k.replace(/_cents$/, '').replaceAll('_', ' ');
 	const value = (k: string, v: unknown) => (k.endsWith('_cents') && typeof v === 'number' ? (v / 100).toLocaleString(undefined, { minimumFractionDigits: 2 }) : short(v));
 	const columns = (rows: unknown[]) => [...new Set(rows.slice(0, 50).flatMap((r) => (r && typeof r === 'object' ? Object.keys(r) : [])))].slice(0, 8);
-	const tables = (data: Record<string, unknown>) => Object.entries(data).filter(([, v]) => Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') as [string, Record<string, unknown>[]][];
+	// A list of records is shown as a table; anything else (numbers, words, a mix) as a count.
+	const isTable = (v: unknown): v is Record<string, unknown>[] => Array.isArray(v) && v.length > 0 && v.every((r) => r !== null && typeof r === 'object' && !Array.isArray(r));
+	const tables = (data: Record<string, unknown>) => Object.entries(data).filter(([, v]) => isTable(v)) as [string, Record<string, unknown>[]][];
 
 	const size = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 	const moduleName = (id: string) => page.data.modules?.find((m: { id: string }) => m.id === id)?.label ?? id;
@@ -391,7 +394,7 @@
 									<tr>
 										<td colspan="8" class="extracted">
 											<dl>
-												{#each Object.entries(extraction.data).filter(([, v]) => !(Array.isArray(v) && v.length > 0 && typeof v[0] === 'object')) as [k, v] (k)}
+												{#each Object.entries(extraction.data).filter(([, v]) => !isTable(v)) as [k, v] (k)}
 													<div><dt>{label(k)}</dt><dd>{value(k, v)}</dd></div>
 												{/each}
 											</dl>

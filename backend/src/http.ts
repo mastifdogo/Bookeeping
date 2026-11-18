@@ -429,6 +429,10 @@ async function handleLogin(c: Ctx): Promise<void> {
 	if (!isUsername(user) || input.password.length > MAX_PASSWORD_INPUT) throw new BadCredentialsError();
 	const ip = clientIP(c.req);
 	const key = ip + "|" + user;
+	// Behind a reverse proxy on this machine (Caddy, nginx, Tailscale Serve) every client arrives
+	// from 127.0.0.1: one address for all of them, so the per-address limit would let anyone lock
+	// everyone out. It applies to clients that connect directly.
+	const shared = /^(::ffff:)?127\.|^::1$/.test(ip);
 	// Each limiter counts this attempt from now, so requests sent at once can't all pass before any has failed.
 	const held: [LoginLimiter, string][] = [];
 	const hold = (l: LoginLimiter, k: string) => {
@@ -440,7 +444,7 @@ async function handleLogin(c: Ctx): Promise<void> {
 		// A wrong password counts everywhere; a right one clears this user's counts but not the address's.
 		for (const [l, k] of held) l.end(k, outcome === "ok" && l === c.app.ipLogins ? "error" : outcome);
 	};
-	if (!hold(c.app.logins, key) || !hold(c.app.userLogins, user) || !hold(c.app.ipLogins, ip) || c.app.loginsRunning >= LOGIN_MAX_CONCURRENT) {
+	if (!hold(c.app.logins, key) || !hold(c.app.userLogins, user) || (!shared && !hold(c.app.ipLogins, ip)) || c.app.loginsRunning >= LOGIN_MAX_CONCURRENT) {
 		release("error");
 		throw new TooManyLoginsError();
 	}

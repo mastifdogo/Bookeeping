@@ -317,7 +317,8 @@ export async function setExtraction(app: App, id: unknown, input: ExtractionInpu
 		const data: Record<string, unknown> = o.data === undefined ? (cur?.data ?? {}) : { ...(o.replace ? {} : (cur?.data ?? {})), ...given };
 		for (const k of Object.keys(data)) if (data[k] === null) delete data[k];
 		const json = JSON.stringify(data);
-		if (json.includes("\\u0000")) throw new HttpError(422, "the data read from a document must not contain NUL characters", "validation_failed");
+		// A NUL inside a value is written \u0000 by JSON.stringify; the same six characters typed as text come out as \\u0000.
+		if (/(?<!\\)(?:\\\\)*\\u0000/.test(json)) throw new HttpError(422, "the data read from a document must not contain NUL characters", "validation_failed");
 		if (Buffer.byteLength(json) > MAX_EXTRACTION_DATA) throw new HttpError(413, `the data read from a document is at most ${MAX_EXTRACTION_DATA / 1024 / 1024} MB as JSON`, "payload_too_large");
 		await tx.query(
 			`INSERT INTO document_extractions (document_id, data, text, module_id, created_by) VALUES ($1, $2::jsonb, $3, $4, $5)

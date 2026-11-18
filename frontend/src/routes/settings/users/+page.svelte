@@ -32,8 +32,6 @@
 	// organization's admin manages that organization's users only.
 	let serverAdmin = $derived(page.data.user?.server_admin === true);
 	let myOrg = $derived(page.data.user?.organization);
-	let existing = $state('');
-	let existingRole = $state<Role>('viewer');
 	let others = $derived(orgs.filter((o) => o.id !== 1));
 	let error: unknown = $state(null);
 	let notice = $state('');
@@ -158,16 +156,6 @@
 			});
 	}
 
-	const addExisting = (e: SubmitEvent) => {
-		e.preventDefault();
-		return act(async () => {
-			if (!myOrg) return;
-			unwrap(await api().PUT('/users/{username}/organizations/{orgId}', { params: { path: { username: existing.trim(), orgId: myOrg.id } }, body: { role: existingRole } }));
-			notice = `${existing.trim()} is ${existingRole} in ${myOrg.name}.`;
-			existing = '';
-			await reload();
-		});
-	};
 
 	function resetPassword(u: UserListItem) {
 		const pw = prompt(`New password for ${u.username} (at least 4 characters). Their sessions will end.`);
@@ -373,17 +361,9 @@
 		</div>
 		<p class="muted small">A new account with access to these books only.</p>
 	</form>
-	<form class="card" style="max-width:720px" onsubmit={addExisting}>
-		<h2 style="margin-top:0">Add someone who already has an account</h2>
-		<div class="row">
-			<label>Their username <input bind:value={existing} required maxlength="64" autocomplete="off" /></label>
-			<label>
-				Role
-				<select bind:value={existingRole}>{#each ROLES as r (r.value)}<option value={r.value}>{r.label}</option>{/each}</select>
-			</label>
-			<button disabled={busy}>Give access</button>
-		</div>
-	</form>
+	<p class="card muted small" style="max-width:720px">
+		Someone who already has an account on this server (in other books) is given access here by an admin of the main books.
+	</p>
 {/if}
 
 <div class="card small" style="max-width:720px">

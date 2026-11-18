@@ -506,7 +506,10 @@ module's tables keep only the document's id. Ledger enforces it for modules
 built for 0.27.0 (`"ledger": ">=0.27.0"`):
 
 - a module whose schema has a binary (`bytea`) column is not started; the
-  Modules page shows which columns to move and drop;
+  Modules page shows which columns. (A module that still holds bytes moves
+  them in a version built for an older Ledger, whose code files each one
+  with `ctx.documents.ensure`; the version built for 0.27.0 drops the column
+  in a migration that refuses to run while any row still has bytes.)
 - `ctx.storage.put` answers 410 (see "Files the module kept" below);
 - the module checker fails on either, and warns about file writes outside
   `os.tmpdir()`.

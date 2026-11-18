@@ -498,7 +498,11 @@ hold only the document's `id`. Since Ledger 0.27.0 this is enforced:
 
 - no file bytes in the module's tables: a module built for 0.27.0
   (`"ledger": ">=0.27.0"`) that has a binary (`bytea`) column in its schema
-  is not started ("Failed to load: keeps files in its own tables …");
+  is not started ("Failed to load: keeps files in its own tables …"). A
+  module that still holds bytes moves them while it is built for an older
+  Ledger (its code files each one with `ctx.documents.ensure`); the version
+  built for 0.27.0 then drops the column in a migration that refuses to run
+  (`RAISE EXCEPTION` in a `DO` block) while any row still has bytes;
 - no folder of its own: `ctx.storage.put` answers 410 (see `ctx.storage`);
 - nothing written to disk except temporary files under `os.tmpdir()`
   (assembling an upload that arrives in pieces, say) that are deleted once

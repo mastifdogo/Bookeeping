@@ -517,7 +517,7 @@ async function refuseOwnFileColumns(app: App, m: LoadedModule): Promise<void> {
 	);
 	if (cols.length === 0) return;
 	const list = cols.slice(0, 6).map((x) => `${x.t}.${x.c}`).join(", ") + (cols.length > 6 ? ", …" : "");
-	throw new Error(`keeps files in its own tables (${list}): since Ledger ${ONE_FILE_STORE_SINCE} every file goes in Documents (ctx.documents) and tables hold only the document's id; a migration must move them and drop the column${cols.length === 1 ? "" : "s"}`);
+	throw new Error(`keeps files in its own tables (${list}): since Ledger ${ONE_FILE_STORE_SINCE} every file goes in Documents (ctx.documents) and tables hold only the document's id. The module's previous version moves the bytes into Documents; this one's migrations then drop the column${cols.length === 1 ? "" : "s"} (refusing while any row still holds bytes)`);
 }
 
 export class ModuleHost {

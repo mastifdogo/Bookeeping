@@ -71,6 +71,13 @@ export function contentTypeOf(p: string): string {
 	return TYPES[path.extname(p).toLowerCase()] ?? "application/octet-stream";
 }
 
+/** The usual extension for a media type (".csv" for "text/csv"), or "" when it isn't one of the known ones. */
+export function extensionOf(type: string): string {
+	const t = type.trim().toLowerCase();
+	const first: Record<string, string> = { "image/jpeg": ".jpg", "text/plain": ".txt", "application/x-ofx": ".ofx", "text/html": ".html", "image/tiff": ".tif" };
+	return first[t] ?? Object.keys(TYPES).find((ext) => TYPES[ext] === t) ?? "";
+}
+
 /** Types a browser may show inline from Ledger's origin (never HTML or SVG, which could run script). */
 export const INLINE_TYPES = new Set(["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "text/plain", "text/csv"]);
 

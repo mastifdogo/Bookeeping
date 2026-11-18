@@ -124,6 +124,9 @@ test("an HTML email becomes text in one pass, whatever it is built to do", async
 	assert.equal(htmlToText("<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>"), "a\tb\nc");
 	assert.equal(htmlToText("a <style>x</style>b<STYLE >y</STYLE >c <head><title>t</title></head>d"), "a bc d");
 	assert.equal(htmlToText("keep <!-- never closed"), "keep");
+	// A head without its (optional) end tag doesn't take the message with it; letters that change length in lower case don't shift the cuts.
+	assert.equal(htmlToText("<html><head><meta><title>Invoice</title><body><p>Invoice total 12.00</p>"), "Invoice total 12.00");
+	assert.equal(htmlToText("<p>İİİİİİİİİİ</p><!-- c --><p>Total: 123.45</p>"), "İİİİİİİİİİ\nTotal: 123.45");
 	assert.equal(htmlToText("a <> b < c"), "a <> b < c");
 	// Mail built to make a pattern search run for hours: openers with no end, by the hundred thousand.
 	for (const evil of ["<!--".repeat(400_000), "<script ".repeat(300_000), "<".repeat(1_500_000), "<style>" + "</styl".repeat(300_000), "&" + "a".repeat(1_500_000)]) {
