@@ -106,7 +106,8 @@ import {
 	undoReconciliation,
 	updateReconciliation,
 } from "./reconcile.ts";
-import { changePassword, createUser, findUser, hashToken, listUsers, login, logout, normalizeUsername, sessionUser, setPassword, setRootMode, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, updateUserAccess, validatePassword, type UserRecord } from "./auth.ts";
+import { changePassword, createUser, findUser, hashToken, isUsername, listUsers, login, logout, MAX_PASSWORD_INPUT, normalizeUsername, sessionUser, setPassword, setRootMode, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, updateUserAccess, validatePassword, type UserRecord } from "./auth.ts";
+import { LOGIN_MAX_CONCURRENT, type LoginLimiter } from "./limiter.ts";
 import {
 	allMemberships,
 	createOrganization,
@@ -424,20 +425,36 @@ async function handleHealth(c: Ctx): Promise<void> {
 async function handleLogin(c: Ctx): Promise<void> {
 	const input = await decodeBody(c, true, decodeLoginRequest);
 	const user = normalizeUsername(input.username);
-	const key = clientIP(c.req) + "|" + user;
-	if (!c.app.logins.allowed(key) || !c.app.userLogins.allowed(user)) throw new TooManyLoginsError();
+	// Not a username, or no password could be that long: refused before the limiter keeps it or a hash is computed.
+	if (!isUsername(user) || input.password.length > MAX_PASSWORD_INPUT) throw new BadCredentialsError();
+	const ip = clientIP(c.req);
+	const key = ip + "|" + user;
+	// Each limiter counts this attempt from now, so requests sent at once can't all pass before any has failed.
+	const held: [LoginLimiter, string][] = [];
+	const hold = (l: LoginLimiter, k: string) => {
+		if (!l.begin(k)) return false;
+		held.push([l, k]);
+		return true;
+	};
+	const release = (outcome: "failed" | "ok" | "error") => {
+		// A wrong password counts everywhere; a right one clears this user's counts but not the address's.
+		for (const [l, k] of held) l.end(k, outcome === "ok" && l === c.app.ipLogins ? "error" : outcome);
+	};
+	if (!hold(c.app.logins, key) || !hold(c.app.userLogins, user) || !hold(c.app.ipLogins, ip) || c.app.loginsRunning >= LOGIN_MAX_CONCURRENT) {
+		release("error");
+		throw new TooManyLoginsError();
+	}
 	let result;
+	c.app.loginsRunning++;
 	try {
 		result = await login(c.app, input.username, input.password);
 	} catch (err) {
-		if (err instanceof BadCredentialsError) {
-			c.app.logins.fail(key);
-			c.app.userLogins.fail(user);
-		}
+		release(err instanceof BadCredentialsError ? "failed" : "error");
 		throw err;
+	} finally {
+		c.app.loginsRunning--;
 	}
-	c.app.logins.reset(key);
-	c.app.userLogins.reset(user);
+	release("ok");
 	setSessionCookie(c, result.token, SESSION_MAX_AGE_SECONDS);
 	writeJSON(c.res, 200, publicUser(result.user));
 }
@@ -697,10 +714,13 @@ async function handlePutMembership(c: Ctx): Promise<void> {
 		}
 		return o as { role: Role };
 	});
-	const user = await findUser(c.app, usernameParam(c));
 	const scope = userScope(c);
+	if (!scope.all && orgIdParam(c) !== scope.orgId) throw forbidden("you can manage access to your own organization only");
+	const user = await findUser(c.app, usernameParam(c));
 	if (!scope.all) {
-		if (orgIdParam(c) !== scope.orgId) throw forbidden("you can manage access to your own organization only");
+		// An organization's admin changes the roles of its own people. Someone from elsewhere on this server is
+		// not theirs to add (or to learn the name of): to them there is no such user. A main-books admin adds people across organizations.
+		if (!(await orgsForUser(c.app, user.id)).some((o) => o.id === scope.orgId)) throw new NotFoundError();
 		if (user.id === c.user!.id) throw forbidden("you can't change your own role; ask another admin");
 	}
 	await setMembership(c.app, user.id, orgIdParam(c), b.role);
@@ -708,10 +728,11 @@ async function handlePutMembership(c: Ctx): Promise<void> {
 }
 
 async function handleDeleteMembership(c: Ctx): Promise<void> {
-	const user = await findUser(c.app, usernameParam(c));
 	const scope = userScope(c);
+	if (!scope.all && orgIdParam(c) !== scope.orgId) throw forbidden("you can manage access to your own organization only");
+	const user = await findUser(c.app, usernameParam(c));
 	if (!scope.all) {
-		if (orgIdParam(c) !== scope.orgId) throw forbidden("you can manage access to your own organization only");
+		if (!(await orgsForUser(c.app, user.id)).some((o) => o.id === scope.orgId)) throw new NotFoundError();
 		if (user.id === c.user!.id) throw forbidden("you can't remove yourself; ask another admin");
 	}
 	await removeMembership(c.app, user.id, orgIdParam(c));
@@ -905,7 +926,8 @@ async function handleRootUpdateLine(c: Ctx): Promise<void> {
 
 async function handleListRootActions(c: Ctx): Promise<void> {
 	if (c.user!.role !== "admin") throw new HttpError(403, "only admins can see the root log", "forbidden");
-	writeJSON(c.res, 200, { data: await listRootActions(c.app) });
+	// What was done to users is the whole server's: only admins of the main books see it.
+	writeJSON(c.res, 200, { data: await listRootActions(c.app, c.user!.server_admin === true) });
 }
 
 async function handleReverseRootAction(c: Ctx): Promise<void> {
@@ -1337,10 +1359,11 @@ async function handleRestoreSettings(c: Ctx): Promise<void> {
 }
 
 async function handleRestore(c: Ctx): Promise<void> {
-	await requireBackups(c);
 	const body = (await readJSON(c, true)) as { source?: unknown; backup?: unknown; confirm?: unknown };
-	const err = new ValidationError();
 	const uploaded = body.source === "upload";
+	if (uploaded) requireDumpAdmin(c);
+	await requireBackups(c);
+	const err = new ValidationError();
 	if (body.source !== "share" && body.source !== "google" && !uploaded) err.add("source", "must be share, google or upload");
 	if (!uploaded && (typeof body.backup !== "string" || !isBackupFolder(body.backup))) err.add("backup", "choose a backup");
 	if (body.confirm !== RESTORE_CONFIRM) err.add("confirm", `type ${RESTORE_CONFIRM} to confirm`);
@@ -1373,7 +1396,19 @@ async function handleRestore(c: Ctx): Promise<void> {
  * so a large file doesn't run into the request time limit or the server's
  * memory): POST …/upload?offset=N with the bytes, then …/upload/finish.
  */
+/**
+ * A dump file brought from outside is restored by the database's superuser, and
+ * a database dump can carry code (functions, constraints) that would then run
+ * with that power over every organization's books. So only an admin of the
+ * main books, who already runs the server, may upload one and restore from it.
+ * Backups Ledger made itself are restored by each organization's own admins.
+ */
+function requireDumpAdmin(c: Ctx): void {
+	if (!c.user!.server_admin) throw new HttpError(403, "only an admin of the main books can restore from an uploaded dump file; restore one of your organization's backups, or ask them", "forbidden");
+}
+
 async function handleRestoreUploadPiece(c: Ctx): Promise<void> {
+	requireDumpAdmin(c);
 	await requireBackups(c);
 	const b = await orgBackups(c);
 	const offset = Number(c.query.get("offset") ?? "");
@@ -1389,6 +1424,7 @@ async function handleRestoreUploadPiece(c: Ctx): Promise<void> {
 }
 
 async function handleRestoreUploadFinish(c: Ctx): Promise<void> {
+	requireDumpAdmin(c);
 	await requireBackups(c);
 	const b = await orgBackups(c);
 	const body = (await readJSON(c, true)) as { filename?: unknown };
@@ -1426,6 +1462,8 @@ async function backupsInfo(c: Ctx) {
 		upload: await readUpload(b.dir),
 		/** Whether this user may point the backups at another mounted folder (server admins only). */
 		can_change_folder: c.user!.server_admin === true,
+		/** Whether this user may restore from an uploaded dump file (server admins only: a dump can carry code). */
+		can_upload_dump: c.user!.server_admin === true,
 	};
 }
 

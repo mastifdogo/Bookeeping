@@ -114,3 +114,21 @@ test("IMAP and SMTP over STARTTLS with a self-made certificate", async (t) => {
 	await smtpSend(smtp, "me@proton.me", "bridge-pass", "me@proton.me", ["Ann <ann@example.com>"], Buffer.from("Subject: hi\r\n\r\nline\r\n.starts with a dot\r\n"));
 	assert.deepEqual(got, ["Subject: hi", "", "line", "..starts with a dot"]);
 });
+
+test("an HTML email becomes text in one pass, whatever it is built to do", async () => {
+	const { htmlToText } = await import("../src/mime.ts");
+	assert.equal(
+		htmlToText("<p>Hello <b>world</b></p><!-- x --><script>alert(1)</script><p>Total&nbsp;&amp; tax &#36;5 &#x41; &#99999999; &bogus;</p>"),
+		"Hello world\nTotal & tax $5 A &#99999999; &bogus;",
+	);
+	assert.equal(htmlToText("<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>"), "a\tb\nc");
+	assert.equal(htmlToText("a <style>x</style>b<STYLE >y</STYLE >c <head><title>t</title></head>d"), "a bc d");
+	assert.equal(htmlToText("keep <!-- never closed"), "keep");
+	assert.equal(htmlToText("a <> b < c"), "a <> b < c");
+	// Mail built to make a pattern search run for hours: openers with no end, by the hundred thousand.
+	for (const evil of ["<!--".repeat(400_000), "<script ".repeat(300_000), "<".repeat(1_500_000), "<style>" + "</styl".repeat(300_000), "&" + "a".repeat(1_500_000)]) {
+		const at = Date.now();
+		htmlToText(evil);
+		assert.ok(Date.now() - at < 3000, `slow on ${evil.slice(0, 12)}…`);
+	}
+});

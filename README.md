@@ -169,7 +169,7 @@ backend/src/orgs.ts       Organizations: per-organization databases and request 
 backend/src/reports.ts    Balance sheet and income statement
 backend/src/dashboard.ts  Dashboard summary, notifications and to-dos
 backend/src/reconcile.ts  Reconciling accounts against statements
-backend/src/statement-reading.ts  The AI reads a statement PDF; its lines are matched to the books
+backend/src/statement-reading.ts  A statement is read (from what was already extracted, else by the AI); its lines are matched to the books
 backend/src/backup.ts     `ledger backup run`: dumps to an SMB share and/or Google Drive
 backend/src/restore.ts    Settings → Backups → Restore (per organization): the app's part and root's (`ledger update run`)
 backend/src/module-settings.ts  Module settings declared in ledger-module.json
@@ -178,7 +178,8 @@ backend/src/module-files.ts  Files modules hand each other (ctx.files)
 backend/src/search.ts     The search bar (accounts, entries, module providers)
 backend/src/llm.ts        Settings → LLM API and ctx.llm (a table of providers, three wire protocols)
 backend/src/gmail.ts      Settings → Mail → Gmail (OAuth with PKCE) and ctx.gmail
-backend/src/documents.ts  Documents: PDFs of receipts, statements and invoices on the data share, and ctx.documents
+backend/src/documents.ts  Documents: the one file store (any file type) on the data share, and ctx.documents
+backend/src/document-tags.ts  Tags on files and the data read out of them, shared with every module
 backend/src/mail.ts       Settings → Mail (IMAP/SMTP, e.g. Proton Mail Bridge) and ctx.mail
 backend/src/mail-client.ts  IMAP and SMTP clients; mime.ts reads messages
 backend/src/update.ts     Update schedule, status files, due-time logic (shared by app and updater)
@@ -474,17 +475,26 @@ again.
 
 ### Documents
 
-**Documents** (sidebar) keeps the PDFs behind the books: receipts,
-statements and invoices you import (several at once, by choosing or dropping
-files), and PDFs made in Ledger, such as an invoice a module draws up. Each
-has a kind, and optionally the date on it, a customer or vendor, the bank or
-card account it belongs to (a statement's account, also set when you
-reconcile against it) and a note.
+**Documents** (sidebar) keeps every file behind the books, of any type:
+receipts, statements and invoices you import (several at once, by choosing
+or dropping files), files made in Ledger, such as an invoice a module draws
+up, and the files modules work with (CSV and OFX statements, saved emails,
+spreadsheets). It is the one file store: modules keep no files of their own.
+Each file has a kind, and optionally the date on it, a customer or vendor,
+the bank or card account it belongs to (a statement's account, also set when
+you reconcile against it) and a note.
 They are filed as ordinary files on the data share, in folders by kind and
-year (`receipts/2026/…`), listed with folders, a search box and an
-"Imported / Made in Ledger" filter, and carried in every backup. The same
-file can't be imported twice. Modules read them and add their own through
-`ctx.documents`, and the page shows what each module did with a document.
+year (`receipts/2026/…`), listed with folders, a search box and filters, and
+carried in every backup. The same file can't be imported twice. PDFs,
+pictures and plain text open in the browser; anything else downloads.
+
+**Tags** on a file (posted, paid, billed, overdue, or any word) are shared by
+Ledger and every module, like the tags on journal entries: set them on the
+Documents page or let modules set them, and filter by them. When a file's
+data has been read out (a module parsed a statement, or you approved what
+the AI found on a bill), that data is kept with the file and the file is
+tagged **extracted**: the page shows what was read, and no module reads the
+file a second time. **Forget this data** makes it be read again.
 
 ### Reconciliation
 
@@ -510,12 +520,14 @@ The next statement starts from there. Only the most recent
 reconciliation of an account can be undone. Posted entries never change;
 reconciliations only mark lines as cleared.
 
-Choose the statement's PDF (one under Documents, or import it there and
-then) and the page opens as a split screen: the statement on one side, the
-transactions on the other, with a divider you drag to resize. **Read
-statement and pre-reconcile** has the AI (the LLM connection for images and
-documents, which must be a provider that reads PDFs) copy out the
-statement's closing date, balances and lines; Ledger starts the
+Choose the statement (a PDF, a picture, or a CSV or OFX file under
+Documents, or import it there and then) and the page opens as a split
+screen: the statement on one side, the transactions on the other, with a
+divider you drag to resize. **Read statement and pre-reconcile** takes the
+statement's closing date, balances and lines from what was already read out
+of the file, or else has the AI copy them out (the LLM connection for images
+and documents, which must be a provider that reads PDFs, or the one for
+text for a CSV or OFX file); Ledger starts the
 reconciliation with that date and balance and ticks the transactions that
 match a statement line (same amount, close in date). Each ticked line shows
 the statement line it was paired with, and statement lines missing from the

@@ -1,6 +1,6 @@
 import type { Pool } from "./db.ts";
 import type { CookieSecure } from "./config.ts";
-import { LOGIN_MAX_FAILURES_PER_USER, LoginLimiter } from "./limiter.ts";
+import { LOGIN_MAX_FAILURES_PER_IP, LOGIN_MAX_FAILURES_PER_USER, LoginLimiter } from "./limiter.ts";
 import { updateDirs, type UpdateDirs } from "./update.ts";
 import { ModuleHost } from "./module-host.ts";
 import { modulesDir } from "./modules.ts";
@@ -23,6 +23,10 @@ export interface App {
 	webDir: string;
 	logins: LoginLimiter;
 	userLogins: LoginLimiter;
+	/** Failed logins per address, whatever the username. */
+	ipLogins: LoginLimiter;
+	/** Password checks running right now. */
+	loginsRunning: number;
 	/** Installed release version ("dev" for a checkout). */
 	version: string;
 	update: UpdateDirs;
@@ -62,6 +66,8 @@ export function newApp(
 		webDir: cfg.webDir,
 		logins: new LoginLimiter(),
 		userLogins: new LoginLimiter(LOGIN_MAX_FAILURES_PER_USER),
+		ipLogins: new LoginLimiter(LOGIN_MAX_FAILURES_PER_IP),
+		loginsRunning: 0,
 		version: cfg.version ?? "dev",
 		update: cfg.update ?? updateDirs(),
 		modules: new ModuleHost(cfg.modulesDir ?? modulesDir()),

@@ -453,6 +453,7 @@ export function documentsFor(app: App, self: string, actorOf: (u: unknown) => nu
 	const who = (user: unknown) => ({ moduleId: self, userId: actorOf(user) });
 	type Add = Omit<DocumentAdd, "data"> & { data: Buffer | Uint8Array | string };
 	const toAdd = (d: Add): DocumentAdd => ({ ...d, origin: d?.origin ?? "created", data: bytes(d?.data) });
+	const quiet = (opts: { announce?: boolean } | undefined) => (opts?.announce === false ? [...app.modules.modules.keys()] : undefined);
 	return {
 		kinds: DOCUMENT_KINDS,
 		/** The largest file the store takes, in bytes. */
@@ -473,9 +474,13 @@ export function documentsFor(app: App, self: string, actorOf: (u: unknown) => nu
 		 * Pass the user of the request when a person asked for it. A file the store already has answers
 		 * 409 (the error carries document_id); ensure() uses that document instead.
 		 */
-		add: (d: Add, user?: unknown) => addDocument(app, toAdd(d), { source: self, userId: actorOf(user) }),
-		/** add(), or the document that already holds the same file: → { document, added }. */
-		ensure: (d: Add, user?: unknown) => ensureDocument(app, toAdd(d), { source: self, userId: actorOf(user) }),
+		add: (d: Add, user?: unknown, opts: { announce?: boolean } = {}) => addDocument(app, toAdd(d), { source: self, userId: actorOf(user), quiet: quiet(opts) }),
+		/**
+		 * add(), or the document that already holds the same file: → { document, added }.
+		 * opts.announce: false files it without telling the other modules (onAdded): for moving
+		 * files that were already handled into the store, not for new arrivals.
+		 */
+		ensure: (d: Add, user?: unknown, opts: { announce?: boolean } = {}) => ensureDocument(app, toAdd(d), { source: self, userId: actorOf(user), quiet: quiet(opts) }),
 		/** Changes kind, title, doc_date, entity_id, account_code or note. */
 		update: (id: number | string, change: object) => updateDocument(app, id, change),
 		/** Deletes a document this module added (others belong to the people who keep them). */

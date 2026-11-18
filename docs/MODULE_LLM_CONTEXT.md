@@ -523,6 +523,7 @@ const doc = await ctx.documents.get(id);     // 404 if none
 const buf = await ctx.documents.read(id);    // Buffer; 404 if the file is missing
 const made = await ctx.documents.add({ kind, filename, data: Buffer, origin?: "created" (default) | "imported", title?, doc_date?, entity_id?, account_code?, note?, content_type? }, req.user);
 const { document, added } = await ctx.documents.ensure({ …same… }, req.user); // files it, or returns the document that already holds the same bytes
+await ctx.documents.ensure({ … }, null, { announce: false }); // (add too) file it without telling other modules' onAdded: only for moving already-handled files into the store
 await ctx.documents.update(id, { kind?, title?, doc_date?, entity_id?, account_code?, note? });
 await ctx.documents.remove(id);              // only documents this module added (else 403)
 await ctx.documents.mark(id, "done" | "skipped", note?);   // this module's own "handled it"; list({ unmarked: true }) then leaves it out
@@ -687,7 +688,7 @@ A module that keeps customers or vendors should accept them, show what it
 would add for the user to approve, then mark the file `done`.
 
 ```js
-ctx.files.targets("statement");            // → [{ id, name, accepts }] running modules that take statements
+ctx.files.targets("statement");            // → [{ id, name, version, accepts }] running modules that take statements (no kind: every module that takes files)
 const f = await ctx.files.send({ to: "autosort", kind: "statement", document_id: 31, meta: { account_code: "1000" }, note: "October" }, req.user); // → summary
 // or with bytes, which are filed in Documents first: { to, kind, filename: "oct.csv", data: buffer, contentType: "text/csv", … }
 await ctx.files.outbox({ status, kind, limit });  // what this module sent → [summary]

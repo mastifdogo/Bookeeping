@@ -4392,7 +4392,7 @@ components:
     BackupInfo:
       type: object
       description: The current organization's backups (each organization has its own settings, schedule and destinations)
-      required: [available, config, status, next_run, share_files, restore, upload, can_change_folder]
+      required: [available, config, status, next_run, share_files, restore, upload, can_change_folder, can_upload_dump]
       properties:
         upload:
           type: object
@@ -4404,6 +4404,7 @@ components:
             size_bytes: { type: integer }
             uploaded_at: { type: string, format: date-time }
         can_change_folder: { type: boolean, description: Whether this user may choose another folder on the server (server admins only) }
+        can_upload_dump: { type: boolean, description: 'Whether this user may restore from an uploaded dump file (server admins only: a dump can carry database code)' }
         available: { type: boolean, description: Backups are set up on this server }
         restore:
           type: object

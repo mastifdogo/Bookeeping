@@ -536,7 +536,8 @@ export const isBackupFolder = (name: string) => name.startsWith("ledger-") && FO
 export const isSettingsFolder = (name: string) => name.startsWith("settings-") && FOLDER_RE.test(name);
 export const SETTINGS_FILE = "settings.json";
 
-const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._ ()-]{0,127}$/;
+// Names Ledger itself gives files and folders in a backup; "_documents" (the file store) starts with an underscore.
+const SAFE_NAME = /^[A-Za-z0-9_][A-Za-z0-9._ ()-]{0,127}$/;
 
 /** Copies a backup folder from the share into dest (regular files only). */
 export async function fetchShareBackup(t: ShareTarget, workDir: string, name: string, dest: string): Promise<void> {
@@ -635,6 +636,14 @@ function foldersOf(items: BackupItem[]): string[] {
 /** Puts a backup folder on the share and removes backups older than keep_days. */
 async function copyToShare(folder: string, items: BackupItem[], t: ShareTarget, now: number, workDir: string): Promise<string> {
 	if (t.mode === "folder") return copyToFolder(folder, items, t, now);
+	// The file names become part of smbclient's commands. Ledger only ever stores names that are
+	// safe there, but a restored backup's files/ could carry others (a quote, a semicolon): those
+	// are left out rather than given the chance to add commands of their own.
+	const unsafe = items.filter((it) => !it.rel.split("/").every((p) => SAFE_NAME.test(p)) || /[";\\]|[\u0000-\u001f]/.test(it.src));
+	if (unsafe.length) {
+		log.warn("backup: files with unusable names were not copied to the share", { count: unsafe.length, first: unsafe[0]!.rel.slice(0, 200) });
+		items = items.filter((it) => !unsafe.includes(it));
+	}
 	const cd = await smbEnterDir(t, workDir);
 	// Upload into a temporary folder, then rename it, so a half-written backup never looks complete.
 	const tmp = `.${folder}.tmp`;

@@ -523,6 +523,22 @@ test("authentication", async (t) => {
 
 	// A 4-digit PIN logs in (another user, so the limits above don't apply).
 	expectStatus(await raw("POST", "/auth/login", '{"username":"pin","password":"1234"}'), 200);
+
+	// Guesses sent all at once don't each slip under the limit: an attempt counts from when it starts.
+	app.ipLogins = new LoginLimiter(1000);
+	const burst = await Promise.all(Array.from({ length: 40 }, (_, i) => raw("POST", "/auth/login", JSON.stringify({ username: "pin", password: String(5000 + i) }))));
+	const checked = burst.filter((r) => r.status === 401).length;
+	assert.ok(checked >= 1 && checked <= LOGIN_MAX_FAILURES, `${checked} of 40 simultaneous guesses were checked`);
+	assert.equal(burst.filter((r) => r.status === 429).length, 40 - checked);
+	// Something that can't be a username is refused without being kept or checked.
+	const before = Date.now();
+	expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: "x".repeat(200_000), password: "y" })), 401);
+	expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: "pin", password: "9".repeat(5000) })), 401);
+	assert.ok(Date.now() - before < 250, "no password hash was computed for them");
+	// One address working through many usernames is stopped too.
+	app.ipLogins = new LoginLimiter(3);
+	for (const u of ["a1", "a2", "a3"]) expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: u, password: "wrong wrong" })), 401);
+	expectStatus(await raw("POST", "/auth/login", JSON.stringify({ username: "a4", password: "wrong wrong" })), 429);
 });
 
 test("hashes from the Go version keep working", async (t) => {
@@ -1336,6 +1352,22 @@ test("backups: settings, a mounted share and Google Drive", async (t) => {
 	assert.deepEqual((await readdir(fetched)).sort(), ["general-ledger.csv", "ledger.dump"]);
 	assert.equal(await readFile(path.join(fetched, "ledger.dump"), "utf8"), "PGDMP fake dump");
 	await rm(fetched, { recursive: true });
+	// The files a backup carries come back too: files/_documents (the file store; its name starts with an underscore)
+	// and a module's folder. A name Ledger would never give a file (here with a quote and a semicolon) is left behind.
+	const latest = driveFolders.find((f) => f.name === "ledger-2026-11-03_05-00-00-0500")!;
+	const mk = (id: string, name: string, parent: string, data?: string) => g.files.push({ id, name, parents: [parent], size: data?.length ?? 0, ...(data === undefined ? { folder: true } : { data: Buffer.from(data) }) } as any);
+	mk("t-files", "files", latest.id);
+	mk("t-docs", "_documents", "t-files");
+	mk("t-rec", "receipts", "t-docs");
+	mk("t-pdf", "12-hydro.pdf", "t-rec", "%PDF-1.4 hydro");
+	mk("t-mod", "sales", "t-files");
+	mk("t-csv", "export (1).csv", "t-mod", "a,b");
+	mk("t-bad", 'x"; lcd /etc; get passwd', "t-mod", "nope");
+	await fetchDriveBackup((await readConfig(app.backup.dir)).google, app.backup.google, latest.name, fetched);
+	assert.equal(await readFile(path.join(fetched, "files", "_documents", "receipts", "12-hydro.pdf"), "utf8"), "%PDF-1.4 hydro");
+	assert.deepEqual(await readdir(path.join(fetched, "files", "sales")), ["export (1).csv"]);
+	await rm(fetched, { recursive: true });
+	g.files = g.files.filter((f) => !f.id.startsWith("t-"));
 
 	// Drive access revoked: the share still works, so a warning, posted to the dashboard.
 	g.revokedGrant = true;
@@ -2075,7 +2107,7 @@ test("one file store: any file type, tags on files, extracted data, and no files
 				ctx.documents.tags.onChange((c) => changes.push([c.document_id, c.action, c.tag, c.module_id]));
 				ctx.route("GET", "/changes", () => changes);
 				ctx.route("POST", "/keep", (req) => ctx.documents.add({ kind: "statement", filename: req.body.name, data: Buffer.from(req.body.text), origin: "imported", content_type: req.body.type }, req.user));
-				ctx.route("POST", "/ensure", async (req) => { const r = await ctx.documents.ensure({ kind: "other", filename: req.body.name, data: Buffer.from(req.body.text) }, req.user); return { id: r.document.id, added: r.added }; });
+				ctx.route("POST", "/ensure", async (req) => { const r = await ctx.documents.ensure({ kind: "other", filename: req.body.name, data: Buffer.from(req.body.text) }, req.user, { announce: !req.body.quiet }); return { id: r.document.id, added: r.added }; });
 				ctx.route("POST", "/dup", async (req) => { try { await ctx.documents.add({ kind: "other", filename: "again.csv", data: Buffer.from(req.body.text) }); return {}; } catch (e) { return { status: e.status, document_id: e.document_id }; } });
 				ctx.route("POST", "/put", (req) => ctx.storage.put("a/b.csv", Buffer.from("x")));
 				ctx.route("GET", "/old", () => ctx.storage.list(""));
@@ -2139,6 +2171,9 @@ test("one file store: any file type, tags on files, extracted data, and no files
 	assert.deepEqual((await call("POST", "/m/reader/dup", { text: "OFXHEADER:100" })).json(), { status: 409, document_id: qfx.id });
 	assert.deepEqual((await call("POST", "/m/reader/ensure", { name: "x.qfx", text: "OFXHEADER:100" })).json(), { id: qfx.id, added: false });
 	assert.equal((await call("POST", "/m/reader/ensure", { name: "notes.txt", text: "hello" })).json().added, true);
+	// A module moving files it already handled into the store files them quietly: the others aren't told.
+	assert.equal((await call("POST", "/m/reader/ensure", { name: "moved.txt", text: "an old file", quiet: true })).json().added, true);
+	assert.deepEqual((await call("GET", "/m/taker/added")).json().filter((x: string) => x === "notes" || x === "moved"), ["notes"]);
 	assert.deepEqual((await call("GET", "/m/reader/csvs")).json(), ["March statement"]);
 
 	// No files of a module's own: storage can't be written by a module built for 0.26.0, and one with a binary column isn't started.
@@ -2660,7 +2695,7 @@ test("modules hand files to each other", async (t) => {
 	});
 
 	let r = await call("GET", "/m/downloads/targets?kind=statement");
-	assert.deepEqual(r.json(), [{ id: "autosort", name: "AUTOSORT", accepts: ["statement", "bill"] }]);
+	assert.deepEqual(r.json(), [{ id: "autosort", name: "AUTOSORT", version: "1.0.0", accepts: ["statement", "bill"] }]);
 	assert.deepEqual((await call("GET", "/m/downloads/targets?kind=receipt")).json(), []);
 	expectStatus(await call("GET", "/m/downloads/targets?kind=photo"), 422);
 
@@ -2770,6 +2805,14 @@ test("organizations keep books apart", async (t) => {
 	expectStatus(await sam("PATCH", "/users/lee", { is_active: false }), 200);
 	// People outside the organization don't exist for its admin; shared users keep their password.
 	expectStatus(await sam("PATCH", "/users/tester", { password: "taken-over-123" }), 404);
+	// Nor can it pull someone from elsewhere into its books, or learn that the name exists: a main-books admin adds them.
+	expectStatus(await sam("PUT", `/users/tester/organizations/${samOrg.id}`, { role: "viewer" }), 404);
+	expectStatus(await sam("PUT", `/users/nobody-at-all/organizations/${samOrg.id}`, { role: "viewer" }), 404);
+	expectStatus(await sam("DELETE", `/users/tester/organizations/${samOrg.id}`), 404);
+	// What root mode did to the server's users is not its to see, and a dump file from outside is not its to restore.
+	assert.ok((await sam("GET", "/root-actions")).json().data.every((x: any) => x.scope === "books"));
+	expectStatus(await sam("POST", "/backups/restore/upload/finish", { filename: "x.dump" }), 403);
+	expectStatus(await sam("POST", "/backups/restore", { source: "upload", confirm: "RESTORE" }), 403);
 	expectStatus(await call("PUT", `/users/tester/organizations/${samOrg.id}`, { role: "viewer" }), 200);
 	expectStatus(await sam("PATCH", "/users/tester", { password: "taken-over-123" }), 403);
 	expectStatus(await sam("PATCH", "/users/tester", { is_active: false }), 403);

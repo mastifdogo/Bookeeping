@@ -535,6 +535,8 @@ const made = await ctx.documents.add(
 );
 // The same bytes twice answer 409 (err.document_id names the document); ensure() uses it instead:
 const { document, added } = await ctx.documents.ensure({ kind: "statement", filename: "march.csv", data: csvBuffer, origin: "imported" }, req.user);
+// Moving files the module already handled into the store (from its old storage): don't announce them to other modules
+await ctx.documents.ensure({ kind: "other", filename, data, origin: "imported" }, null, { announce: false });
 await ctx.documents.update(made.id, { note: "sent 3 April" });  // kind, title, doc_date, entity_id, account_code, note
 await ctx.documents.remove(made.id);            // only documents this module added
 
@@ -735,7 +737,7 @@ The receiver declares what it takes in its manifest:
 Sending:
 
 ```js
-const targets = ctx.files.targets("statement"); // running modules that take statements: [{ id, name, accepts }]
+const targets = ctx.files.targets("statement"); // running modules that take statements: [{ id, name, version, accepts }]
 const sent = await ctx.files.send(
 	{ to: "autosort", kind: "statement", document_id: doc.id, meta: { account_code: "1000" }, note: "October" },
 	req.user, // records who sent it

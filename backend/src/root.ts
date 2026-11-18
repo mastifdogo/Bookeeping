@@ -354,10 +354,10 @@ async function getAction(db: Queryable, scope: RootAction["scope"], id: bigint):
 	return { ...r, id: Number(r.id), scope };
 }
 
-/** Root actions on this organization's books, and on users. */
-export async function listRootActions(app: App): Promise<RootAction[]> {
+/** Root actions on this organization's books and, for an admin of the main books, on the server's users. */
+export async function listRootActions(app: App, withUsers = true): Promise<RootAction[]> {
 	const books = await queryRows<ActionRow>(app.db, ACTION_SELECT + ` WHERE action NOT LIKE 'user.%' ORDER BY id DESC LIMIT 500`);
-	const users = await queryRows<ActionRow>(app.main, ACTION_SELECT + ` WHERE action LIKE 'user.%' AND NOT undo ? 'part_of' ORDER BY id DESC LIMIT 500`);
+	const users = withUsers ? await queryRows<ActionRow>(app.main, ACTION_SELECT + ` WHERE action LIKE 'user.%' AND NOT undo ? 'part_of' ORDER BY id DESC LIMIT 500`) : [];
 	return [...books.map((r) => ({ ...r, id: Number(r.id), scope: "books" as const })), ...users.map((r) => ({ ...r, id: Number(r.id), scope: "users" as const }))].sort(
 		(a, b) => new Date(b.done_at).getTime() - new Date(a.done_at).getTime(),
 	);

@@ -173,12 +173,13 @@ export async function readSmallFile(file: string): Promise<string | null> {
  * symlink at the target). With gid, the file gets that group (the root
  * updater uses it so the app's group can read its status).
  */
-export async function writeFileAtomic(file: string, content: string, mode: number, gid?: number): Promise<void> {
+export async function writeFileAtomic(file: string, content: string, mode: number, gid?: number, uid?: number): Promise<void> {
 	const tmp = path.join(path.dirname(file), `.${path.basename(file)}-${randomInt(2 ** 32)}.tmp`);
 	const fh = await fsp.open(tmp, "wx", mode);
 	try {
 		await fh.writeFile(content);
-		if (gid !== undefined) await fh.chown(-1, gid);
+		// Ownership is set on the open file, before it gets its name: never by path, which could be swapped for a link.
+		if (gid !== undefined || uid !== undefined) await fh.chown(uid ?? -1, gid ?? -1);
 		await fh.chmod(mode);
 		await fh.sync();
 	} finally {

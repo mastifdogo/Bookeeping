@@ -86,7 +86,7 @@ const toId = (id: unknown): bigint => {
 export function fileTargets(app: App, kind?: FileKind) {
 	return [...app.modules.modules.values()]
 		.filter((m) => !m.error && (m.manifest.files?.accepts.length ?? 0) > 0 && (!kind || m.manifest.files!.accepts.includes(kind)))
-		.map((m) => ({ id: m.manifest.id, name: m.manifest.name, accepts: [...m.manifest.files!.accepts] }));
+		.map((m) => ({ id: m.manifest.id, name: m.manifest.name, version: m.manifest.version, accepts: [...m.manifest.files!.accepts] }));
 }
 
 /** What module `self` can do with files. */

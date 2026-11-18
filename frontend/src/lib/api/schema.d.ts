@@ -3240,6 +3240,8 @@ export interface components {
             } | null;
             /** @description Whether this user may choose another folder on the server (server admins only) */
             can_change_folder: boolean;
+            /** @description Whether this user may restore from an uploaded dump file (server admins only: a dump can carry database code) */
+            can_upload_dump: boolean;
             /** @description Backups are set up on this server */
             available: boolean;
             /** @description The restore in progress, or the last one */

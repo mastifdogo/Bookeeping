@@ -563,6 +563,7 @@
 					</p>
 				{/if}
 			{/if}
+			{#if info.can_upload_dump}
 			<div class="row">
 				<label>
 					Or upload a dump file
@@ -573,6 +574,9 @@
 				{/if}
 				{#if info.upload && !uploadFiles?.length}<button type="button" class="link small" onclick={discardUpload} disabled={busy}>Discard the uploaded file</button>{/if}
 			</div>
+			{:else}
+				<p class="muted small">Restoring from a dump file brought from elsewhere is for admins of the main books: such a file is trusted like the server itself.</p>
+			{/if}
 			<p class="muted small">
 				The <code>ledger.dump</code> from one of this organization's backup folders (for example downloaded from Google Drive or copied
 				off the share). Ledger checks it, then you choose it above and confirm.

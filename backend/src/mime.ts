@@ -162,22 +162,71 @@ function splitMultipart(body: Buffer, boundary: string): Buffer[] {
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'" };
 
+/** How much of an HTML email is turned into text; mail is untrusted and the rest of a huge one adds nothing. */
+const MAX_HTML = 2 * 1024 * 1024;
+
+/**
+ * Removes everything from each `open` match to the end of its closing marker,
+ * in one pass (a regular expression with a lazy middle is quadratic on mail
+ * built to have openers and no end). An opener that is never closed takes the
+ * rest of the text with it, as a browser would.
+ */
+function cutSpans(s: string, open: RegExp, closeOf: (m: RegExpExecArray) => string): string {
+	const lower = s.toLowerCase();
+	let out = "";
+	let pos = 0;
+	open.lastIndex = 0;
+	for (let m = open.exec(s); m; m = open.exec(s)) {
+		out += s.slice(pos, m.index);
+		const close = closeOf(m);
+		const end = lower.indexOf(close, m.index + m[0].length);
+		if (end < 0) return out;
+		// The closing marker of an element ends at its ">".
+		const after = close.endsWith(">") ? end + close.length : lower.indexOf(">", end);
+		if (after < 0) return out;
+		pos = close.endsWith(">") ? after : after + 1;
+		open.lastIndex = pos;
+	}
+	return out + s.slice(pos);
+}
+
+/** Drops tags ("<...>"), in one pass; a "<" that is never closed stays as text. */
+function stripTags(s: string): string {
+	let out = "";
+	let pos = 0;
+	for (;;) {
+		const lt = s.indexOf("<", pos);
+		if (lt < 0) break;
+		const gt = s.indexOf(">", lt + 1);
+		if (gt < 0) break;
+		// "<>" is not a tag.
+		out += s.slice(pos, gt === lt + 1 ? gt + 1 : lt);
+		pos = gt + 1;
+	}
+	return out + s.slice(pos);
+}
+
+function codePoint(n: number, fallback: string): string {
+	return Number.isInteger(n) && n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : fallback;
+}
+
 /** Readable text from an HTML email: block elements become line breaks, tables become tab-separated rows. */
 export function htmlToText(html: string): string {
-	return String(html)
-		.replace(/<!--[\s\S]*?-->/g, "")
-		.replace(/<(script|style|head|title)\b[\s\S]*?<\/\1\s*>/gi, "")
+	let s = String(html).slice(0, MAX_HTML);
+	s = cutSpans(s, /<!--/g, () => "-->");
+	s = cutSpans(s, /<(script|style|head|title)\b/gi, (m) => `</${m[1]!.toLowerCase()}`);
+	s = s
 		.replace(/<br\s*\/?>/gi, "\n")
 		.replace(/<\/(td|th)\s*>/gi, "\t")
-		.replace(/<\/(p|div|tr|li|h[1-6]|section|article|header|footer)\s*>/gi, "\n")
-		.replace(/<[^>]+>/g, "")
-		.replace(/&(#x?[0-9a-f]+|[a-z]+[0-9]*);/gi, (m: string, e: string) => {
+		.replace(/<\/(p|div|tr|li|h[1-6]|section|article|header|footer)\s*>/gi, "\n");
+	return stripTags(s)
+		.replace(/&(#x?[0-9a-f]{1,8}|[a-z]{1,10}[0-9]{0,2});/gi, (m: string, e: string) => {
 			const k = e.toLowerCase();
-			if (k.startsWith("#x")) return String.fromCodePoint(parseInt(k.slice(2), 16));
-			if (k.startsWith("#") && k !== "#39") return String.fromCodePoint(Number(k.slice(1)));
+			if (k.startsWith("#x")) return codePoint(parseInt(k.slice(2), 16), m);
+			if (k.startsWith("#") && k !== "#39") return codePoint(Number(k.slice(1)), m);
 			return ENTITIES[k] ?? m;
 		})
-		.replace(/[ \t ]+/g, (s) => (s.includes("\t") ? "\t" : " "))
+		.replace(/[ \t\u00a0]+/g, (x) => (x.includes("\t") ? "\t" : " "))
 		.replace(/[ \t]*\n[ \t]*/g, "\n")
 		.replace(/\n{3,}/g, "\n\n")
 		.trim();

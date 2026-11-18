@@ -65,11 +65,10 @@ export async function readRestoreStatus(dir: string): Promise<RestoreStatus> {
 /** Writes the status; when root writes it, the file is handed to the directory's owner so the app can read it. */
 export async function writeRestoreStatus(dir: string, s: RestoreStatus): Promise<void> {
 	const file = path.join(dir, RESTORE_STATUS_FILE);
-	await writeFileAtomic(file, JSON.stringify(s, null, 2) + "\n", 0o600);
-	if (process.getuid?.() === 0) {
-		const st = await fsp.stat(dir);
-		await fsp.chown(file, st.uid, st.gid).catch(() => {});
-	}
+	// The directory belongs to the app's user, who could swap the finished file for a link:
+	// root gives the file its owner while it is still open and unnamed, never afterwards by path.
+	const st = process.getuid?.() === 0 ? await fsp.stat(dir) : null;
+	await writeFileAtomic(file, JSON.stringify(s, null, 2) + "\n", 0o600, st?.gid, st?.uid);
 }
 
 /** The name a restore from an uploaded dump file goes by (in place of a backup folder's). */

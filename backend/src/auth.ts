@@ -29,6 +29,11 @@ export function normalizeUsername(s: string): string {
 	return trimSpace(s).toLowerCase();
 }
 
+/** Whether text could be a username at all (already normalized). Anything else is refused before any work is done for it. */
+export const isUsername = (s: string): boolean => USERNAME_RE.test(s);
+/** No password is longer than this; a longer one is refused without being checked. */
+export const MAX_PASSWORD_INPUT = 1024;
+
 export function validatePassword(v: ValidationError, field: string, pw: string): void {
 	if (charCount(pw) < MIN_PASSWORD_LEN) v.add(field, `must be at least ${MIN_PASSWORD_LEN} characters`);
 	else if (Buffer.byteLength(pw) > MAX_PASSWORD_BYTES) v.add(field, `must be at most ${MAX_PASSWORD_BYTES} bytes`);
