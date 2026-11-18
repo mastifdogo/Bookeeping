@@ -10,6 +10,7 @@
 //
 // Pass --password-stdin to add/passwd to read the password from stdin.
 
+import { fileOldHandoffs } from "./module-files.ts";
 import { sweepRootSessions } from "./root.ts";
 import { runBackupCommand } from "./backup.ts";
 import { createServer } from "node:http";
@@ -45,6 +46,8 @@ async function serve(): Promise<void> {
 
 	const app = newApp(db, { ...cfg, version: installedVersion(programDir) });
 	await app.modules.loadAll(app);
+	// Files handed between modules before 0.26.0 move into Documents; not awaited, the server starts meanwhile.
+	void fileOldHandoffs(app);
 	try {
 		const r = await db.query<{ n: bigint }>(`SELECT count(*) AS n FROM users WHERE is_active`);
 		if (r.rows[0]!.n === 0n) log.warn("no active users: create one with `ledger user add <name>` to log in");

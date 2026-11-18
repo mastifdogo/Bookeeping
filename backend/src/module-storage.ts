@@ -1,6 +1,12 @@
-// Files modules keep (ctx.storage): PDFs, scans, attachments. They live on the
-// data share next to the CSV files, per organization and module, not in the
-// database, and every backup folder carries them under files/<module>/.
+// Files modules kept in folders of their own (ctx.storage), before Ledger
+// 0.26.0. Every file now goes in the one file store, Documents
+// (ctx.documents, documents.ts): a module built for 0.26.0 or newer can no
+// longer save here (put answers 410); it can still read, list and remove what
+// it stored before, to move it into Documents. Modules built for an older
+// Ledger keep working until they are updated.
+//
+// The files live on the data share next to the CSV files, per organization
+// and module, and every backup folder carries them under files/<module>/.
 //
 //   <CSV_DIR>/.modules/<module>/<path>                 the main books
 //   <CSV_DIR>/.orgs/<database>/.modules/<module>/<path>  another organization
@@ -42,6 +48,23 @@ const TYPES: Record<string, string> = {
 	".qfx": "application/x-ofx",
 	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	".xls": "application/vnd.ms-excel",
+	".doc": "application/msword",
+	".ods": "application/vnd.oasis.opendocument.spreadsheet",
+	".odt": "application/vnd.oasis.opendocument.text",
+	".tsv": "text/tab-separated-values",
+	".md": "text/markdown",
+	".log": "text/plain",
+	".html": "text/html",
+	".htm": "text/html",
+	".svg": "image/svg+xml",
+	".qif": "application/x-qif",
+	".qbo": "application/x-ofx",
+	".iif": "text/plain",
+	".msg": "application/vnd.ms-outlook",
+	".ics": "text/calendar",
+	".gz": "application/gzip",
+	".7z": "application/x-7z-compressed",
 };
 
 export function contentTypeOf(p: string): string {
@@ -89,8 +112,15 @@ export async function listTree(dir: string): Promise<{ rel: string; full: string
 	return walk(dir);
 }
 
-/** What module `id` can do with its files, in the organization the code runs in. */
-export function storageFor(app: App, id: string) {
+/** The Ledger version from which modules keep every file in Documents and nothing in storage of their own. */
+export const ONE_FILE_STORE_SINCE = "0.26.0";
+
+/**
+ * What module `id` can do with the files it stored, in the organization the
+ * code runs in. `writable` is false for modules built for Ledger 0.26.0 or
+ * newer: they file everything in Documents.
+ */
+export function storageFor(app: App, id: string, writable = true) {
 	const root = async () => moduleStorageDir(await filesDir(app), id);
 	const resolve = async (p: unknown) => {
 		const parts = checkStoragePath(p);
@@ -104,6 +134,9 @@ export function storageFor(app: App, id: string) {
 	return {
 		/** Saves a file (a Buffer, Uint8Array or base64 text; at most 100 MB), replacing one at the same path. */
 		async put(p: string, data: Buffer | Uint8Array | string): Promise<StoredFile> {
+			if (!writable) {
+				throw new HttpError(410, `storage.put: modules keep no files of their own since Ledger ${ONE_FILE_STORE_SINCE}; file it in Documents with ctx.documents.add (any file type) and keep its id`, "gone");
+			}
 			const { rel, full } = await resolve(p);
 			const bytes = Buffer.isBuffer(data) ? data : data instanceof Uint8Array ? Buffer.from(data) : typeof data === "string" ? Buffer.from(data, "base64") : null;
 			if (!bytes) throw new HttpError(422, "storage.put: data must be a Buffer, Uint8Array or base64 text", "validation_failed");

@@ -10,6 +10,7 @@ import { readCsv } from "../src/csv.ts";
 import { createUser, login, setUserActive, SESSION_COOKIE } from "../src/auth.ts";
 import { LOGIN_MAX_FAILURES, LOGIN_MAX_FAILURES_PER_USER, LoginLimiter } from "../src/limiter.ts";
 import { ModuleHost } from "../src/module-host.ts";
+import { fileOldHandoffs } from "../src/module-files.ts";
 import { fakeGitHub } from "./fake-github.ts";
 import { today } from "../src/date.ts";
 import { postItem } from "../src/dashboard.ts";
@@ -1974,7 +1975,6 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 	const root = path.join(app.csvDir, ".modules", "_documents");
 	assert.equal((await readFile(path.join(root, hydro.path))).toString(), pdf("hydro").toString());
 	expectStatus(await upload("again.pdf", pdf("hydro"), { kind: "receipt" }), 409); // the same file twice
-	expectStatus(await upload("page.html", Buffer.from("<html><script>alert(1)</script>"), { kind: "receipt" }), 422); // not a PDF or picture
 	expectStatus(await upload("x.pdf", pdf("x"), { kind: "memo" }), 422);
 	expectStatus(await upload("x.pdf", pdf("x"), { kind: "receipt", doc_date: "14 March" }), 422);
 	expectStatus(await upload("x.pdf", pdf("x"), { kind: "receipt", entity_id: "99999" }), 422);
@@ -1989,7 +1989,7 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 	expectStatus(file, 200);
 	assert.equal(file.headers["content-type"], "application/pdf");
 	assert.match(String(file.headers["content-disposition"]), /^inline; filename\*=UTF-8''Hydro%20March\.pdf$/);
-	assert.equal(file.headers["content-security-policy"], "frame-ancestors 'self'"); // a PDF viewer doesn't run sandboxed; only PDFs and pictures get in
+	assert.equal(file.headers["content-security-policy"], "frame-ancestors 'self'"); // a PDF viewer doesn't run sandboxed; a PDF is only ever one by its bytes
 	assert.equal(file.headers["x-content-type-options"], "nosniff");
 	assert.equal(file.text, pdf("hydro").toString());
 	expectStatus(await request("GET", hydro.url), 401);
@@ -2046,6 +2046,183 @@ test("Documents: PDFs of receipts, statements and invoices, shared with modules"
 	// A file that went missing (a restore from an uploaded dump) says so.
 	await rm(path.join(root, `invoices/2026/${inv.id}-inv-0031.pdf`));
 	expectStatus(await request("GET", inv.url, { cookie }), 404);
+});
+
+test("one file store: any file type, tags on files, extracted data, and no files of a module's own", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call, request } = ta;
+	const cookie = `${SESSION_COOKIE}=${ta.token}`;
+	const db = app.db;
+	const upload = (filename: string, data: Buffer, fields: Record<string, string>) => {
+		const boundary = "----docs" + Math.random().toString(16).slice(2);
+		const body = Buffer.concat([
+			...Object.entries(fields).map(([k, v]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)),
+			Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+			data,
+			Buffer.from(`\r\n--${boundary}--\r\n`),
+		]);
+		return request("POST", "/api/v1/documents", { rawBody: body, cookie, headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` } });
+	};
+	// A table with a binary column, as a module from before 0.26.0 might have.
+	await db.query(`CREATE SCHEMA mod_hoarder; CREATE TABLE mod_hoarder.blobs (id int, content bytea)`);
+	await loadModules(t, app, {
+		// Built for the Ledger that has one file store.
+		reader: {
+			manifest: { ledger: ">=0.26.0" },
+			code: `export default function (ctx) {
+				const changes = [];
+				ctx.documents.tags.onChange((c) => changes.push([c.document_id, c.action, c.tag, c.module_id]));
+				ctx.route("GET", "/changes", () => changes);
+				ctx.route("POST", "/keep", (req) => ctx.documents.add({ kind: "statement", filename: req.body.name, data: Buffer.from(req.body.text), origin: "imported", content_type: req.body.type }, req.user));
+				ctx.route("POST", "/ensure", async (req) => { const r = await ctx.documents.ensure({ kind: "other", filename: req.body.name, data: Buffer.from(req.body.text) }, req.user); return { id: r.document.id, added: r.added }; });
+				ctx.route("POST", "/dup", async (req) => { try { await ctx.documents.add({ kind: "other", filename: "again.csv", data: Buffer.from(req.body.text) }); return {}; } catch (e) { return { status: e.status, document_id: e.document_id }; } });
+				ctx.route("POST", "/put", (req) => ctx.storage.put("a/b.csv", Buffer.from("x")));
+				ctx.route("GET", "/old", () => ctx.storage.list(""));
+				ctx.route("POST", "/tag/:id", (req) => ctx.documents.tags.set(req.params.id, req.body.tag, { note: req.body.note }, req.user));
+				ctx.route("DELETE", "/tag/:id/:tag", (req) => ctx.documents.tags.remove(req.params.id, req.params.tag));
+				ctx.route("POST", "/tags", (req) => ctx.documents.tags.setMany(req.body.ids, req.body.tag));
+				ctx.route("GET", "/tagged/:tag", async (req) => (await ctx.documents.list({ tag: req.params.tag })).data.map((d) => d.title));
+				ctx.route("GET", "/unread", async () => (await ctx.documents.list({ extracted: false })).data.map((d) => d.title));
+				ctx.route("GET", "/csvs", async () => (await ctx.documents.list({ content_type: "text/csv" })).data.map((d) => d.title));
+				ctx.route("POST", "/extract/:id", (req) => ctx.documents.setExtracted(req.params.id, req.body, req.user));
+				ctx.route("GET", "/extracted/:id", (req) => ctx.documents.extracted(req.params.id));
+				ctx.route("DELETE", "/extracted/:id", (req) => ctx.documents.clearExtracted(req.params.id));
+				ctx.route("POST", "/hand/:id", (req) => ctx.files.send({ to: "taker", kind: "statement", document_id: req.params.id, meta: { account_code: "1000" } }, req.user));
+				ctx.route("POST", "/hand-bytes", (req) => ctx.files.send({ to: "taker", kind: "transaction", filename: "lines.csv", contentType: "text/csv", data: Buffer.from(req.body.text) }, req.user));
+			}`,
+		},
+		taker: {
+			manifest: { ledger: ">=0.26.0", files: { accepts: ["statement", "transaction"] } },
+			code: `export default function (ctx) {
+				const added = [];
+				ctx.documents.onAdded((d) => added.push(d.title));
+				ctx.route("GET", "/added", () => added);
+				ctx.route("GET", "/inbox", async () => { const out = []; for (const f of await ctx.files.inbox()) out.push([f.kind, f.filename, f.content_type, f.document_id, (await ctx.files.get(f.id)).data.toString()]); return out; });
+				ctx.route("GET", "/sees/:id", (req) => ctx.documents.extracted(req.params.id));
+			}`,
+		},
+		// Built for 0.26.0 but still keeping files in a table: not started.
+		hoarder: { manifest: { ledger: ">=0.26.0" }, code: `export default function (ctx) { ctx.route("GET", "/x", () => 1); }` },
+		// Built for an older Ledger: its own storage still works, and the Modules page says so.
+		oldie: { manifest: { ledger: ">=0.19.0" }, code: `export default function (ctx) { ctx.route("POST", "/put", () => ctx.storage.put("a/b.csv", Buffer.from("x"))); }` },
+	});
+
+	// Any file is taken; what it is comes from its bytes, then its name, never from a name that claims to be a PDF or picture.
+	let r = await upload("March statement.CSV", Buffer.from("Date,Description,Amount\n2026-03-01,Coffee,-4.50\n"), { kind: "statement" });
+	expectStatus(r, 201);
+	const csv = r.json();
+	assert.deepEqual([csv.content_type, csv.path, csv.tags, csv.extracted], ["text/csv", `statements/${new Date().getFullYear()}/${csv.id}-march-statement.csv`, [], null]);
+	const html = (await upload("page.html", Buffer.from("<html><script>alert(1)</script>"), { kind: "other" })).json();
+	assert.equal(html.content_type, "text/html");
+	const fake = (await upload("not-really.pdf", Buffer.from("MZ\x90 a program"), { kind: "other" })).json();
+	assert.deepEqual([fake.content_type, fake.path.endsWith(".bin")], ["application/octet-stream", true]);
+	const gif = (await upload("anim.dat", Buffer.from("GIF89a\x01\x00\x01\x00"), { kind: "other" })).json();
+	assert.deepEqual([gif.content_type, gif.path.endsWith(".gif")], ["image/gif", true]);
+	expectStatus(await upload("empty.csv", Buffer.alloc(0), { kind: "other" }), 422);
+
+	// Text and pictures open in the browser, sandboxed; anything that could run downloads instead.
+	let f = await request("GET", csv.url, { cookie });
+	assert.deepEqual([f.headers["content-type"], String(f.headers["content-disposition"]).split(";")[0], f.headers["content-security-policy"], f.headers["x-content-type-options"]], ["text/csv; charset=utf-8", "inline", "sandbox; frame-ancestors 'self'", "nosniff"]);
+	f = await request("GET", html.url, { cookie });
+	assert.deepEqual([f.headers["content-type"], String(f.headers["content-disposition"]).split(";")[0], f.headers["content-security-policy"]], ["text/html; charset=utf-8", "attachment", "sandbox; frame-ancestors 'self'"]);
+	f = await request("GET", fake.url, { cookie });
+	assert.deepEqual([f.headers["content-type"], String(f.headers["content-disposition"]).split(";")[0]], ["application/octet-stream", "attachment"]);
+	assert.match(String((await request("GET", csv.url + "?download=1", { cookie })).headers["content-disposition"]), /^attachment; filename\*=UTF-8''March%20statement\.csv$/);
+
+	// Modules file anything too; the same file again is refused with the document it is (or used, with ensure).
+	r = await call("POST", "/m/reader/keep", { name: "visa.qfx", text: "OFXHEADER:100" });
+	expectStatus(r, 200);
+	const qfx = r.json();
+	assert.deepEqual([qfx.content_type, qfx.source, qfx.origin, qfx.kind], ["application/x-ofx", "reader", "imported", "statement"]);
+	assert.equal((await call("POST", "/m/reader/keep", { name: "mail.unknownext", text: "From: a@b", type: "message/rfc822" })).json().content_type, "message/rfc822");
+	assert.deepEqual((await call("POST", "/m/reader/dup", { text: "OFXHEADER:100" })).json(), { status: 409, document_id: qfx.id });
+	assert.deepEqual((await call("POST", "/m/reader/ensure", { name: "x.qfx", text: "OFXHEADER:100" })).json(), { id: qfx.id, added: false });
+	assert.equal((await call("POST", "/m/reader/ensure", { name: "notes.txt", text: "hello" })).json().added, true);
+	assert.deepEqual((await call("GET", "/m/reader/csvs")).json(), ["March statement"]);
+
+	// No files of a module's own: storage can't be written by a module built for 0.26.0, and one with a binary column isn't started.
+	r = await call("POST", "/m/reader/put");
+	expectStatus(r, 410);
+	assert.match(r.json().error.message, /ctx\.documents\.add/);
+	expectStatus(await call("GET", "/m/reader/old"), 200);
+	expectStatus(await call("POST", "/m/oldie/put"), 200);
+	expectStatus(await call("GET", "/m/hoarder/x"), 404);
+	const mods = (await call("GET", "/modules")).json().modules;
+	const mod = (id: string) => mods.find((m: any) => m.id === id);
+	assert.deepEqual([mod("reader").own_files, mod("oldie").own_files, mod("hoarder").own_files], [false, true, false]);
+	assert.match(app.modules.modules.get("hoarder")!.error ?? "", /keeps files in its own tables \(blobs\.content\)/);
+
+	// Tags on files: set by a person or a module, seen by all, announced to modules that listen.
+	r = await call("POST", `/documents/${csv.id}/tags`, { tag: "Overdue", note: "due 1 March" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().tags.map((x: any) => [x.tag, x.note, x.module_id, x.set_by]), [["overdue", "due 1 March", null, "tester"]]);
+	r = await call("POST", `/m/reader/tag/${csv.id}`, { tag: "paid", note: "entry 12" });
+	assert.deepEqual(r.json().map((x: any) => [x.tag, x.module_id]), [["paid", "reader"]], "paid takes overdue off");
+	expectStatus(await call("POST", `/documents/${csv.id}/tags`, { tag: "not a tag" }), 422);
+	expectStatus(await call("POST", `/documents/${csv.id}/tags`, { tag: "extracted" }), 422); // only by saving what was read
+	expectStatus(await call("POST", `/documents/999999/tags`, { tag: "paid" }), 404);
+	assert.deepEqual((await call("POST", "/documents/tags", { document_ids: [csv.id, qfx.id], action: "set", tag: "posted" })).json(), { documents: 2, changed: 2 });
+	assert.deepEqual((await call("POST", "/m/reader/tags", { ids: [csv.id, qfx.id, html.id], tag: "posted" })).json(), { documents: 3, changed: 1 });
+	expectStatus(await call("POST", "/documents/tags", { document_ids: [csv.id, 999999], action: "set", tag: "posted" }), 422);
+	assert.deepEqual((await call("GET", "/m/reader/tagged/posted")).json().sort(), ["March statement", "page", "visa"]);
+	assert.deepEqual((await call("GET", `/documents?tag=paid`)).json().data.map((d: any) => d.title), ["March statement"]);
+	r = await call("DELETE", `/documents/${csv.id}/tags/posted`);
+	assert.deepEqual(r.json().tags.map((x: any) => x.tag), ["paid"]);
+	assert.deepEqual((await call("POST", "/documents/tags", { document_ids: [qfx.id, html.id], action: "remove", tag: "posted" })).json(), { documents: 2, changed: 2 });
+	assert.deepEqual((await call("GET", "/document-tags")).json().data.filter((x: any) => x.documents > 0 || x.tag === "extracted"), [{ tag: "extracted", documents: 0, standard: true }, { tag: "paid", documents: 1, standard: true }]);
+	await new Promise((res) => setTimeout(res, 20));
+	const changes = (await call("GET", "/m/reader/changes")).json();
+	assert.deepEqual(changes.slice(0, 3), [[csv.id, "set", "overdue", null], [csv.id, "set", "paid", "reader"], [csv.id, "removed", "overdue", "reader"]]);
+
+	// What was read out of a file is kept with it, once, for every module: the tag "extracted" says it is there.
+	expectStatus(await call("GET", `/documents/${csv.id}/extracted`), 404);
+	assert.equal((await call("GET", `/m/reader/extracted/${csv.id}`)).json(), null);
+	r = await call("POST", `/m/reader/extract/${csv.id}`, { data: { type: "statement", currency: "CAD", transactions: [{ date: "2026-03-01", description: "Coffee", amount_cents: -450, balance_cents: null }] }, text: "Date,Description,Amount" });
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().module_id, r.json().keys, r.json().has_text, r.json().extracted_by, r.json().url], ["reader", ["type", "currency", "transactions"], true, "tester", `/api/v1/documents/${csv.id}/extracted`]);
+	let doc = (await call("GET", `/documents/${csv.id}`)).json();
+	assert.deepEqual([doc.tags.map((x: any) => x.tag), doc.extracted.module_id, doc.extracted.keys.sort(), doc.extracted.has_text, doc.extracted.url], [["paid", "extracted"], "reader", ["currency", "transactions", "type"], true, `/api/v1/documents/${csv.id}/extracted`]);
+	// Another module finds it instead of reading the file again, and adds to it: keys merge, null removes one.
+	assert.equal((await call("GET", `/m/taker/sees/${csv.id}`)).json().data.transactions[0].amount_cents, -450);
+	assert.equal((await call("GET", `/m/taker/sees/${csv.id}`)).json().data.transactions[0].balance_cents, null, "nulls inside the data stay");
+	r = await call("POST", `/m/reader/extract/${csv.id}`, { data: { account: { last4: "1234" }, currency: null } });
+	assert.deepEqual([Object.keys(r.json().data).sort(), r.json().text], [["account", "transactions", "type"], "Date,Description,Amount"]);
+	r = await call("POST", `/m/reader/extract/${csv.id}`, { data: { type: "statement" }, text: null, replace: true });
+	assert.deepEqual([r.json().data, r.json().text, r.json().has_text], [{ type: "statement" }, null, false]);
+	expectStatus(await call("POST", `/m/reader/extract/${csv.id}`, {}), 422);
+	expectStatus(await call("POST", `/m/reader/extract/${csv.id}`, { data: [1, 2] }), 422);
+	expectStatus(await call("POST", `/m/reader/extract/999999`, { data: { a: 1 } }), 404);
+	assert.deepEqual((await call("GET", "/documents?extracted=true")).json().data.map((d: any) => d.title), ["March statement"]);
+	assert.ok(!(await call("GET", "/m/reader/unread")).json().includes("March statement"));
+	assert.equal((await call("GET", `/documents/${csv.id}/extracted`)).json().data.type, "statement");
+	// Taking the tag off forgets the data, so the file is read again.
+	r = await call("DELETE", `/documents/${csv.id}/tags/extracted`);
+	assert.deepEqual([r.json().tags.map((x: any) => x.tag), r.json().extracted], [["paid"], null]);
+	await call("POST", `/m/reader/extract/${csv.id}`, { text: "just the text" });
+	assert.equal((await call("DELETE", `/documents/${csv.id}/extracted`)).json().extracted, null);
+	assert.ok((await call("GET", "/m/reader/unread")).json().includes("March statement"));
+
+	// Handing a file to another module hands over the document, not a copy of its bytes.
+	r = await call("POST", `/m/reader/hand/${csv.id}`);
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().document_id, r.json().filename, r.json().content_type, r.json().size_bytes], [csv.id, "March statement.CSV", "text/csv", csv.size_bytes]);
+	r = await call("POST", "/m/reader/hand-bytes", { text: "a,b\n1,2\n" });
+	expectStatus(r, 200);
+	const handed = r.json();
+	assert.ok(handed.document_id > 0);
+	assert.deepEqual((await call("GET", `/documents/${handed.document_id}`)).json().source, "reader");
+	assert.equal((await db.query(`SELECT count(*)::int AS n FROM module_files WHERE data IS NOT NULL`)).rows[0].n, 0, "no bytes in the database");
+	r = await call("GET", "/m/taker/inbox");
+	assert.deepEqual(r.json(), [["transaction", "lines.csv", "text/csv", handed.document_id, "a,b\n1,2\n"], ["statement", "March statement.CSV", "text/csv", csv.id, "Date,Description,Amount\n2026-03-01,Coffee,-4.50\n"]]);
+	assert.ok(!(await call("GET", "/m/taker/added")).json().includes("lines"), "the receiver isn't also told a document was added");
+	expectStatus(await call("POST", `/m/reader/hand/999999`), 422);
+	// A hand-off from before 0.26.0 (bytes in the database) is filed in Documents at startup.
+	await db.query(`INSERT INTO module_files (sender, recipient, kind, filename, content_type, size_bytes, sha256, data) VALUES ('reader', 'taker', 'statement', 'old.ofx', 'application/x-ofx', 3, 'x', 'OLD')`);
+	await fileOldHandoffs(app);
+	const old = (await db.query(`SELECT document_id, data FROM module_files WHERE filename = 'old.ofx'`)).rows[0];
+	assert.equal(old.data, null);
+	assert.deepEqual([(await call("GET", `/documents/${old.document_id}`)).json().filename, (await call("GET", "/m/taker/inbox")).json()[0][4]], ["old.ofx", "OLD"]);
 });
 
 test("Reconcile against a statement PDF the AI reads", async (t) => {

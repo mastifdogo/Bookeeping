@@ -19,7 +19,7 @@ import { pathToFileURL } from "node:url";
 import type { App } from "./app.ts";
 import { HttpError } from "./errors.ts";
 import { log } from "./log.ts";
-import { compatible, scanInstalled, type InstalledModule, type ModuleManifest } from "./modules.ts";
+import { builtFor, compatible, scanInstalled, type InstalledModule, type ModuleManifest } from "./modules.ts";
 import { createAccount, ensureClearingAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listClearingAccounts } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
@@ -31,7 +31,9 @@ import { gmailFor } from "./gmail.ts";
 import { mailFor } from "./mail.ts";
 import { documentsFor, type DocumentInfo } from "./documents.ts";
 import { filesFor, type FileSummary } from "./module-files.ts";
-import { storageFor } from "./module-storage.ts";
+import { ONE_FILE_STORE_SINCE, storageFor } from "./module-storage.ts";
+import type { DocumentTagChange } from "./document-tags.ts";
+import { queryRows } from "./db.ts";
 import { callImport, checkImportSpec, type ImportRow, type ImportSpec } from "./module-import.ts";
 import { currentOrg, forEachOrg, getOrganization, listOrganizations, type OrgKind } from "./orgs.ts";
 import { listBySource, postItem, removeByKey, setClosedByKey, type ItemInput, type ItemKind } from "./dashboard.ts";
@@ -82,6 +84,13 @@ export interface LoadedModule {
 	/** ctx.files.onReceive listeners. */
 	fileListeners: ((file: FileSummary) => unknown)[];
 	documentListeners: ((doc: DocumentInfo) => unknown)[];
+	/** ctx.documents.tags.onChange listeners: told of every tag set on or taken off a document. */
+	documentTagListeners: ((change: DocumentTagChange) => unknown)[];
+	/**
+	 * Built for a Ledger older than 0.26.0, when modules could still keep files in
+	 * folders of their own (ctx.storage): it keeps working, and the Modules page says to update it.
+	 */
+	ownFiles: boolean;
 	accountCodeListeners: ((change: { old_code: string; new_code: string }) => unknown)[];
 	/** ctx.root.onCheck functions: what in the module's records keeps root mode from being left. */
 	rootChecks: (() => unknown)[];
@@ -337,17 +346,20 @@ function makeContext(app: App, m: LoadedModule) {
 			},
 		},
 		/**
-		 * The module's own files (PDFs, scans, attachments), per organization,
-		 * on the data share and in every backup folder: put, get, stat, list,
-		 * remove, url.
+		 * Files the module stored in a folder of its own before Ledger 0.26.0.
+		 * Modules keep no files of their own any more: a module built for
+		 * 0.26.0 or newer can read, list and remove them (to move them into
+		 * Documents) but put() answers 410.
 		 */
-		storage: storageFor(app, id),
+		storage: storageFor(app, id, m.ownFiles),
 		/**
-		 * The organization's documents: PDFs of receipts, statements and
-		 * invoices people imported, and PDFs made in Ledger. list, get, read,
-		 * add, update, remove, mark, unmark, url, onAdded.
+		 * The one file store, for every file a module receives, makes or
+		 * keeps, of any type: list, get, read, add, ensure, update, remove,
+		 * mark, unmark, url, onAdded; tags (shared by all modules) and
+		 * extracted / setExtracted (what was read out of a file, kept with it
+		 * so no module reads it twice).
 		 */
-		documents: documentsFor(app, id, actorOf, m.documentListeners),
+		documents: documentsFor(app, id, actorOf, m.documentListeners, m.documentTagListeners),
 		files: {
 			...filesFor(app, id, actorOf),
 			/** Called with the file's summary right after another module sends this one a file. */
@@ -490,6 +502,24 @@ export async function notifySettings(app: App, m: LoadedModule): Promise<void> {
 
 const REGISTER_TIMEOUT_MS = 15_000;
 
+/**
+ * Modules keep no files in their own tables (Ledger 0.26.0): every file is in
+ * Documents and a table holds only the document's id. A module built for
+ * 0.26.0 or newer whose schema still has a binary (bytea) column is not
+ * started; its error says which columns to move and drop.
+ */
+async function refuseOwnFileColumns(app: App, m: LoadedModule): Promise<void> {
+	if (m.ownFiles) return;
+	const cols = await queryRows<{ t: string; c: string }>(
+		app.db,
+		`SELECT table_name AS t, column_name AS c FROM information_schema.columns WHERE table_schema = $1 AND data_type = 'bytea' ORDER BY 1, 2`,
+		[`mod_${m.manifest.id.replaceAll("-", "_")}`],
+	);
+	if (cols.length === 0) return;
+	const list = cols.slice(0, 6).map((x) => `${x.t}.${x.c}`).join(", ") + (cols.length > 6 ? ", …" : "");
+	throw new Error(`keeps files in its own tables (${list}): since Ledger ${ONE_FILE_STORE_SINCE} every file goes in Documents (ctx.documents) and tables hold only the document's id; a migration must move them and drop the column${cols.length === 1 ? "" : "s"}`);
+}
+
 export class ModuleHost {
 	readonly modules = new Map<string, LoadedModule>();
 	readonly dir: string;
@@ -515,6 +545,8 @@ export class ModuleHost {
 			searchProviders: [],
 			fileListeners: [],
 			documentListeners: [],
+			documentTagListeners: [],
+			ownFiles: !builtFor(inst.manifest, ONE_FILE_STORE_SINCE),
 			accountCodeListeners: [],
 			rootChecks: [],
 			tagListeners: [],
@@ -527,6 +559,7 @@ export class ModuleHost {
 		}
 		if (!m.manifest.server) return;
 		try {
+			await refuseOwnFileColumns(app, m);
 			const file = path.join(inst.dir, m.manifest.server);
 			if (!file.startsWith(inst.dir + path.sep)) throw new Error("server file is outside the module");
 			const mod = (await import(pathToFileURL(file).href)) as { default?: unknown; register?: unknown };

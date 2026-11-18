@@ -140,6 +140,7 @@ import { createReadStream } from "node:fs";
 import { INLINE_TYPES, openStored } from "./module-storage.ts";
 import { preReconcile, reconcileFromStatement } from "./statement-reading.ts";
 import { addDocument, deleteDocument, documentFolders, DOCUMENT_KINDS, DOCUMENT_ORIGINS, getDocument, listDocuments, MAX_DOCUMENT_BYTES, openDocument, updateDocument, type DocumentKind, type DocumentOrigin } from "./documents.ts";
+import { clearExtraction, getExtraction, listDocumentTags, removeDocumentTag, removeDocumentTags, setDocumentTag, setDocumentTags } from "./document-tags.ts";
 import { MAX_MODULES, normalizeRepo, readDesired, readModuleResults, requestModuleSync, writeDesired, compatible, type DesiredModule } from "./modules.ts";
 import { fetchManifest, githubApi, latestModuleRelease, repoIdentity } from "./github.ts";
 
@@ -1727,7 +1728,8 @@ async function handleUploadFile(c: Ctx): Promise<void> {
 	writeJSON(c.res, 201, await saveUploadedCsv(c.app, part.filename, part.data));
 }
 
-// Documents: PDFs of receipts, statements and invoices, shared with modules (ctx.documents).
+// Documents: the one file store, shared with modules (ctx.documents). Receipts, statements,
+// invoices and any other file, each with tags and, once read, the data extracted from it.
 
 async function handleListDocuments(c: Ctx): Promise<void> {
 	const pick = <T extends string>(name: string, among: readonly T[]): T | null => {
@@ -1742,8 +1744,22 @@ async function handleListDocuments(c: Ctx): Promise<void> {
 		if (!/^\d{1,9}$/.test(v)) throw new HttpError(422, `${name} must be a whole number`, "validation_failed");
 		return Number(v);
 	};
+	const bool = (name: string) => (c.query.get(name) === "true" ? true : c.query.get(name) === "false" ? false : null);
 	const [list, folders] = await Promise.all([
-		listDocuments(c.app, { kind: pick<DocumentKind>("kind", DOCUMENT_KINDS), origin: pick<DocumentOrigin>("origin", DOCUMENT_ORIGINS), year: int("year"), entity_id: int("entity_id"), account_code: c.query.get("account_code"), reconciled: c.query.get("reconciled") === "true" ? true : c.query.get("reconciled") === "false" ? false : null, q: c.query.get("q"), limit: int("limit"), offset: int("offset") }),
+		listDocuments(c.app, {
+			kind: pick<DocumentKind>("kind", DOCUMENT_KINDS),
+			origin: pick<DocumentOrigin>("origin", DOCUMENT_ORIGINS),
+			year: int("year"),
+			entity_id: int("entity_id"),
+			account_code: c.query.get("account_code"),
+			reconciled: bool("reconciled"),
+			tag: c.query.get("tag"),
+			extracted: bool("extracted"),
+			content_type: c.query.get("content_type"),
+			q: c.query.get("q"),
+			limit: int("limit"),
+			offset: int("offset"),
+		}),
 		documentFolders(c.app),
 	]);
 	writeJSON(c.res, 200, { ...list, folders, max_bytes: MAX_DOCUMENT_BYTES });
@@ -1808,22 +1824,75 @@ async function handleDeleteDocument(c: Ctx): Promise<void> {
 	c.res.writeHead(204).end();
 }
 
-/** The file itself, shown in the browser (PDFs and pictures only ever get here). */
+/**
+ * The file itself. Any type can be stored, so only PDFs, pictures and plain
+ * text open in the browser; everything else downloads. Nothing served from
+ * here ever runs as a page: all but PDFs are sandboxed, and the type is the
+ * one worked out when the file was added (never sniffed by the browser).
+ */
 async function handleDocumentFile(c: Ctx): Promise<void> {
 	const f = await openDocument(c.app, c.params.documentId);
 	if (!f) throw new HttpError(404, "the document's file is missing from the data share", "not_found");
-	const name = f.doc.filename.replace(/\.[A-Za-z0-9]{1,5}$/, "") + pathMod.extname(f.doc.path);
+	const type = f.doc.content_type;
+	const name = f.doc.filename.replace(/\.[A-Za-z0-9]{1,8}$/, "") + pathMod.extname(f.doc.path);
+	const inline = INLINE_TYPES.has(type) && !c.query.get("download");
 	c.res.writeHead(200, {
-		"Content-Type": f.doc.content_type,
-		"Content-Length": f.doc.size_bytes,
-		"Content-Disposition": `${c.query.get("download") ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`,
-		// Only PDFs and pictures are stored (checked by content). A browser's PDF viewer doesn't run
-		// inside a sandbox, and the Reconcile page shows the statement in a frame beside the lines.
-		"Content-Security-Policy": f.doc.content_type === "application/pdf" ? "frame-ancestors 'self'" : "sandbox; frame-ancestors 'self'",
+		"Content-Type": type + (type.startsWith("text/") ? "; charset=utf-8" : ""),
+		"Content-Length": f.size,
+		"Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(name)}`,
+		// A browser's PDF viewer doesn't run inside a sandbox, and the Reconcile page shows the
+		// statement in a frame beside the lines. PDFs are only ever PDFs by content.
+		"Content-Security-Policy": type === "application/pdf" ? "frame-ancestors 'self'" : "sandbox; frame-ancestors 'self'",
 		"X-Content-Type-Options": "nosniff",
 		"Cache-Control": "private, no-cache",
 	});
 	createReadStream(f.full).pipe(c.res);
+}
+
+// Tags on documents and what was read out of them, shared with modules (document-tags.ts).
+
+async function handleListDocumentTags(c: Ctx): Promise<void> {
+	writeJSON(c.res, 200, { data: await listDocumentTags(c.app) });
+}
+
+async function handleSetDocumentTag(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, objectBody(["tag", "note"]));
+	await setDocumentTag(c.app, c.params.documentId, { tag: b.tag as string, note: b.note as string | undefined }, { moduleId: null, userId: c.user!.id });
+	writeJSON(c.res, 200, await getDocument(c.app, c.params.documentId));
+}
+
+async function handleRemoveDocumentTag(c: Ctx): Promise<void> {
+	await removeDocumentTag(c.app, c.params.documentId, c.params.tag ?? "", { moduleId: null });
+	writeJSON(c.res, 200, await getDocument(c.app, c.params.documentId));
+}
+
+// Many documents at once: { document_ids, action: "set" | "remove", tag, note? }.
+async function handleBatchDocumentTags(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, objectBody(["document_ids", "action", "tag", "note"]));
+	const ids = Array.isArray(b.document_ids) ? b.document_ids.map((x) => (x && typeof x === "object" ? String((x as { source?: unknown }).source) : x)) : b.document_ids;
+	if (b.action !== "set" && b.action !== "remove") {
+		const v = new ValidationError();
+		v.add("action", 'must be "set" or "remove"');
+		v.throwIfAny();
+	}
+	const r =
+		b.action === "set"
+			? await setDocumentTags(c.app, ids, { tag: b.tag as string, note: b.note as string | undefined }, { moduleId: null, userId: c.user!.id })
+			: await removeDocumentTags(c.app, ids, b.tag, { moduleId: null });
+	writeJSON(c.res, 200, r);
+}
+
+/** What was read out of a document: 200 with the extraction, 404 when nothing has been read yet. */
+async function handleGetExtraction(c: Ctx): Promise<void> {
+	const x = await getExtraction(c.app, c.params.documentId);
+	if (!x) throw new HttpError(404, "nothing has been read out of this document yet", "not_found");
+	writeJSON(c.res, 200, x);
+}
+
+/** Forgets it, so a module reads the file again. */
+async function handleClearExtraction(c: Ctx): Promise<void> {
+	await clearExtraction(c.app, c.params.documentId, { moduleId: null });
+	writeJSON(c.res, 200, await getDocument(c.app, c.params.documentId));
 }
 
 // A module's "Import from CSV" (ctx.imports): upload, preview (the module's dry run), import.
@@ -2065,6 +2134,7 @@ async function modulesInfo(c: Ctx) {
 			nav_label: m && !m.error ? (m.manifest.nav?.label ?? null) : null,
 			has_settings: !!m && !m.error && !!m.manifest.settings,
 			accepts: m?.manifest.files?.accepts ?? [],
+			own_files: !!m && !m.error && m.ownFiles && !!m.manifest.server,
 			state: m ? (m.error ? "failed" : "running") : last?.state === "error" ? "error" : "pending",
 			message: m?.error ?? (last?.state === "error" ? last.message : m ? "" : "Waiting for the installer…"),
 		});
@@ -2081,6 +2151,7 @@ async function modulesInfo(c: Ctx) {
 			// Still running until the next sync (or, in development, loaded from MODULES_DIR).
 			has_settings: !m.error && !!m.manifest.settings,
 			accepts: m.manifest.files?.accepts ?? [],
+			own_files: !m.error && m.ownFiles && !!m.manifest.server,
 			state: "removing",
 			message: "Removed from the list; uninstalls at the next sync.",
 		});
@@ -2429,6 +2500,12 @@ const ROUTES: Route[] = [
 	route("PATCH", "/documents/:documentId", true, handleUpdateDocument),
 	route("DELETE", "/documents/:documentId", true, handleDeleteDocument),
 	route("GET", "/documents/:documentId/file", true, handleDocumentFile),
+	route("GET", "/document-tags", true, handleListDocumentTags),
+	route("POST", "/documents/tags", true, handleBatchDocumentTags),
+	route("POST", "/documents/:documentId/tags", true, handleSetDocumentTag),
+	route("DELETE", "/documents/:documentId/tags/:tag", true, handleRemoveDocumentTag),
+	route("GET", "/documents/:documentId/extracted", true, handleGetExtraction),
+	route("DELETE", "/documents/:documentId/extracted", true, handleClearExtraction),
 	route("GET", "/files", true, handleListFiles),
 	route("POST", "/files", true, handleUploadFile),
 	route("GET", "/files/:filename", true, handleDownloadFile),

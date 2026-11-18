@@ -39,9 +39,14 @@ type Handler = (req: IncomingMessage, res: ServerResponse, pathname: string) => 
 export function staticHandler(webDir: string): Handler {
 	const root = path.resolve(webDir);
 	if (!existsSync(path.join(root, SPA_FALLBACK))) {
-		return async (_req, res) => {
+		return async (req, res) => {
+			if (req.method !== "GET" && req.method !== "HEAD") {
+				res.writeHead(405, { Allow: "GET, HEAD", "Content-Type": "text/plain; charset=utf-8" });
+				res.end("method not allowed\n");
+				return;
+			}
 			res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-			res.end(PLACEHOLDER);
+			res.end(req.method === "HEAD" ? undefined : PLACEHOLDER);
 		};
 	}
 

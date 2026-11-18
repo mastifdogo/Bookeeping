@@ -50,6 +50,7 @@ GRANT UPDATE (imported_by)            ON csv_imports                            
 GRANT UPDATE (changed_by)             ON transaction_changes, transaction_moves, journal_entry_date_changes, account_code_changes TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON documents                               TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON document_marks                          TO :"app_role";
+GRANT SELECT, INSERT, UPDATE, DELETE  ON document_tags, document_extractions     TO :"app_role";
 -- Read-only, so pg_dump (run as this role for backups) can include it.
 GRANT SELECT                          ON schema_migrations                       TO :"app_role";
 

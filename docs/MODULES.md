@@ -485,46 +485,70 @@ For anything the convention can't reach:
 ctx.ledger.onAccountCodeChanged(({ old_code, new_code }) => { /* fix up what Ledger couldn't see */ });
 ```
 
-## Documents (`ctx.documents`)
+## Documents (`ctx.documents`): the one file store
 
-The organization's PDFs in one place (Ledger 0.19.0): receipts, statements
-and invoices that people import on the **Documents** page or that a module
-brings in, and PDFs made in Ledger (an invoice a module draws up, a report).
-Each has a kind (`receipt`, `statement`, `invoice`, `other`), an origin
-(`imported` or `created`), an optional date, customer or vendor
-(`entity_id`) and note. The files are ordinary files on the data share,
-filed as `<kind>s/<year>/<id>-<name>.pdf`, and every backup carries them.
+Every file of an organization is in one place: receipts, statements and
+invoices that people import on the **Documents** page or that a module
+brings in, PDFs made in Ledger (an invoice a module draws up, a report), and
+since Ledger 0.26.0 any other file a module keeps: CSV, OFX and QFX
+statements, saved emails, spreadsheets, exports. (Ledger 0.19.0 to 0.25
+took PDFs and PNG/JPEG scans only.) Each has a kind (`receipt`,
+`statement`, `invoice`, `other`), an origin (`imported` or `created`), an
+optional date, customer or vendor (`entity_id`) and note. The files are
+ordinary files on the data share, filed as
+`<kind>s/<year>/<id>-<name>.<ext>`, and every backup carries them.
 
-**Every PDF a module receives, makes or reads goes through this store.** A
-PDF it takes in (uploaded in its page, fetched from mail, downloaded) is
-filed with `add` and `origin: "imported"`; one it makes (an invoice, a
-report) with `origin: "created"`; one it needs is read from here. The module
-keeps only the document's id. PDFs don't go in `ctx.storage`, `bytea`
-columns or `ctx.files`, or behind an upload box that bypasses the store;
-`ctx.storage` remains for files that aren't PDFs.
+**Modules keep no files of their own (Ledger 0.26.0).** A file a module
+takes in (uploaded in its page, fetched from mail, downloaded) is filed with
+`add` and `origin: "imported"`; one it makes (an invoice, a report, an
+export) with `origin: "created"`; one it needs is read from here. The
+module's tables keep only the document's id. Ledger enforces it for modules
+built for 0.26.0 (`"ledger": ">=0.26.0"`):
+
+- a module whose schema has a binary (`bytea`) column is not started; the
+  Modules page shows which columns to move and drop;
+- `ctx.storage.put` answers 410 (see "Files the module kept" below);
+- the module checker fails on either, and warns about file writes outside
+  `os.tmpdir()`.
+
+An older module keeps working as before until it is updated, and Settings →
+Modules says it "keeps files of its own".
 
 ```js
 // Documents this module hasn't dealt with yet, newest first
 const { data, total } = await ctx.documents.list({ kind: "receipt", unmarked: true });
-// other filters: origin, source, year, entity_id, account_code ("none": without one), q (words), limit (≤ 500), offset
+// other filters: origin, source, year, entity_id, account_code ("none": without one), reconciled, tag, extracted,
+//                content_type ("text/csv", "image/*"), q (words), limit (≤ 500), offset
 // each: { id, kind, origin, source, title, filename, path, content_type, size_bytes, sha256,
-//         doc_date, entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url, marks }
+//         doc_date, entity_id, entity_name, account_code, account_name, note, added_by, created_at, updated_at, url,
+//         reconciled, marks, tags: [{ tag, note, module_id, set_by, set_at }],
+//         extracted: null | { module_id, extracted_at, updated_at, keys, has_text, url } }
 
 const doc = await ctx.documents.get(id);        // details (404 if none)
-const pdf = await ctx.documents.read(id);       // Buffer
+const bytes = await ctx.documents.read(id);     // Buffer
 await ctx.documents.mark(id, "done", "posted as entry 412");  // or "skipped"; unmark(id) takes it back
 
-// A PDF this module made (origin "created" by default; pass "imported" for one it fetched, e.g. from mail)
+// A file this module made (origin "created" by default; pass "imported" for one it fetched, e.g. from mail)
 const made = await ctx.documents.add(
 	{ kind: "invoice", filename: "INV-0031.pdf", data: pdfBuffer, title: "Invoice 31", doc_date: "2026-04-02", entity_id: customer.id },
 	req.user,
 );
-await ctx.documents.update(made.id, { note: "sent 3 April" });  // kind, title, doc_date, entity_id, note
+// The same bytes twice answer 409 (err.document_id names the document); ensure() uses it instead:
+const { document, added } = await ctx.documents.ensure({ kind: "statement", filename: "march.csv", data: csvBuffer, origin: "imported" }, req.user);
+await ctx.documents.update(made.id, { note: "sent 3 April" });  // kind, title, doc_date, entity_id, account_code, note
 await ctx.documents.remove(made.id);            // only documents this module added
 
-ctx.documents.url(id);                          // for <a href> and <iframe> in the module's page
+ctx.documents.url(id);                          // for <a href> and <iframe> in the module's page (?download=1 downloads)
 ctx.documents.onAdded((doc) => { /* a person or another module added one */ });
 ```
+
+What a file is comes from its bytes for PDFs and pictures (PNG, JPEG, GIF,
+WebP), otherwise from its name's extension, then from `content_type` when
+`add` is given one, and is otherwise `application/octet-stream`. A name that
+claims to be a PDF or a picture is never believed on its own. Files are at
+most 100 MB (`ctx.documents.maxBytes`). At `url`, PDFs, pictures and plain
+text or CSV open in the browser, sandboxed; everything else downloads, so a
+stored HTML or SVG file can never run as a page of Ledger.
 
 A bank or card statement belongs to its account (Ledger 0.19.1): pass
 `account_code` to `add` or `update` when the module knows it, and ask for one
@@ -534,13 +558,82 @@ one account can't be used to reconcile another. Once that reconciliation is
 finished the statement reads `reconciled: true` (Ledger 0.19.4);
 `list({ kind: "statement", reconciled: false })` gives the ones still to do.
 
-Only PDFs and PNG or JPEG pictures are accepted (told from the file's
-content), up to 50 MB, and the same file can't be added twice: `add` answers
-409 and names the document that already holds it. `mark` is per module, so
-several modules can each work through the same documents. In `onAdded`,
-only note or queue the document: what the module makes of it is a suggestion
-a person approves, like everything else. A document's file can be missing
-after a restore from an uploaded dump (`read` answers 404): handle it.
+`mark` is per module, so several modules can each work through the same
+documents. In `onAdded`, only note or queue the document: what the module
+makes of it is a suggestion a person approves, like everything else. A
+document's file can be missing after a restore from an uploaded dump (`read`
+answers 404): handle it.
+
+### Tags on files
+
+Ledger 0.26.0. Files have tags the way journal entries do ("Tags: one system
+for every module" above), shared by Ledger and every module. A tag belongs
+to the document: any module, or a person on the Documents page, can set it
+or take it off, and everyone sees the same thing.
+
+```js
+await ctx.documents.tags.set(id, "posted", { note: "entry 412" }, req.user); // → the document's tags
+await ctx.documents.tags.set(id, "paid");             // takes "overdue" off
+await ctx.documents.tags.remove(id, "billed");
+await ctx.documents.tags.of(id);                      // [{ tag, note, module_id, set_by, set_at }]
+await ctx.documents.tags.setMany([4, 5, 6], "posted"); // all or none, at most 500: { documents, changed }
+await ctx.documents.tags.removeMany([4, 5], "overdue");
+ctx.documents.tags.onChange((c) => { /* { document_id, action: "set" | "removed", tag, module_id } */ });
+const { data } = await ctx.documents.list({ tag: "overdue" });
+```
+
+The standard tags mean the same to every module: `extracted` (its data has
+been read out, below), `posted` (an entry was posted from it; name the entry
+in the note), `paid`, `billed` and `overdue`. Any other lowercase word is
+allowed; pick ones another module could use. Who a file is with is the
+document's `entity_id`, not a tag. A module that keeps a record for a file
+(a bill, say) keeps it in line with the file's tags: listen with `onChange`
+and skip changes whose `module_id` is its own.
+
+### Extracted data: read a file once
+
+Ledger 0.26.0. What is read out of a file (its fields, its lines, its plain
+text) is kept by Ledger with the document, not in the table of whichever
+module read it. A document that has it carries the tag `extracted`, and
+`doc.extracted` says who read it, which keys there are and where it is. So
+**before a module parses a file or sends it to the AI, it looks**:
+
+```js
+const x = await ctx.documents.extracted(id);
+// null, or { document_id, data, text, module_id, extracted_by, extracted_at, updated_at, keys, has_text, url }
+if (x?.data.transactions) return x.data.transactions;   // somebody read it already
+const transactions = parse(await ctx.documents.read(id));
+await ctx.documents.setExtracted(id, { data: { type: "statement", currency: "CAD", transactions } }, req.user);
+
+await ctx.documents.clearExtracted(id);                 // forget it, so it is read again
+await ctx.documents.list({ extracted: false });         // files nobody has read yet
+```
+
+`setExtracted` merges `data` into what is there, key by key (a key given as
+`null` is removed; `replace: true` starts over), so a module that reads a
+statement's transactions adds them to the account and period another module
+found. `text` is the file's plain text. Limits: 2 MB of JSON, 5 million
+characters of text. So that modules understand each other, use these keys
+(all optional; money in integer cents, dates as `YYYY-MM-DD`):
+
+| Key | |
+|---|---|
+| `type` | `"receipt"`, `"bill"`, `"invoice"`, `"statement"`, `"transactions"`, … |
+| `vendor`, `customer`, `entity_id` | Who it is from or for (names as printed; the entity when known). |
+| `number`, `date`, `due_date`, `currency` | |
+| `subtotal_cents`, `tax_cents`, `total_cents` | |
+| `items` | `[{ description, quantity, unit, rate_cents, amount_cents }]`, like rate items on entries. |
+| `account` | `{ name, number_last4, account_code }` for a statement. |
+| `period`, `opening_balance_cents`, `closing_balance_cents` | `period` is `{ from, to }`. |
+| `transactions` | `[{ date, description, amount_cents, balance_cents? }]`, money out negative. |
+
+Anything that is only the module's own goes under a key named after the
+module. What a parser read (a CSV, an OFX file, a PDF's text) is saved
+straight away; what the AI read is saved only after a person has approved
+it, since AI output is a suggestion until then. The tag `extracted` can't be
+set by hand: it is on the document exactly while there is an extraction, and
+taking it off (a person can, on the Documents page) forgets the data so the
+file is read again. A module's page reads it at `doc.extracted.url`.
 
 ## Mail (`ctx.mail`)
 
@@ -620,8 +713,12 @@ providers are skipped.
 
 Ledger 0.11.0 and later. Modules can pass each other files labelled
 `transaction`, `receipt`, `statement` or `bill`, without posting anything to
-the books: a downloads module hands a bank statement to a module that turns
-statements into entries, an email module hands bills to a payables module.
+the books: a module that takes files in hands a bank statement to a module
+that turns statements into entries, an email module hands bills to a
+payables module. The file itself is a document (Ledger 0.26.0): a hand-off
+names one (`document_id`), or brings bytes that Ledger files in Documents
+first, and the row only points at it, so nothing is copied and what was
+already read out of the file (`ctx.documents.extracted`) comes along.
 Since Ledger 0.12.0 there are also `customer` and `vendor` lists (CSV). Ledger
 itself sends them (sender `"ledger"`) when someone migrates from other
 bookkeeping software under Settings → Import & export → Migrate: `meta` is
@@ -640,9 +737,10 @@ Sending:
 ```js
 const targets = ctx.files.targets("statement"); // running modules that take statements: [{ id, name, accepts }]
 const sent = await ctx.files.send(
-	{ to: "autosort", kind: "statement", filename: "oct.csv", contentType: "text/csv", data: buffer, meta: { account_code: "1000" }, note: "October" },
+	{ to: "autosort", kind: "statement", document_id: doc.id, meta: { account_code: "1000" }, note: "October" },
 	req.user, // records who sent it
 );
+// or with bytes, filed in Documents first: { to, kind, filename: "oct.csv", contentType: "text/csv", data: buffer, … }
 const mine = await ctx.files.outbox({ status: "done" });
 ```
 
@@ -651,17 +749,19 @@ Receiving:
 ```js
 ctx.files.onReceive((file) => queue.push(file.id)); // right after another module sends one
 const waiting = await ctx.files.inbox({ status: "new" });
-const file = await ctx.files.get(id); // summary plus data (a Buffer)
+const file = await ctx.files.get(id); // summary plus data (a Buffer, read from the document)
+const known = await ctx.documents.extracted(file.document_id); // what was already read out of it, if anything
 await ctx.files.update(id, { status: "done", result: "12 transactions imported" });
 ```
 
 A file's summary is `{ id, sender, recipient, kind, filename, content_type,
-size_bytes, sha256, meta, note, status, result, sent_by, created_at,
-updated_at }`. `status` starts as `new`; the recipient moves it to
+size_bytes, sha256, document_id, meta, note, status, result, sent_by,
+created_at, updated_at }`. `status` starts as `new`; the recipient moves it to
 `accepted`, `done` or `rejected` and may leave a `result` the sender can
 show. The recipient can `remove(id)` a file at any time, the sender only
-while it is still `new`. Files are at most 25 MB; `meta` at most 16 KB of
-JSON. Sending to a module that isn't running or doesn't accept that kind
+while it is still `new`; removing a hand-off leaves the document where it
+is. Files are at most 100 MB; `meta` at most 16 KB of JSON. If the document
+is deleted afterwards, `document_id` reads null and `get` answers 404. Sending to a module that isn't running or doesn't accept that kind
 fails with 409. Settings → Modules shows what each module takes.
 
 ## Customers and vendors (`ctx.entities`)
@@ -683,28 +783,28 @@ in `docs/MODULE_LLM_CONTEXT.md`. Entities are made inactive, never deleted.
 Accounts also carry a tag (`kind`: chequing, savings or credit card) so you
 can offer bank and card accounts first.
 
-## Files the module keeps (`ctx.storage`)
+## Files the module kept (`ctx.storage`)
 
-Ledger 0.13.2 and later. A module stores its own files that aren't PDFs
-(CSV exports, spreadsheets, other attachments) with `ctx.storage`; PDFs, and
-scans of receipts, statements and invoices, go in the PDF store
-(`ctx.documents`, above). They live on the data share next to
-the CSV files, separately per organization and module, and every backup
-folder carries them under `files/<module>/…`, so prefer this over `bytea`
-columns.
+From Ledger 0.13.2 to 0.25 a module could keep files that weren't PDFs in a
+folder of its own. **Since 0.26.0 it can't**: every file goes in Documents
+(`ctx.documents`, above), whatever its type. For a module built for 0.26.0
+or newer, `ctx.storage.put` answers 410; the rest stays so the module can
+move what it stored before:
 
 ```js
-const f = await ctx.storage.put("exports/2026/sales-march.csv", csvBuffer); // Buffer, Uint8Array or base64, up to 100 MB
-// { path, size, content_type, modified_at, url }
-const file = await ctx.storage.get("exports/2026/sales-march.csv"); // plus data (a Buffer); null if missing
-const all = await ctx.storage.list("invoices");                 // files under a folder, sorted by path
-await ctx.storage.remove("exports/2026/sales-march.csv");           // false if there was none
-const href = ctx.storage.url("exports/2026/sales-march.csv");       // for links, <iframe> and <img> in your page
+for (const f of await ctx.storage.list("")) {            // { path, size, content_type, modified_at, url }
+	const got = await ctx.storage.get(f.path);           // plus data (a Buffer); null if missing
+	const { document } = await ctx.documents.ensure({ kind: "other", filename: f.path.split("/").at(-1), data: got.data, origin: "imported" });
+	// ... put document.id where the row kept the path ...
+	await ctx.storage.remove(f.path);
+}
 ```
 
-Paths are folders and a file name (letters, digits, spaces and `. _ - ( )`,
-up to 8 levels). Logged-in users of the organization open `url` in their
-browser: PDFs, images and text show inline, other types download.
+Do it in a background step at startup, inside `ctx.orgs.forEach`, a few
+files at a time and safe to run again (a file already in Documents comes
+back from `ensure` with `added: false`). Drop the path column in a later
+migration, once nothing reads it. A module built for an older Ledger keeps a
+working `put` until it is updated.
 
 ## Import from CSV (`ctx.imports`)
 
@@ -919,7 +1019,7 @@ function newAccount(defaults = {}) {
 ## Migrations
 
 Since Ledger 0.14.0 every organization backs up and restores its own books.
-A restore replaces your tables and your `ctx.storage` files with the
+A restore replaces your tables and the organization's documents with the
 backup's (from an uploaded dump file, 0.14.2: only the tables), while the
 module's settings stay as they are (they have their own rolling backup,
 `settings-…/settings.json`, restored separately) and so do the server's
@@ -932,10 +1032,9 @@ Your tables are in Ledger's database dump, and since Ledger 0.13.0 each
 backup also saves them as CSV files in its folder, next to the dump
 (`<module>[-<table>].csv` in each backup's folder) for people to open in a
 spreadsheet. Give tables and columns names a person understands, and keep
-secrets out of tables: put them in `secret` settings fields. Binary columns
-(`bytea`, e.g. stored files) show as `(binary, <n> bytes; in the .dump)` in
-the CSV (Ledger 0.13.1); keep what a person needs to read (file name, size,
-dates) in ordinary columns beside them.
+secrets out of tables: put them in `secret` settings fields. Keep files out
+of tables too: since Ledger 0.26.0 a module with a binary (`bytea`) column
+is not started; files go in Documents and the table holds the document's id.
 
 Each `migrations/NNN_name.sql` file runs **once**, in file-name order, in a
 transaction. It runs as the module's own role (`mod_<id>`), with

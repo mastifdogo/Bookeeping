@@ -163,6 +163,18 @@ export function compatible(m: ModuleManifest, ledgerVersion: string): boolean {
 	return !isNewer(min.startsWith("v") ? min : `v${min}`, ledgerVersion.startsWith("v") ? ledgerVersion : `v${ledgerVersion}`);
 }
 
+/**
+ * Whether the module was built for at least that Ledger version (its manifest
+ * says "ledger": ">=x.y.z" with x.y.z at or after it). Rules that came with a
+ * version apply to the modules built for it; older ones keep working as they did.
+ */
+export function builtFor(m: ModuleManifest, version: string): boolean {
+	if (!m.ledger) return false;
+	const min = m.ledger.slice(2);
+	const v = (x: string) => (x.startsWith("v") ? x : `v${x}`);
+	return !isNewer(v(version), v(min));
+}
+
 /** Accepts "owner/name" or a github.com URL; returns "owner/name" or null. */
 export function normalizeRepo(input: string): string | null {
 	let s = input.trim();

@@ -52,9 +52,9 @@ If the user just tags or runs this skill and says nothing else, the job is:
    module against it and against the rules in this skill: newer `ctx`
    features it should use (for example the shared entity list instead of
    its own customer or vendor table, account tags, sub-accounts,
-   `ctx.storage`, `ctx.imports`, and the PDF store `ctx.documents` for
-   every PDF the module receives, makes or reads), things Ledger now does differently, and
-   anything the checker reports.
+   `ctx.imports`, and the one file store `ctx.documents` for every file the
+   module receives, makes or keeps, with file tags and extracted data),
+   things Ledger now does differently, and anything the checker reports.
 3. Make those changes, raise `"ledger"` in the manifest to the oldest
    Ledger version that has everything the module now uses, and bump the
    module's `version` (a new feature raises the middle number, a fix or
@@ -74,7 +74,7 @@ approval inside the module, as always.
 
 Read **`docs/MODULE_LLM_CONTEXT.md`** in full before writing anything. It is
 the authoritative, compact reference: manifest fields, the `ctx` API and its
-return shapes, `ctx.dashboard`, `ctx.settings`, `ctx.files`, `ctx.storage`, `ctx.imports`, `ctx.entities`, `ctx.orgs`,
+return shapes, `ctx.dashboard`, `ctx.settings`, `ctx.documents`, `ctx.files`, `ctx.imports`, `ctx.entities`, `ctx.orgs`,
 migrations, the UI contract, security rules and the release checklist. `docs/MODULES.md` has the longer
 explanation. Real modules to learn from: mastifdogo/invoice-costumer-module
 (Sales), mastifdogo/llm-api-module and mastifdogo/tailscale-module.
@@ -212,30 +212,56 @@ Decide, and state briefly to the user:
   other text, or cached in memory; use
   `ctx.ledger.onAccountCodeChanged(({ old_code, new_code }) => …)` for
   anything else.
-- **PDFs go in Ledger's PDF store, `ctx.documents` (Ledger 0.19.0). Always.**
-  Every PDF a module takes in or produces is filed there, not anywhere else:
-  - A PDF the module **receives** (uploaded in its page, fetched from mail,
-    downloaded from a bank or supplier): `ctx.documents.add({ kind,
+- **One file store: every file goes in Documents, `ctx.documents`. Always.**
+  (Any file type since Ledger 0.26.0; needs `"ledger": ">=0.26.0"`.)
+  **A module keeps no files of its own**: not in its tables (`bytea`
+  columns), not in a folder of its own (`ctx.storage`), not on disk. Ledger
+  refuses it: a module built for 0.26.0 with a binary column is not started,
+  `ctx.storage.put` answers 410, and the checker fails on both.
+  - A file the module **receives** (uploaded in its page, fetched from mail,
+    downloaded from a bank or supplier; a PDF, a scan, a CSV/OFX/QFX
+    statement, a saved email, a spreadsheet): `ctx.documents.add({ kind,
     filename, data, origin: "imported", ... }, req.user)`.
-  - A PDF the module **makes** (an invoice, a statement of account, a
-    report): `ctx.documents.add({ ..., origin: "created" }, req.user)`.
-  - A PDF the module **needs** (a receipt, statement or invoice to read):
-    take it from the store with `list({ kind, unmarked: true })` and
-    `read(id)`, then `mark(id)` when done. Link to it in the module's page
-    with `ctx.documents.url(id)`.
-  Keep only the document's `id` in the module's tables. Do **not** store
-  PDFs in `ctx.storage`, in `bytea` columns, in `ctx.files`, or behind an
-  upload box of the module's own that bypasses the store; if the module
-  offers an upload, it files the PDF with `add` and works from the returned
-  id. The same goes for PNG and JPEG scans of receipts, statements and
-  invoices. A statement carries its bank or card account (`account_code`,
-  Ledger 0.19.1): set it when the module knows it, filter by it, never
-  guess it. A statement reads `reconciled: true` once an account has
-  been reconciled against it (Ledger 0.19.4); ask for the ones still to do with
-  `list({ kind: "statement", reconciled: false })`. `add` answers 409 when the file is already in the store: use
-  the document it names instead of failing. An older module that keeps PDFs
-  elsewhere is moved over: a migration or one-off job files each existing
-  PDF with `add` and stores the id.
+  - A file the module **makes** (an invoice, a statement of account, a
+    report, a CSV export): `ctx.documents.add({ ..., origin: "created" },
+    req.user)`.
+  - A file the module **needs**: take it from the store with `list({ kind,
+    unmarked: true })` and `read(id)`, then `mark(id)` when done. Link to it
+    in the module's page with `ctx.documents.url(id)`.
+  Keep only the document's `id` in the module's tables. If the module offers
+  an upload, it files the bytes with `add` and works from the returned id
+  (an upload that arrives in pieces may be assembled in a temporary file
+  under `os.tmpdir()`, deleted once filed). The same bytes twice answer 409
+  with `err.document_id`; `ctx.documents.ensure(...)` → `{ document, added }`
+  uses the document already there. A statement carries its bank or card
+  account (`account_code`): set it when the module knows it, filter by it,
+  never guess it; `list({ kind: "statement", reconciled: false })` gives
+  statements still to reconcile. An older module that keeps files elsewhere
+  is moved over: a startup step (per organization, a few at a time, safe to
+  run again) files each one with `ensure`, stores the id, removes the old
+  copy; a later migration drops the old column.
+- **Tags on files, shared by every module** (Ledger 0.26.0): what a file is,
+  for every module to see, is said with `ctx.documents.tags`, the same shape
+  as the tags on entries: `tags.set(id, "posted", { note: "entry 12" },
+  req.user)`, `"paid"` (takes `"overdue"` off), `"billed"`, `tags.remove`,
+  `tags.of(id)`, `tags.setMany` / `removeMany`, `list({ tag })`, and
+  `tags.onChange` (skip changes whose `module_id` is `ctx.id`) to keep the
+  module's own record in line. Other tags are lowercase words another module
+  could use. Who a file is with is the document's `entity_id`.
+- **Read a file once: the tag `extracted`** (Ledger 0.26.0). What is read
+  out of a file is kept by Ledger with the document, for every module.
+  Before parsing a file or sending it to the AI, check
+  `ctx.documents.extracted(id)` (or `doc.extracted`, or `list({ extracted:
+  false })` for files nobody has read) and use what is there. After reading,
+  save it: `ctx.documents.setExtracted(id, { data, text? }, req.user)`, which
+  merges `data` key by key and tags the document `extracted`. Use the shared
+  keys (`type`, `vendor`, `customer`, `entity_id`, `number`, `date`,
+  `due_date`, `currency`, `subtotal_cents`, `tax_cents`, `total_cents`,
+  `items`, `account`, `period`, `opening_balance_cents`,
+  `closing_balance_cents`, `transactions`; cents and `YYYY-MM-DD`), and put
+  anything only the module understands under a key named after the module.
+  A parser's result is saved at once; an AI's only after a person approved
+  it. Never keep the only copy of extracted data in the module's own table.
 - **No provider in particular**: the admin can put any LLM provider behind
   `ctx.llm` (Ledger 0.18.2: Anthropic, OpenAI, Gemini, OpenRouter, Mistral,
   Groq, Ollama, any OpenAI-compatible server). Never branch on
@@ -256,8 +282,11 @@ Decide, and state briefly to the user:
   pointer. Never act on AI output from a background job or `onReceive`
   without that approval, and never offer an "auto-approve" setting.
 - **Files from other modules**: statements, bills, receipts or transaction
-  lists another module produces (downloads, email) arrive through
-  `ctx.files`, never by reading another module's schema. A module that takes
+  lists another module produces arrive through `ctx.files`, never by
+  reading another module's schema. A hand-off is a document (Ledger 0.26.0):
+  send `{ to, kind, document_id }` (or `data`, which Ledger files first) and
+  read `summary.document_id` on the receiving side, with what was already
+  extracted from it. A module that takes
   them declares `"files": {"accepts": [...]}` in its manifest and handles
   `ctx.files.onReceive` / `inbox()`, then marks each file `done` or
   `rejected` with a `result`; a module that produces them offers "send to …"
@@ -347,18 +376,14 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
 - Backups save every table of the module's schema as a CSV in each backup's folder (next to `ledger.dump`)
   (Ledger 0.13.0): name tables and columns so a person reading the CSV
   understands them, and never keep secrets in tables (use `secret` settings).
-  Binary (`bytea`) columns appear there only as `(binary, <n> bytes; in the
-  .dump)` (Ledger 0.13.1): keep a file's name, type, size and dates in
-  readable columns next to its bytes. Better: keep files out of tables.
-  PDFs (and scans of receipts, statements and invoices) go in the PDF store,
-  `ctx.documents`, as above; other files the module keeps (CSV exports,
-  spreadsheets, attachments that aren't PDFs) go in `ctx.storage` (Ledger
-  0.13.2): files on the share per organization, carried in every backup
-  under `files/<module>/`, opened by users at `ctx.storage.url(path)`.
+  No files in tables either: no `bytea` columns (Ledger 0.26.0 doesn't start
+  a module that has one). Every file is in Documents (`ctx.documents`, as
+  above), on the share per organization and in every backup.
 - **Restores** (Ledger 0.14.0): each organization backs up and restores its
-  own books. A restore replaces the module's tables and its `ctx.storage`
-  files with the backup's (a restore from an uploaded dump file, 0.14.2,
-  replaces only the tables), but keeps the module's current settings, which
+  own books. A restore replaces the module's tables and the organization's
+  documents with the backup's (a restore from an uploaded dump file, 0.14.2,
+  replaces only the tables, so a document's file can be missing), but keeps
+  the module's current settings, which
   are backed up and restored separately, and the server's users. So after a
   restore, rows may be older than the settings and than files or state
   outside the database: never assume a stored file, a setting or an
@@ -405,7 +430,9 @@ TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
 ```
 
 It validates the manifest exactly as Ledger does, checks referenced files,
-imports, migrations and the UI, then creates a scratch database with
+imports, migrations and the UI, the one-file-store rules (no
+`ctx.storage.put`, no `bytea` column left after the migrations, a warning
+for a manifest older than 0.26.0), then creates a scratch database with
 Ledger's schema, applies the module's migrations in its schema, loads it in
 a real Ledger, and calls every parameter-free GET route, POSTs `{}` to
 every POST route (expecting a 4xx, not a 500), the UI and the settings form.

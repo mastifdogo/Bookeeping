@@ -3,17 +3,26 @@
 // its manifest which kinds it accepts ("files": {"accepts": [...]}). Nothing
 // is posted to the books: the receiving module decides, and records the
 // outcome (accepted, done, rejected) for the sender to see.
+//
+// The file itself is in Documents, the one file store (Ledger 0.26.0): a
+// hand-off names a document (send({ document_id })) or brings bytes that are
+// filed there first, and the row only points at it. Rows from before 0.26.0
+// carry their bytes until fileOldHandoffs() has filed them.
 
-import { createHash } from "node:crypto";
 import type { App } from "./app.ts";
 import { queryRow, queryRows } from "./db.ts";
 import { HttpError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
+import { ensureDocument, getDocument, MAX_DOCUMENT_BYTES, readDocument, type DocumentKind } from "./documents.ts";
+import { forEachOrg } from "./orgs.ts";
 
 export const FILE_KINDS = ["transaction", "receipt", "statement", "bill", "customer", "vendor", "entity"] as const;
 export type FileKind = (typeof FILE_KINDS)[number];
 export type FileStatus = "new" | "accepted" | "done" | "rejected";
-export const MAX_FILE_BYTES = 25 * 1024 * 1024;
+export const MAX_FILE_BYTES = MAX_DOCUMENT_BYTES;
+
+/** The folder of Documents a handed-over file is filed in. */
+const DOCUMENT_KIND: Record<FileKind, DocumentKind> = { transaction: "other", receipt: "receipt", statement: "statement", bill: "invoice", customer: "other", vendor: "other", entity: "other" };
 
 export interface FileSummary {
 	id: number;
@@ -24,6 +33,8 @@ export interface FileSummary {
 	content_type: string;
 	size_bytes: number;
 	sha256: string;
+	/** The document that holds the file (null for one handed over before Ledger 0.26.0 and not filed yet, or whose document was deleted). */
+	document_id: number | null;
 	meta: Record<string, unknown>;
 	note: string;
 	status: FileStatus;
@@ -37,9 +48,12 @@ export interface SendFile {
 	/** The receiving module's id. */
 	to: string;
 	kind: FileKind;
-	filename: string;
-	/** The bytes: a Buffer, a Uint8Array, or base64 text. */
-	data: Buffer | Uint8Array | string;
+	/** A document already in the store: the file to hand over. Give this or `data`. */
+	document_id?: number | string;
+	/** The file's name (defaults to the document's). */
+	filename?: string;
+	/** The bytes: a Buffer, a Uint8Array, or base64 text. They are filed in Documents first. */
+	data?: Buffer | Uint8Array | string;
 	contentType?: string;
 	/** Small structured details for the receiver (≤ 16 KB as JSON), e.g. { account_code, period }. */
 	meta?: Record<string, unknown>;
@@ -48,12 +62,12 @@ export interface SendFile {
 }
 
 const SELECT = `
-	SELECT f.id, f.sender, f.recipient, f.kind, f.filename, f.content_type, f.size_bytes, f.sha256, f.meta, f.note,
+	SELECT f.id, f.sender, f.recipient, f.kind, f.filename, f.content_type, f.size_bytes, f.sha256, f.document_id, f.meta, f.note,
 	       f.status, f.result, u.username AS sent_by, f.created_at, f.updated_at
 	  FROM module_files f LEFT JOIN users u ON u.id = f.created_by`;
 
-type Row = Omit<FileSummary, "id"> & { id: bigint };
-const toSummary = (r: Row): FileSummary => ({ ...r, id: Number(r.id) });
+type Row = Omit<FileSummary, "id" | "document_id"> & { id: bigint; document_id: bigint | null };
+const toSummary = (r: Row): FileSummary => ({ ...r, id: Number(r.id), document_id: r.document_id === null ? null : Number(r.document_id) });
 
 const bad = (field: string, msg: string): never => {
 	const v = new ValidationError();
@@ -95,16 +109,21 @@ export function filesFor(app: App, self: string, actorOf: (u: unknown) => number
 			const o = (f ?? {}) as unknown as Record<string, unknown>;
 			if (typeof o.to !== "string" || !/^[a-z][a-z0-9-]{1,31}$/.test(o.to)) bad("to", "must be a module id");
 			if (!FILE_KINDS.includes(o.kind as FileKind)) bad("kind", `must be one of ${FILE_KINDS.join(", ")}`);
-			if (typeof o.filename !== "string" || !/^[^\u0000-\u001f/\\]{1,255}$/.test(o.filename)) bad("filename", "must be a file name (no slashes), 1-255 characters");
+			const named = o.document_id !== undefined && o.document_id !== null;
+			if (named && o.data !== undefined) bad("data", "give the file as document_id or as data, not both");
+			if (!named && o.filename === undefined) bad("filename", "is required");
+			if (o.filename !== undefined && (typeof o.filename !== "string" || !/^[^\u0000-\u001f/\\]{1,255}$/.test(o.filename))) bad("filename", "must be a file name (no slashes), 1-255 characters");
 			const contentType = o.contentType === undefined ? "application/octet-stream" : o.contentType;
 			if (typeof contentType !== "string" || !/^[\w.+-]+\/[\w.+-]+$/.test(contentType)) bad("contentType", "must be a media type such as text/csv");
-			let data: Buffer;
-			if (Buffer.isBuffer(o.data)) data = o.data;
-			else if (o.data instanceof Uint8Array) data = Buffer.from(o.data);
-			else if (typeof o.data === "string") data = Buffer.from(o.data, "base64");
-			else data = bad("data", "must be a Buffer, Uint8Array or base64 text");
-			if (data.length === 0) bad("data", "is empty");
-			if (data.length > MAX_FILE_BYTES) bad("data", `must be at most ${MAX_FILE_BYTES / 1024 / 1024} MB`);
+			let data: Buffer | null = null;
+			if (!named) {
+				if (Buffer.isBuffer(o.data)) data = o.data;
+				else if (o.data instanceof Uint8Array) data = Buffer.from(o.data);
+				else if (typeof o.data === "string") data = Buffer.from(o.data, "base64");
+				else data = bad("data", "must be a Buffer, Uint8Array or base64 text (or name a document with document_id)");
+				if (data.length === 0) bad("data", "is empty");
+				if (data.length > MAX_FILE_BYTES) bad("data", `must be at most ${MAX_FILE_BYTES / 1024 / 1024} MB`);
+			}
 			const meta = o.meta === undefined ? {} : o.meta;
 			if (!meta || typeof meta !== "object" || Array.isArray(meta) || JSON.stringify(meta).length > 16384) bad("meta", "must be an object of at most 16 KB as JSON");
 			const note = o.note === undefined ? "" : o.note;
@@ -114,11 +133,16 @@ export function filesFor(app: App, self: string, actorOf: (u: unknown) => number
 			if (!(to.manifest.files?.accepts ?? []).includes(o.kind as FileKind)) {
 				throw new HttpError(409, `${to.manifest.name} doesn't accept ${o.kind} files`, "conflict");
 			}
+			// The file is one of the organization's documents: the one named, or the bytes filed now
+			// (the one already there when the store has the same file). The receiver isn't told twice.
+			const doc = named
+				? await getDocument(app, o.document_id).catch(() => bad("document_id", "no such document"))
+				: (await ensureDocument(app, { kind: DOCUMENT_KIND[o.kind as FileKind], filename: o.filename as string, data: data!, origin: "imported", content_type: contentType as string, note: (note as string).slice(0, 2000) }, { source: self === "ledger" ? "user" : self, userId: actorOf(user), quiet: [o.to as string] })).document;
 			const row = await queryRow<{ id: bigint }>(
 				app.db,
-				`INSERT INTO module_files (sender, recipient, kind, filename, content_type, size_bytes, sha256, data, meta, note, created_by)
+				`INSERT INTO module_files (sender, recipient, kind, filename, content_type, size_bytes, sha256, document_id, meta, note, created_by)
 				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11) RETURNING id`,
-				[self, o.to, o.kind, o.filename, contentType, data.length, createHash("sha256").update(data).digest("hex"), data, JSON.stringify(meta), note, actorOf(user)],
+				[self, o.to, o.kind, (o.filename as string | undefined) ?? doc.filename, named || contentType === "application/octet-stream" ? doc.content_type : contentType, doc.size_bytes, doc.sha256, doc.id, JSON.stringify(meta), note, actorOf(user)],
 			);
 			const summary = toSummary((await queryRow<Row>(app.db, SELECT + ` WHERE f.id = $1`, [row!.id]))!);
 			for (const fn of to.fileListeners) {
@@ -152,8 +176,10 @@ export function filesFor(app: App, self: string, actorOf: (u: unknown) => number
 		/** One file with its bytes ({ …summary, data: Buffer }); for its sender or receiver. */
 		async get(id: number | bigint | string): Promise<FileSummary & { data: Buffer }> {
 			const r = await mine(id, "either");
-			const d = await queryRow<{ data: Buffer }>(app.db, `SELECT data FROM module_files WHERE id = $1`, [r.id]);
-			return { ...toSummary(r), data: d!.data };
+			if (r.document_id !== null) return { ...toSummary(r), data: await readDocument(app, r.document_id) };
+			const d = await queryRow<{ data: Buffer | null }>(app.db, `SELECT data FROM module_files WHERE id = $1`, [r.id]);
+			if (!d?.data) throw new HttpError(404, "this file's document was deleted from Documents", "not_found");
+			return { ...toSummary(r), data: d.data };
 		},
 
 		/**
@@ -177,4 +203,32 @@ export function filesFor(app: App, self: string, actorOf: (u: unknown) => number
 			await app.db.query(`DELETE FROM module_files WHERE id = $1`, [r.id]);
 		},
 	};
+}
+
+/**
+ * Files handed over before Ledger 0.26.0 carried their bytes in the database.
+ * At startup they are filed in Documents (or matched to the document that
+ * already holds the same file) and the row then points there. A few at a
+ * time, in every organization; a failure is logged and tried again next start.
+ */
+export async function fileOldHandoffs(app: App): Promise<void> {
+	await forEachOrg(app, async () => {
+		for (;;) {
+			const rows = await queryRows<{ id: bigint; sender: string; recipient: string; kind: FileKind; filename: string; content_type: string; data: Buffer; note: string }>(
+				app.db,
+				`SELECT id, sender, recipient, kind, filename, content_type, data, note FROM module_files WHERE data IS NOT NULL AND document_id IS NULL ORDER BY id LIMIT 5`,
+			);
+			if (rows.length === 0) return;
+			for (const r of rows) {
+				// "ledger" (the migration from other software) hands lists over too; a document's source is "user" or a module.
+				const source = /^[a-z][a-z0-9-]{1,31}$/.test(r.sender) && r.sender !== "ledger" ? r.sender : "user";
+				const { document } = await ensureDocument(
+					app,
+					{ kind: DOCUMENT_KIND[r.kind] ?? "other", filename: r.filename, data: r.data, origin: "imported", content_type: r.content_type, note: r.note.slice(0, 2000) },
+					{ source, userId: null, quiet: [...app.modules.modules.keys()] },
+				);
+				await app.db.query(`UPDATE module_files SET document_id = $2, data = NULL WHERE id = $1`, [r.id, document.id]);
+			}
+		}
+	}).catch((err: Error) => log.error("could not file handed-over files in Documents", { err: err.message }));
 }

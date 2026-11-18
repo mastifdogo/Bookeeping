@@ -1,7 +1,9 @@
-// Documents: one place for the PDFs (and scans) a business keeps: receipts,
-// statements and invoices that were imported, and PDFs made in Ledger (an
-// invoice a module drew up, a report). People manage them on the Documents
-// page; modules read and add them through ctx.documents.
+// Documents: the one file store of Ledger and its modules. Receipts,
+// statements and invoices that were imported, PDFs made in Ledger (an invoice
+// a module drew up, a report), and any other file a module keeps: CSV and OFX
+// statements, saved emails, spreadsheets, exports. People manage them on the
+// Documents page; modules read and add them through ctx.documents, and keep
+// no files anywhere else (not in their tables, not in folders of their own).
 //
 // The files are ordinary files on the data share, in folders a person can
 // browse, per organization:
@@ -21,21 +23,46 @@ import { queryRow, queryRows } from "./db.ts";
 import { HttpError, NotFoundError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
 import { filesDir } from "./orgs.ts";
+import { contentTypeOf } from "./module-storage.ts";
+import { clearExtraction, documentTagsOf, extractionUrl, getExtraction, removeDocumentTag, removeDocumentTags, setDocumentTag, setDocumentTags, setExtraction, STANDARD_FILE_TAGS, type DocumentTag, type DocumentTagChange, type ExtractionInput, type ExtractionSummary } from "./document-tags.ts";
 
 export const DOCUMENT_KINDS = ["receipt", "statement", "invoice", "other"] as const;
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 export const DOCUMENT_ORIGINS = ["imported", "created"] as const;
 export type DocumentOrigin = (typeof DOCUMENT_ORIGINS)[number];
-export const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
+export const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024;
 
 const FOLDERS: Record<DocumentKind, string> = { receipt: "receipts", statement: "statements", invoice: "invoices", other: "other" };
 
-/** What a file may be, told from its first bytes (never from its name). */
-const TYPES: { type: string; ext: string; is: (b: Buffer) => boolean }[] = [
+/** Types told from a file's first bytes. A name that claims one of these is never believed on its own. */
+const SNIFFED: { type: string; ext: string; is: (b: Buffer) => boolean }[] = [
 	{ type: "application/pdf", ext: ".pdf", is: (b) => b.subarray(0, 1024).includes("%PDF-") },
 	{ type: "image/png", ext: ".png", is: (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
 	{ type: "image/jpeg", ext: ".jpg", is: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+	{ type: "image/gif", ext: ".gif", is: (b) => ["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString("latin1")) },
+	{ type: "image/webp", ext: ".webp", is: (b) => b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP" },
 ];
+const SNIFFED_TYPES = new Set(SNIFFED.map((t) => t.type));
+const MEDIA_TYPE = /^[a-z0-9][a-z0-9.+-]{0,60}\/[a-z0-9][a-z0-9.+-]{0,80}$/;
+
+/**
+ * What a file is and the extension it is stored under. PDFs and pictures are
+ * told from their bytes; anything else goes by its name's extension, then by
+ * the type the caller gives, and is otherwise just bytes. A file whose name
+ * says PDF or picture but whose bytes don't is not taken at its word.
+ */
+export function fileTypeOf(data: Buffer, filename: string, given?: string): { type: string; ext: string } {
+	const sniffed = SNIFFED.find((t) => t.is(data));
+	if (sniffed) return { type: sniffed.type, ext: sniffed.ext };
+	const ext = path.extname(filename).toLowerCase();
+	const safeExt = /^\.[a-z0-9]{1,8}$/.test(ext) ? ext : "";
+	const byName = contentTypeOf(filename);
+	if (SNIFFED_TYPES.has(byName)) return { type: "application/octet-stream", ext: ".bin" };
+	if (byName !== "application/octet-stream") return { type: byName, ext: safeExt };
+	const g = typeof given === "string" ? given.trim().toLowerCase().split(";")[0]!.trim() : "";
+	if (MEDIA_TYPE.test(g) && !SNIFFED_TYPES.has(g)) return { type: g, ext: safeExt || ".bin" };
+	return { type: "application/octet-stream", ext: safeExt || ".bin" };
+}
 
 export interface DocumentInfo {
 	id: number;
@@ -67,6 +94,10 @@ export interface DocumentInfo {
 	reconciled: boolean;
 	/** What modules did with it: [{ module, status, note }]. */
 	marks: { module: string; status: "done" | "skipped"; note: string }[];
+	/** Its tags, shared by Ledger and every module: [{ tag, note, module_id, set_by, set_at }]. */
+	tags: DocumentTag[];
+	/** Set when its data has been read out (it then carries the tag "extracted"): who read it and where the data is. Null when not. */
+	extracted: ExtractionSummary | null;
 }
 
 export interface DocumentAdd {
@@ -79,6 +110,8 @@ export interface DocumentAdd {
 	entity_id?: number | null;
 	account_code?: string | null;
 	note?: string;
+	/** The file's media type, used only when neither its bytes nor its name say what it is. */
+	content_type?: string;
 }
 
 export interface DocumentFilter {
@@ -95,6 +128,12 @@ export interface DocumentFilter {
 	reconciled?: boolean | null;
 	/** Only documents this module hasn't marked yet. */
 	unmarkedBy?: string | null;
+	/** Only documents carrying this tag. */
+	tag?: string | null;
+	/** true: only documents whose data has been read out; false: only those not read yet. */
+	extracted?: boolean | null;
+	/** Only files of this media type ("text/csv"), or of a family ("image/*"). */
+	content_type?: string | null;
 	limit?: number;
 	offset?: number;
 }
@@ -105,14 +144,26 @@ const SELECT = `
 	       d.created_at, d.updated_at,
 	       EXISTS (SELECT 1 FROM reconciliations rc WHERE rc.document_id = d.id AND rc.status = 'finished') AS reconciled,
 	       coalesce((SELECT jsonb_agg(jsonb_build_object('module', m.module, 'status', m.status, 'note', m.note) ORDER BY m.module)
-	                   FROM document_marks m WHERE m.document_id = d.id), '[]'::jsonb) AS marks
+	                   FROM document_marks m WHERE m.document_id = d.id), '[]'::jsonb) AS marks,
+	       coalesce((SELECT jsonb_agg(jsonb_build_object('tag', t.tag, 'note', t.note, 'module_id', t.module_id, 'set_by', tu.username, 'set_at', t.created_at) ORDER BY t.id)
+	                   FROM document_tags t LEFT JOIN users tu ON tu.id = t.created_by WHERE t.document_id = d.id), '[]'::jsonb) AS tags,
+	       (SELECT jsonb_build_object('module_id', x.module_id, 'extracted_at', x.created_at, 'updated_at', x.updated_at,
+	                                  'keys', coalesce((SELECT jsonb_agg(k) FROM jsonb_object_keys(x.data) k), '[]'::jsonb),
+	                                  'has_text', coalesce(x.text, '') <> '')
+	          FROM document_extractions x WHERE x.document_id = d.id) AS extracted
 	  FROM documents d
 	  LEFT JOIN entities e ON e.id = d.entity_id
 	  LEFT JOIN accounts a ON a.id = d.account_id
 	  LEFT JOIN users u ON u.id = d.created_by`;
 
-type Row = Omit<DocumentInfo, "id" | "entity_id" | "url"> & { id: bigint; entity_id: bigint | null };
-const toInfo = (r: Row): DocumentInfo => ({ ...r, id: Number(r.id), entity_id: r.entity_id === null ? null : Number(r.entity_id), url: `/api/v1/documents/${r.id}/file` });
+type Row = Omit<DocumentInfo, "id" | "entity_id" | "url" | "extracted"> & { id: bigint; entity_id: bigint | null; extracted: Omit<ExtractionSummary, "url"> | null };
+const toInfo = (r: Row): DocumentInfo => ({
+	...r,
+	id: Number(r.id),
+	entity_id: r.entity_id === null ? null : Number(r.entity_id),
+	url: `/api/v1/documents/${r.id}/file`,
+	extracted: r.extracted ? { ...r.extracted, url: extractionUrl(r.id) } : null,
+});
 
 export const documentsDir = async (app: App) => path.join(await filesDir(app), ".modules", "_documents");
 
@@ -128,7 +179,7 @@ function slug(name: string): string {
 	const base = name
 		.normalize("NFKD")
 		.replace(/[̀-ͯ]/g, "")
-		.replace(/\.[A-Za-z0-9]{1,5}$/, "")
+		.replace(/\.[A-Za-z0-9]{1,8}$/, "")
 		.replace(/[^A-Za-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 60)
@@ -214,6 +265,13 @@ export async function listDocuments(app: App, f: DocumentFilter = {}): Promise<{
 		where.push(`${f.reconciled ? "" : "NOT "}EXISTS (SELECT 1 FROM reconciliations rc WHERE rc.document_id = d.id AND rc.status = 'finished')`);
 	}
 	if (f.unmarkedBy) add(`NOT EXISTS (SELECT 1 FROM document_marks m WHERE m.document_id = d.id AND m.module = ?)`, f.unmarkedBy);
+	if (f.tag) add(`EXISTS (SELECT 1 FROM document_tags t WHERE t.document_id = d.id AND t.tag = ?)`, String(f.tag).trim().toLowerCase());
+	if (f.extracted === true || f.extracted === false) where.push(`${f.extracted ? "" : "NOT "}EXISTS (SELECT 1 FROM document_extractions x WHERE x.document_id = d.id)`);
+	if (f.content_type) {
+		const t = String(f.content_type).trim().toLowerCase();
+		if (t.endsWith("/*")) add(`d.content_type LIKE ?`, `${t.slice(0, -1).replace(/[\\%_]/g, "\\$&")}%`);
+		else add(`d.content_type = ?`, t);
+	}
 	for (const word of (f.q ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 8)) {
 		add(`(d.title || ' ' || d.filename || ' ' || d.note || ' ' || coalesce(e.name, '') || ' ' || coalesce(a.code || ' ' || a.name, '')) ILIKE ?`, `%${word.replace(/[\\%_]/g, "\\$&")}%`);
 	}
@@ -238,10 +296,10 @@ export async function documentFolders(app: App) {
 
 type Listener = (doc: DocumentInfo) => unknown;
 
-/** Tells every running module that listens (ctx.documents.onAdded) about a new document, except the one that added it. */
-function announce(app: App, doc: DocumentInfo) {
+/** Tells every running module that listens (ctx.documents.onAdded) about a new document, except the one that added it (and any in `skip`). */
+function announce(app: App, doc: DocumentInfo, skip: string[] = []) {
 	for (const m of app.modules.modules.values()) {
-		if (m.error || m.manifest.id === doc.source) continue;
+		if (m.error || m.manifest.id === doc.source || skip.includes(m.manifest.id)) continue;
 		for (const fn of m.documentListeners) {
 			Promise.resolve()
 				.then(() => fn({ ...doc }))
@@ -250,11 +308,21 @@ function announce(app: App, doc: DocumentInfo) {
 	}
 }
 
+/** The answer to a file the store already has: 409, naming the document (also as `document_id`, for code). */
+export class DuplicateDocumentError extends HttpError {
+	readonly document_id: number;
+	constructor(id: bigint | number, title: string) {
+		super(409, `this file is already here as "${title}" (document ${id})`, "duplicate_document");
+		this.document_id = Number(id);
+	}
+}
+
 /**
- * Adds a document: checks it is a PDF, PNG or JPEG, refuses a file that is
+ * Adds a document of any type: works out what it is, refuses a file that is
  * already there (409, naming it), writes it into its folder and records it.
+ * by.quiet: modules not to tell (they already know of the file).
  */
-export async function addDocument(app: App, input: DocumentAdd, by: { source: string; userId: number | null }): Promise<DocumentInfo> {
+export async function addDocument(app: App, input: DocumentAdd, by: { source: string; userId: number | null; quiet?: string[] }): Promise<DocumentInfo> {
 	const err = new ValidationError();
 	const f = checkFields({ kind: input.kind, origin: input.origin, title: input.title, doc_date: input.doc_date, entity_id: input.entity_id, account_code: input.account_code, note: input.note }, err);
 	if (input.kind === undefined) err.add("kind", `must be one of ${DOCUMENT_KINDS.join(", ")}`);
@@ -263,17 +331,17 @@ export async function addDocument(app: App, input: DocumentAdd, by: { source: st
 	const data = input.data;
 	if (!Buffer.isBuffer(data) || data.length === 0) err.add("data", "is empty");
 	else if (data.length > MAX_DOCUMENT_BYTES) throw new HttpError(413, `documents are at most ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB`, "payload_too_large");
-	const type = Buffer.isBuffer(data) ? TYPES.find((t) => t.is(data)) : undefined;
-	if (Buffer.isBuffer(data) && data.length > 0 && !type) err.add("data", "must be a PDF, or a PNG or JPEG picture");
+	if (input.content_type !== undefined && typeof input.content_type !== "string") err.add("content_type", "must be a media type such as text/csv");
+	const type = Buffer.isBuffer(data) ? fileTypeOf(data, filename, input.content_type) : undefined;
 	await checkEntity(app, f.entity_id, err);
 	const accountId = await accountIdOf(app, f.account_code, err);
 	err.throwIfAny();
 
 	const sha256 = createHash("sha256").update(data).digest("hex");
 	const dup = await queryRow<{ id: bigint; title: string }>(app.db, `SELECT id, title FROM documents WHERE sha256 = $1 ORDER BY id LIMIT 1`, [sha256]);
-	if (dup) throw new HttpError(409, `this file is already here as "${dup.title}" (document ${dup.id})`, "duplicate_document");
+	if (dup) throw new DuplicateDocumentError(dup.id, dup.title);
 
-	const title = f.title ?? (filename.replace(/\.[A-Za-z0-9]{1,5}$/, "").replace(/[_-]+/g, " ").trim().slice(0, 200) || "Document");
+	const title = f.title ?? (filename.replace(/\.[A-Za-z0-9]{1,8}$/, "").replace(/[_-]+/g, " ").trim().slice(0, 200) || "Document");
 	const root = await documentsDir(app);
 	// The row comes first (its id names the file); a file that can't be written takes the row back out.
 	const row = await queryRow<{ id: bigint; created_at: Date }>(
@@ -296,8 +364,18 @@ export async function addDocument(app: App, input: DocumentAdd, by: { source: st
 		throw new HttpError(500, `could not save the document: ${(e as Error).message}`, "internal");
 	}
 	const doc = await getDocument(app, row!.id);
-	announce(app, doc);
+	announce(app, doc, by.quiet);
 	return doc;
+}
+
+/** Files it, or finds the document that already holds the same bytes: { document, added }. */
+export async function ensureDocument(app: App, input: DocumentAdd, by: { source: string; userId: number | null; quiet?: string[] }): Promise<{ document: DocumentInfo; added: boolean }> {
+	try {
+		return { document: await addDocument(app, input, by), added: true };
+	} catch (err) {
+		if (!(err instanceof DuplicateDocumentError)) throw err;
+		return { document: await getDocument(app, err.document_id), added: false };
+	}
 }
 
 /** Changes a document's details; its file moves when the kind or the year changes, so the folders stay true. */
@@ -351,11 +429,11 @@ export async function deleteDocument(app: App, id: unknown): Promise<void> {
 }
 
 /** Where a document's file is, for sending it to a browser; null when the file is gone. */
-export async function openDocument(app: App, id: unknown): Promise<{ doc: DocumentInfo; full: string } | null> {
+export async function openDocument(app: App, id: unknown): Promise<{ doc: DocumentInfo; full: string; size: number } | null> {
 	const doc = await getDocument(app, id);
 	const full = path.join(await documentsDir(app), doc.path);
 	const st = await fsp.lstat(full).catch(() => null);
-	return st?.isFile() ? { doc, full } : null;
+	return st?.isFile() ? { doc, full, size: st.size } : null;
 }
 
 export async function readDocument(app: App, id: unknown): Promise<Buffer> {
@@ -365,16 +443,21 @@ export async function readDocument(app: App, id: unknown): Promise<Buffer> {
 }
 
 /** What module `self` can do with documents, in the organization the code runs in. */
-export function documentsFor(app: App, self: string, actorOf: (u: unknown) => number | null, listeners: Listener[]) {
+export function documentsFor(app: App, self: string, actorOf: (u: unknown) => number | null, listeners: Listener[], tagListeners: ((change: DocumentTagChange) => unknown)[]) {
 	const bytes = (data: unknown): Buffer => {
 		if (Buffer.isBuffer(data)) return data;
 		if (data instanceof Uint8Array) return Buffer.from(data);
 		if (typeof data === "string") return Buffer.from(data, "base64");
 		throw new HttpError(422, "documents.add: data must be a Buffer, Uint8Array or base64 text", "validation_failed");
 	};
+	const who = (user: unknown) => ({ moduleId: self, userId: actorOf(user) });
+	type Add = Omit<DocumentAdd, "data"> & { data: Buffer | Uint8Array | string };
+	const toAdd = (d: Add): DocumentAdd => ({ ...d, origin: d?.origin ?? "created", data: bytes(d?.data) });
 	return {
 		kinds: DOCUMENT_KINDS,
-		/** Documents, newest first: { kind, origin, source, year, entity_id, account_code, reconciled, q, unmarked, limit, offset } → { data, total }. */
+		/** The largest file the store takes, in bytes. */
+		maxBytes: MAX_DOCUMENT_BYTES,
+		/** Documents, newest first: { kind, origin, source, year, entity_id, account_code, reconciled, tag, extracted, content_type, q, unmarked, limit, offset } → { data, total }. */
 		list: (f: Omit<DocumentFilter, "unmarkedBy"> & { unmarked?: boolean } = {}) => {
 			const { unmarked, ...rest } = f ?? {};
 			return listDocuments(app, { ...rest, unmarkedBy: unmarked ? self : null });
@@ -384,13 +467,15 @@ export function documentsFor(app: App, self: string, actorOf: (u: unknown) => nu
 		/** Its bytes (a Buffer). */
 		read: (id: number | string) => readDocument(app, id),
 		/**
-		 * Adds a PDF (or PNG/JPEG): { kind, filename, data, origin?, title?, doc_date?, entity_id?, account_code?, note? }.
+		 * Adds a file of any type: { kind, filename, data, origin?, title?, doc_date?, entity_id?, account_code?, note?, content_type? }.
 		 * account_code is the bank, card or loan account a statement belongs to.
-		 * origin is "created" for a PDF this module made (the default) and "imported" for one it brought in.
-		 * Pass the user of the request when a person asked for it.
+		 * origin is "created" for a file this module made (the default) and "imported" for one it brought in.
+		 * Pass the user of the request when a person asked for it. A file the store already has answers
+		 * 409 (the error carries document_id); ensure() uses that document instead.
 		 */
-		add: (d: Omit<DocumentAdd, "data"> & { data: Buffer | Uint8Array | string }, user?: unknown) =>
-			addDocument(app, { ...d, origin: d?.origin ?? "created", data: bytes(d?.data) }, { source: self, userId: actorOf(user) }),
+		add: (d: Add, user?: unknown) => addDocument(app, toAdd(d), { source: self, userId: actorOf(user) }),
+		/** add(), or the document that already holds the same file: → { document, added }. */
+		ensure: (d: Add, user?: unknown) => ensureDocument(app, toAdd(d), { source: self, userId: actorOf(user) }),
 		/** Changes kind, title, doc_date, entity_id, account_code or note. */
 		update: (id: number | string, change: object) => updateDocument(app, id, change),
 		/** Deletes a document this module added (others belong to the people who keep them). */
@@ -421,5 +506,41 @@ export function documentsFor(app: App, self: string, actorOf: (u: unknown) => nu
 			if (typeof fn !== "function") throw new Error("documents.onAdded: expected a function");
 			listeners.push(fn);
 		},
+		/**
+		 * Tags on files, shared by Ledger and every module (Ledger 0.26.0), like ctx.tags on
+		 * journal entries: "posted", "paid", "billed", "overdue", or any lowercase word. A tag is on
+		 * the document, not owned by whoever set it. "extracted" is kept by Ledger: see setExtracted.
+		 */
+		tags: {
+			standard: [...STANDARD_FILE_TAGS],
+			/** The document's tags: [{ tag, note, module_id, set_by, set_at }]. */
+			of: (id: number | string) => documentTagsOf(app, id),
+			/** Tags the document: set(id, "posted", { note: "entry 12" }). "paid" takes "overdue" off. Returns its tags. */
+			set: (id: number | string, tag: string, opts: { note?: string } = {}, user?: unknown) => setDocumentTag(app, id, { tag, note: opts?.note }, who(user)),
+			/** Takes the tag off. Taking "extracted" off forgets what was read from the file. Returns its tags. */
+			remove: (id: number | string, tag: string) => removeDocumentTag(app, id, tag, { moduleId: self }),
+			/** Tags many documents at once, all or none (at most 500): → { documents, changed }. */
+			setMany: (ids: (number | string)[], tag: string, opts: { note?: string } = {}, user?: unknown) => setDocumentTags(app, ids, { tag, note: opts?.note }, who(user)),
+			removeMany: (ids: (number | string)[], tag: string) => removeDocumentTags(app, ids, tag, { moduleId: self }),
+			/** fn({ document_id, action: "set" | "removed", tag, module_id }) after every change, by any module or a person. */
+			onChange(fn: (change: DocumentTagChange) => unknown) {
+				if (typeof fn !== "function") throw new Error("documents.tags.onChange: expected a function");
+				tagListeners.push(fn);
+			},
+		},
+		/**
+		 * What was read out of the file, by whichever module read it: { data, text, module_id, extracted_by,
+		 * extracted_at, updated_at, keys, has_text } or null when nobody has yet. Look here (or at
+		 * doc.extracted, or for the tag "extracted") before reading, parsing or sending a file to the AI.
+		 */
+		extracted: (id: number | string) => getExtraction(app, id),
+		/**
+		 * Saves what this module read out of the file and tags it "extracted": { data?, text?, replace? }.
+		 * data is merged key by key into what is there (a key set to null is removed; replace: true
+		 * starts over); text is the file's plain text. Returns the extraction.
+		 */
+		setExtracted: (id: number | string, x: ExtractionInput, user?: unknown) => setExtraction(app, id, x, who(user)),
+		/** Forgets what was read out of the file and takes "extracted" off, so it is read again. */
+		clearExtracted: (id: number | string) => clearExtraction(app, id, { moduleId: self }),
 	};
 }

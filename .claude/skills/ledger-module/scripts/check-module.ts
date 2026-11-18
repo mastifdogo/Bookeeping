@@ -20,7 +20,8 @@ import type { AddressInfo } from "node:net";
 
 const repo = path.resolve(import.meta.dirname, "..", "..", "..", "..");
 const src = (f: string) => path.join(repo, "backend", "src", f);
-const { validateManifest, compatible } = await import(src("modules.ts"));
+const { validateManifest, compatible, builtFor } = await import(src("modules.ts"));
+const { ONE_FILE_STORE_SINCE } = await import(src("module-storage.ts"));
 
 const args = process.argv.slice(2);
 const vi = args.indexOf("--version");
@@ -72,6 +73,40 @@ if (!(await exists(path.join(mdir, ".github", "workflows", "release.yml"), "file
 }
 if (!m.ledger) warn('no "ledger" minimum version; set one (e.g. ">=0.9.1") so older Ledgers refuse it cleanly');
 if (!compatible(m, ledgerVersion)) warn(`needs Ledger ${m.ledger}; checking against ${ledgerVersion} anyway`);
+if (m.ledger && !builtFor(m, ONE_FILE_STORE_SINCE)) {
+	warn(`"ledger": "${m.ledger}" is older than ${ONE_FILE_STORE_SINCE}: raise it to ">=${ONE_FILE_STORE_SINCE}" so the one-file-store rules apply (Ledger shows older modules as needing an update)`);
+}
+
+// 1b. One file store (Ledger 0.26.0): every file goes in Documents (ctx.documents); none in the
+// module's own storage or tables. Checked in all of the module's server-side code.
+{
+	const serverFiles: string[] = [];
+	const walk = async (d: string) => {
+		for (const e of await readdir(d, { withFileTypes: true }).catch(() => [])) {
+			if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "test" || e.name === "tests") continue;
+			const full = path.join(d, e.name);
+			if (e.isDirectory()) {
+				if (m.ui && path.resolve(full) === path.resolve(mdir, m.ui)) continue;
+				await walk(full);
+			} else if (/\.(mjs|js|cjs)$/.test(e.name)) serverFiles.push(full);
+		}
+	};
+	await walk(mdir);
+	let clean = true;
+	for (const f of serverFiles) {
+		const code = await readFile(f, "utf8");
+		const rel = path.relative(mdir, f);
+		if (/\bstorage\s*\.\s*put\s*\(/.test(code)) {
+			clean = false;
+			fail(`${rel} saves files with ctx.storage.put: modules keep no files of their own (Ledger ${ONE_FILE_STORE_SINCE}); file them in Documents with ctx.documents.add and keep the id`);
+		}
+		if (/\bfs(?:p|Promises)?\s*\.\s*(?:writeFile|appendFile|createWriteStream|copyFile|rename)\b/.test(code) && !/tmpdir\s*\(/.test(code)) {
+			clean = false;
+			warn(`${rel} writes files itself: only temporary files under os.tmpdir() are allowed; anything kept goes in Documents (ctx.documents)`);
+		}
+	}
+	if (clean && serverFiles.length) ok("keeps no files of its own in code (ctx.storage.put, file writes)");
+}
 
 // 2. Referenced files.
 if (m.server) {
@@ -182,6 +217,11 @@ if (!adminURL) {
 				fail(`migration ${f}: ${e.message}`);
 			}
 		}
+		// No files in the module's tables: after all migrations, no binary column may be left.
+		const blobs = (await db.query(`SELECT table_name AS t, column_name AS c FROM information_schema.columns WHERE table_schema = $1 AND data_type = 'bytea' ORDER BY 1, 2`, [schema])).rows;
+		if (blobs.length) {
+			fail(`binary (bytea) columns: ${blobs.map((b: any) => `${b.t}.${b.c}`).join(", ")}. Modules keep no files in their tables (Ledger ${ONE_FILE_STORE_SINCE}): file them in Documents (ctx.documents), keep the document's id, and drop the column in a new migration`);
+		} else if (migrations.length) ok("no binary (bytea) columns: files are not kept in tables");
 		await cp(mdir, path.join(work, "modules", m.id), { recursive: true, filter: (s) => !s.includes(`${path.sep}.git`) && !s.includes("node_modules") });
 		const app = newApp(db, { csvDir: work, cookieSecure: "auto", webDir: path.join(repo, "frontend", "build"), version: ledgerVersion });
 		app.modules = new ModuleHost(path.join(work, "modules"));
