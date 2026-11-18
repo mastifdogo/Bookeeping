@@ -112,7 +112,7 @@ export default async function register(ctx) {
 | `dashboard.*` | Notifications and to-dos on Ledger's dashboard, below. |
 | `settings.*` | `get()`, `set(values)`, `onChange(fn)` for the manifest's settings, below. |
 | `llm.*` | The shared AI provider (Ledger ≥ 0.10.0): `status()`, `complete()`, `json()`, below. |
-| `documents.*` | **The one file store**: every file the module receives, makes or keeps, of any type (Ledger ≥ 0.26.0; PDFs and scans only before): `list()`, `get()`, `read()`, `add()`, `ensure()`, `update()`, `remove()`, `mark()`, `unmark()`, `url()`, `onAdded()`, `tags.*`, `extracted()`, `setExtracted()`, `clearExtracted()`, below. |
+| `documents.*` | **The one file store**: every file the module receives, makes or keeps, of any type (Ledger ≥ 0.27.0; PDFs and scans only before): `list()`, `get()`, `read()`, `add()`, `ensure()`, `update()`, `remove()`, `mark()`, `unmark()`, `url()`, `onAdded()`, `tags.*`, `extracted()`, `setExtracted()`, `clearExtracted()`, below. |
 | `mail.*` | The shared mailbox of any kind, IMAP/SMTP (Proton Mail Bridge, …) or Gmail (Ledger ≥ 0.18.3): `status()`, `search()`, `message()`, `attachment()`, `raw()`, `send()`, below. Prefer it to `gmail.*`. |
 | `gmail.*` | The shared Gmail account (Ledger ≥ 0.10.0): `status()`, `search()`, `message()`, `attachment()`, `raw()`, `send()`, below. |
 | `search.provide(fn)` | Adds results to Ledger's search bar (Ledger ≥ 0.10.0), below. |
@@ -489,15 +489,15 @@ or code where it could go stale (join or call `ctx.ledger.getAccount`).
 `ctx.ledger.onAccountCodeChanged(({ old_code, new_code }) => …)` is for
 anything else.
 
-### ctx.documents: the one file store (any file since Ledger 0.26.0)
+### ctx.documents: the one file store (any file since Ledger 0.27.0)
 
 **Modules keep no files of their own.** Every file a module receives, makes
 or keeps, of any type (PDFs and scans, CSV/OFX/QFX statements, saved emails,
 spreadsheets, exports, attachments), is filed here, and the module's tables
-hold only the document's `id`. Since Ledger 0.26.0 this is enforced:
+hold only the document's `id`. Since Ledger 0.27.0 this is enforced:
 
-- no file bytes in the module's tables: a module built for 0.26.0
-  (`"ledger": ">=0.26.0"`) that has a binary (`bytea`) column in its schema
+- no file bytes in the module's tables: a module built for 0.27.0
+  (`"ledger": ">=0.27.0"`) that has a binary (`bytea`) column in its schema
   is not started ("Failed to load: keeps files in its own tables …");
 - no folder of its own: `ctx.storage.put` answers 410 (see `ctx.storage`);
 - nothing written to disk except temporary files under `os.tmpdir()`
@@ -551,7 +551,7 @@ ctx.documents.maxBytes;                      // 100 MB
   `ctx.orgs.forEach`. In `onAdded` only queue work; a person approves what
   comes of it.
 
-#### Tags on files (Ledger 0.26.0): `ctx.documents.tags`
+#### Tags on files (Ledger 0.27.0): `ctx.documents.tags`
 
 One tag system for files, shared by Ledger and every module, the same shape
 as the tags on journal entries (`ctx.tags`). A tag is on the document, not
@@ -578,7 +578,7 @@ could use. Who a file is with is the document's `entity_id`, not a tag.
 Keep the module's own record in line with the tags (`onChange`, skipping
 `module_id === ctx.id`), as with entry tags.
 
-#### Extracted data: read a file once (Ledger 0.26.0)
+#### Extracted data: read a file once (Ledger 0.27.0)
 
 **Before reading, parsing or sending a file to the AI, check whether that
 has been done.** A document whose data was read out carries the tag
@@ -674,7 +674,7 @@ passes the query string to your page, Ledger ≥ 0.10.1); answer within 2 s
 Modules hand each other files labelled `transaction`, `receipt`,
 `statement` or `bill`, without posting anything: e.g. a module that takes
 files in passes a bank statement to a module that sorts statements into
-entries. **The file is a document** (Ledger 0.26.0): hand over a document by
+entries. **The file is a document** (Ledger 0.27.0): hand over a document by
 its id (`send({ to, kind, document_id })`, no copy is made), or give `data`
 and Ledger files it in Documents first; either way the summary has
 `document_id`, and what was already read out of it travels with it
@@ -736,11 +736,11 @@ hand each other entity lists as files of kind `entity` (`ctx.files`, with
 `customer` and `vendor`): `meta.columns` may name a `role` column
 ("customer", "vendor" or "both").
 
-### ctx.storage: gone for new modules (Ledger 0.26.0)
+### ctx.storage: gone for new modules (Ledger 0.27.0)
 
-Before 0.26.0 a module could keep files in a folder of its own. **It no
+Before 0.27.0 a module could keep files in a folder of its own. **It no
 longer can**: every file goes in `ctx.documents`. For a module built for
-0.26.0 or newer, `ctx.storage.put` answers 410. What remains is for moving
+0.27.0 or newer, `ctx.storage.put` answers 410. What remains is for moving
 old files out:
 
 ```js
@@ -835,7 +835,7 @@ database.
 - Never write to the filesystem outside `os.tmpdir()`, and only temporary
   files there: every file that is kept goes in `ctx.documents`.
 - No files in the module's tables (`bytea`) or in `ctx.storage`: Ledger
-  ≥ 0.26.0 refuses both.
+  ≥ 0.27.0 refuses both.
 
 ## 7. Publishing
 
@@ -849,7 +849,7 @@ database.
 
 ## 8. Checklist for your answer
 
-- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.26.0"` for anything new (one file store, file tags, extracted data); older features: `">=0.9.1"` (`">=0.19.0"` for `ctx.documents` with PDFs only; `">=0.18.3"` for `ctx.mail`; `">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`; `">=0.13.2"` for `ctx.storage` or `ctx.imports`), with a drawn `nav.icon` that fits the module
+- [ ] `ledger-module.json` valid per §2, `"ledger": ">=0.27.0"` for anything new (one file store, file tags, extracted data); older features: `">=0.9.1"` (`">=0.19.0"` for `ctx.documents` with PDFs only; `">=0.18.3"` for `ctx.mail`; `">=0.10.0"` if it uses `ctx.llm`, `ctx.gmail`, `ctx.search` or `req.user.role`; `">=0.11.0"` for `files`, `ctx.files`, `ctx.orgs` or `req.user.organization`; `">=0.13.2"` for `ctx.storage` or `ctx.imports`), with a drawn `nav.icon` that fits the module
 - [ ] background jobs that touch the books run through `ctx.orgs.forEach` so every organization gets them
 - [ ] configuration (API keys, options) declared as manifest `settings`, read with `ctx.settings.get()`
 - [ ] AI through `ctx.llm` and Gmail through `ctx.gmail` (never your own keys/OAuth); README says to allow the module under Settings → LLM API / Gmail
@@ -863,7 +863,7 @@ database.
 - [ ] `server.mjs` default-exports `register(ctx)`, no imports except `node:*`
 - [ ] tables schema-qualified with `${ctx.schema}` in queries
 - [ ] survives a restore (Ledger ≥ 0.14.0): an organization's restore replaces the module's tables and the documents with a backup's (an uploaded dump: tables only, so a document's file can be missing: `read` answers 404) but keeps its current settings and the server's users; handle a row whose document, setting or external record no longer matches
-- [ ] tables and columns have clear names: backups also save each module table as a readable CSV (Ledger ≥ 0.13.0); no secrets in tables (use `secret` settings); no binary (`bytea`) columns at all (0.26.0)
+- [ ] tables and columns have clear names: backups also save each module table as a readable CSV (Ledger ≥ 0.13.0); no secrets in tables (use `secret` settings); no binary (`bytea`) columns at all (0.27.0)
 - [ ] money as integer cents, per currency, entries balanced per currency
 - [ ] migrations unqualified, no BEGIN/COMMIT/GRANT
 - [ ] `ui/index.html` self-contained, light + dark, narrow-width friendly, no outer frame (Ledger draws the window); lists in `<table>`/`<th>` and fields as `<input>`/`<select>` (resizable)

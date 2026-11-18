@@ -4,9 +4,9 @@
 // is posted to the books: the receiving module decides, and records the
 // outcome (accepted, done, rejected) for the sender to see.
 //
-// The file itself is in Documents, the one file store (Ledger 0.26.0): a
+// The file itself is in Documents, the one file store (Ledger 0.27.0): a
 // hand-off names a document (send({ document_id })) or brings bytes that are
-// filed there first, and the row only points at it. Rows from before 0.26.0
+// filed there first, and the row only points at it. Rows from before 0.27.0
 // carry their bytes until fileOldHandoffs() has filed them.
 
 import type { App } from "./app.ts";
@@ -33,7 +33,7 @@ export interface FileSummary {
 	content_type: string;
 	size_bytes: number;
 	sha256: string;
-	/** The document that holds the file (null for one handed over before Ledger 0.26.0 and not filed yet, or whose document was deleted). */
+	/** The document that holds the file (null for one handed over before Ledger 0.27.0 and not filed yet, or whose document was deleted). */
 	document_id: number | null;
 	meta: Record<string, unknown>;
 	note: string;
@@ -206,7 +206,7 @@ export function filesFor(app: App, self: string, actorOf: (u: unknown) => number
 }
 
 /**
- * Files handed over before Ledger 0.26.0 carried their bytes in the database.
+ * Files handed over before Ledger 0.27.0 carried their bytes in the database.
  * At startup they are filed in Documents (or matched to the document that
  * already holds the same file) and the row then points there. A few at a
  * time, in every organization; a failure is logged and tried again next start.

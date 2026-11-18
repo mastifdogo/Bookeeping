@@ -7,7 +7,7 @@
 // first pass; a person checks them against the statement shown beside them
 // and presses Finish.
 //
-// A statement is read once (Ledger 0.26.0): when its transactions were
+// A statement is read once (Ledger 0.27.0): when its transactions were
 // already read out (a module parsed its CSV or OFX file, or a person approved
 // what the AI found), that extraction is used and the AI isn't asked. And
 // when a reconciliation read with the AI is finished, a person has checked

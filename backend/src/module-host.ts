@@ -87,7 +87,7 @@ export interface LoadedModule {
 	/** ctx.documents.tags.onChange listeners: told of every tag set on or taken off a document. */
 	documentTagListeners: ((change: DocumentTagChange) => unknown)[];
 	/**
-	 * Built for a Ledger older than 0.26.0, when modules could still keep files in
+	 * Built for a Ledger older than 0.27.0, when modules could still keep files in
 	 * folders of their own (ctx.storage): it keeps working, and the Modules page says to update it.
 	 */
 	ownFiles: boolean;
@@ -346,9 +346,9 @@ function makeContext(app: App, m: LoadedModule) {
 			},
 		},
 		/**
-		 * Files the module stored in a folder of its own before Ledger 0.26.0.
+		 * Files the module stored in a folder of its own before Ledger 0.27.0.
 		 * Modules keep no files of their own any more: a module built for
-		 * 0.26.0 or newer can read, list and remove them (to move them into
+		 * 0.27.0 or newer can read, list and remove them (to move them into
 		 * Documents) but put() answers 410.
 		 */
 		storage: storageFor(app, id, m.ownFiles),
@@ -503,9 +503,9 @@ export async function notifySettings(app: App, m: LoadedModule): Promise<void> {
 const REGISTER_TIMEOUT_MS = 15_000;
 
 /**
- * Modules keep no files in their own tables (Ledger 0.26.0): every file is in
+ * Modules keep no files in their own tables (Ledger 0.27.0): every file is in
  * Documents and a table holds only the document's id. A module built for
- * 0.26.0 or newer whose schema still has a binary (bytea) column is not
+ * 0.27.0 or newer whose schema still has a binary (bytea) column is not
  * started; its error says which columns to move and drop.
  */
 async function refuseOwnFileColumns(app: App, m: LoadedModule): Promise<void> {

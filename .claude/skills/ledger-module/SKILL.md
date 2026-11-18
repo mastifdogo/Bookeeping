@@ -213,10 +213,10 @@ Decide, and state briefly to the user:
   `ctx.ledger.onAccountCodeChanged(({ old_code, new_code }) => …)` for
   anything else.
 - **One file store: every file goes in Documents, `ctx.documents`. Always.**
-  (Any file type since Ledger 0.26.0; needs `"ledger": ">=0.26.0"`.)
+  (Any file type since Ledger 0.27.0; needs `"ledger": ">=0.27.0"`.)
   **A module keeps no files of its own**: not in its tables (`bytea`
   columns), not in a folder of its own (`ctx.storage`), not on disk. Ledger
-  refuses it: a module built for 0.26.0 with a binary column is not started,
+  refuses it: a module built for 0.27.0 with a binary column is not started,
   `ctx.storage.put` answers 410, and the checker fails on both.
   - A file the module **receives** (uploaded in its page, fetched from mail,
     downloaded from a bank or supplier; a PDF, a scan, a CSV/OFX/QFX
@@ -240,7 +240,7 @@ Decide, and state briefly to the user:
   is moved over: a startup step (per organization, a few at a time, safe to
   run again) files each one with `ensure`, stores the id, removes the old
   copy; a later migration drops the old column.
-- **Tags on files, shared by every module** (Ledger 0.26.0): what a file is,
+- **Tags on files, shared by every module** (Ledger 0.27.0): what a file is,
   for every module to see, is said with `ctx.documents.tags`, the same shape
   as the tags on entries: `tags.set(id, "posted", { note: "entry 12" },
   req.user)`, `"paid"` (takes `"overdue"` off), `"billed"`, `tags.remove`,
@@ -248,7 +248,7 @@ Decide, and state briefly to the user:
   `tags.onChange` (skip changes whose `module_id` is `ctx.id`) to keep the
   module's own record in line. Other tags are lowercase words another module
   could use. Who a file is with is the document's `entity_id`.
-- **Read a file once: the tag `extracted`** (Ledger 0.26.0). What is read
+- **Read a file once: the tag `extracted`** (Ledger 0.27.0). What is read
   out of a file is kept by Ledger with the document, for every module.
   Before parsing a file or sending it to the AI, check
   `ctx.documents.extracted(id)` (or `doc.extracted`, or `list({ extracted:
@@ -283,7 +283,7 @@ Decide, and state briefly to the user:
   without that approval, and never offer an "auto-approve" setting.
 - **Files from other modules**: statements, bills, receipts or transaction
   lists another module produces arrive through `ctx.files`, never by
-  reading another module's schema. A hand-off is a document (Ledger 0.26.0):
+  reading another module's schema. A hand-off is a document (Ledger 0.27.0):
   send `{ to, kind, document_id }` (or `data`, which Ledger files first) and
   read `summary.document_id` on the receiving side, with what was already
   extracted from it. A module that takes
@@ -376,7 +376,7 @@ These come from how Ledger loads modules; `check-module.ts` enforces most.
 - Backups save every table of the module's schema as a CSV in each backup's folder (next to `ledger.dump`)
   (Ledger 0.13.0): name tables and columns so a person reading the CSV
   understands them, and never keep secrets in tables (use `secret` settings).
-  No files in tables either: no `bytea` columns (Ledger 0.26.0 doesn't start
+  No files in tables either: no `bytea` columns (Ledger 0.27.0 doesn't start
   a module that has one). Every file is in Documents (`ctx.documents`, as
   above), on the share per organization and in every backup.
 - **Restores** (Ledger 0.14.0): each organization backs up and restores its
@@ -432,7 +432,7 @@ TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
 It validates the manifest exactly as Ledger does, checks referenced files,
 imports, migrations and the UI, the one-file-store rules (no
 `ctx.storage.put`, no `bytea` column left after the migrations, a warning
-for a manifest older than 0.26.0), then creates a scratch database with
+for a manifest older than 0.27.0), then creates a scratch database with
 Ledger's schema, applies the module's migrations in its schema, loads it in
 a real Ledger, and calls every parameter-free GET route, POSTs `{}` to
 every POST route (expecting a 4xx, not a 500), the UI and the settings form.

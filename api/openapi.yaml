@@ -4199,7 +4199,7 @@ components:
           type: array
           description: Kinds of files it takes from other modules (ctx.files)
           items: { type: string, enum: [transaction, receipt, statement, bill] }
-        own_files: { type: boolean, description: 'Built for a Ledger before 0.26.0 and still keeping files outside Documents (a folder of its own, or in its tables): update it' }
+        own_files: { type: boolean, description: 'Built for a Ledger before 0.27.0 and still keeping files outside Documents (a folder of its own, or in its tables): update it' }
         state:
           type: string
           enum: [running, failed, pending, error, removing]

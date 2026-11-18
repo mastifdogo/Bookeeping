@@ -46,7 +46,7 @@ async function serve(): Promise<void> {
 
 	const app = newApp(db, { ...cfg, version: installedVersion(programDir) });
 	await app.modules.loadAll(app);
-	// Files handed between modules before 0.26.0 move into Documents; not awaited, the server starts meanwhile.
+	// Files handed between modules before 0.27.0 move into Documents; not awaited, the server starts meanwhile.
 	void fileOldHandoffs(app);
 	try {
 		const r = await db.query<{ n: bigint }>(`SELECT count(*) AS n FROM users WHERE is_active`);

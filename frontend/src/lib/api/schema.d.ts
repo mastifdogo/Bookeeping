@@ -3036,7 +3036,7 @@ export interface components {
             has_settings: boolean;
             /** @description Kinds of files it takes from other modules (ctx.files) */
             accepts: ("transaction" | "receipt" | "statement" | "bill")[];
-            /** @description Built for a Ledger before 0.26.0 and still keeping files outside Documents (a folder of its own, or in its tables): update it */
+            /** @description Built for a Ledger before 0.27.0 and still keeping files outside Documents (a folder of its own, or in its tables): update it */
             own_files: boolean;
             /**
              * @description running; failed (installed but would not load: see message);

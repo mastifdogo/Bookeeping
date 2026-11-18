@@ -1,6 +1,6 @@
 // Files modules kept in folders of their own (ctx.storage), before Ledger
-// 0.26.0. Every file now goes in the one file store, Documents
-// (ctx.documents, documents.ts): a module built for 0.26.0 or newer can no
+// 0.27.0. Every file now goes in the one file store, Documents
+// (ctx.documents, documents.ts): a module built for 0.27.0 or newer can no
 // longer save here (put answers 410); it can still read, list and remove what
 // it stored before, to move it into Documents. Modules built for an older
 // Ledger keep working until they are updated.
@@ -125,11 +125,11 @@ export async function hasStoredFiles(app: App, moduleId: string): Promise<boolea
 }
 
 /** The Ledger version from which modules keep every file in Documents and nothing in storage of their own. */
-export const ONE_FILE_STORE_SINCE = "0.26.0";
+export const ONE_FILE_STORE_SINCE = "0.27.0";
 
 /**
  * What module `id` can do with the files it stored, in the organization the
- * code runs in. `writable` is false for modules built for Ledger 0.26.0 or
+ * code runs in. `writable` is false for modules built for Ledger 0.27.0 or
  * newer: they file everything in Documents.
  */
 export function storageFor(app: App, id: string, writable = true) {

@@ -352,7 +352,7 @@ ledger.dump                    the organization's database (pg_dump custom forma
 general-ledger.csv             the General Ledger, same columns as the export
 <module>.csv                   each module's data (<module>-<table>.csv when it has several tables)
 files/_documents/...           Documents: every file kept in Ledger, by kind and year
-files/<module>/...             files a module from before Ledger 0.26.0 still keeps of its own
+files/<module>/...             files a module from before Ledger 0.27.0 still keeps of its own
 ```
 
 Beside it, each run leaves `settings-<same date and time>/settings.json`:

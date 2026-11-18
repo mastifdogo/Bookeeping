@@ -3,7 +3,7 @@
   "name": "__NAME__",
   "version": "0.1.0",
   "description": "__DESCRIPTION__",
-  "ledger": ">=0.26.0",
+  "ledger": ">=0.27.0",
   "server": "server.mjs",
   "ui": "ui",
   "nav": {

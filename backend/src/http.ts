@@ -2158,7 +2158,7 @@ async function modulesInfo(c: Ctx) {
 	const desired = await readDesired(c.app.update);
 	const results = await readModuleResults(c.app.update);
 	const loaded = [...c.app.modules.modules.values()];
-	// Modules from before 0.26.0 that still keep files outside Documents here: a folder of their own, or a binary column.
+	// Modules from before 0.27.0 that still keep files outside Documents here: a folder of their own, or a binary column.
 	const ownFiles = new Set<string>();
 	const old = loaded.filter((m) => m.ownFiles);
 	if (old.length) {

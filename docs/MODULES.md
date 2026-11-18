@@ -490,20 +490,20 @@ ctx.ledger.onAccountCodeChanged(({ old_code, new_code }) => { /* fix up what Led
 Every file of an organization is in one place: receipts, statements and
 invoices that people import on the **Documents** page or that a module
 brings in, PDFs made in Ledger (an invoice a module draws up, a report), and
-since Ledger 0.26.0 any other file a module keeps: CSV, OFX and QFX
-statements, saved emails, spreadsheets, exports. (Ledger 0.19.0 to 0.25
+since Ledger 0.27.0 any other file a module keeps: CSV, OFX and QFX
+statements, saved emails, spreadsheets, exports. (Ledger 0.19.0 to 0.26
 took PDFs and PNG/JPEG scans only.) Each has a kind (`receipt`,
 `statement`, `invoice`, `other`), an origin (`imported` or `created`), an
 optional date, customer or vendor (`entity_id`) and note. The files are
 ordinary files on the data share, filed as
 `<kind>s/<year>/<id>-<name>.<ext>`, and every backup carries them.
 
-**Modules keep no files of their own (Ledger 0.26.0).** A file a module
+**Modules keep no files of their own (Ledger 0.27.0).** A file a module
 takes in (uploaded in its page, fetched from mail, downloaded) is filed with
 `add` and `origin: "imported"`; one it makes (an invoice, a report, an
 export) with `origin: "created"`; one it needs is read from here. The
 module's tables keep only the document's id. Ledger enforces it for modules
-built for 0.26.0 (`"ledger": ">=0.26.0"`):
+built for 0.27.0 (`"ledger": ">=0.27.0"`):
 
 - a module whose schema has a binary (`bytea`) column is not started; the
   Modules page shows which columns to move and drop;
@@ -568,7 +568,7 @@ answers 404): handle it.
 
 ### Tags on files
 
-Ledger 0.26.0. Files have tags the way journal entries do ("Tags: one system
+Ledger 0.27.0. Files have tags the way journal entries do ("Tags: one system
 for every module" above), shared by Ledger and every module. A tag belongs
 to the document: any module, or a person on the Documents page, can set it
 or take it off, and everyone sees the same thing.
@@ -594,7 +594,7 @@ and skip changes whose `module_id` is its own.
 
 ### Extracted data: read a file once
 
-Ledger 0.26.0. What is read out of a file (its fields, its lines, its plain
+Ledger 0.27.0. What is read out of a file (its fields, its lines, its plain
 text) is kept by Ledger with the document, not in the table of whichever
 module read it. A document that has it carries the tag `extracted`, and
 `doc.extracted` says who read it, which keys there are and where it is. So
@@ -717,7 +717,7 @@ Ledger 0.11.0 and later. Modules can pass each other files labelled
 `transaction`, `receipt`, `statement` or `bill`, without posting anything to
 the books: a module that takes files in hands a bank statement to a module
 that turns statements into entries, an email module hands bills to a
-payables module. The file itself is a document (Ledger 0.26.0): a hand-off
+payables module. The file itself is a document (Ledger 0.27.0): a hand-off
 names one (`document_id`), or brings bytes that Ledger files in Documents
 first, and the row only points at it, so nothing is copied and what was
 already read out of the file (`ctx.documents.extracted`) comes along.
@@ -787,9 +787,9 @@ can offer bank and card accounts first.
 
 ## Files the module kept (`ctx.storage`)
 
-From Ledger 0.13.2 to 0.25 a module could keep files that weren't PDFs in a
-folder of its own. **Since 0.26.0 it can't**: every file goes in Documents
-(`ctx.documents`, above), whatever its type. For a module built for 0.26.0
+From Ledger 0.13.2 to 0.26 a module could keep files that weren't PDFs in a
+folder of its own. **Since 0.27.0 it can't**: every file goes in Documents
+(`ctx.documents`, above), whatever its type. For a module built for 0.27.0
 or newer, `ctx.storage.put` answers 410; the rest stays so the module can
 move what it stored before:
 
@@ -1035,7 +1035,7 @@ backup also saves them as CSV files in its folder, next to the dump
 (`<module>[-<table>].csv` in each backup's folder) for people to open in a
 spreadsheet. Give tables and columns names a person understands, and keep
 secrets out of tables: put them in `secret` settings fields. Keep files out
-of tables too: since Ledger 0.26.0 a module with a binary (`bytea`) column
+of tables too: since Ledger 0.27.0 a module with a binary (`bytea`) column
 is not started; files go in Documents and the table holds the document's id.
 
 Each `migrations/NNN_name.sql` file runs **once**, in file-name order, in a

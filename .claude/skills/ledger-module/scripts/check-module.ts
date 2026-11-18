@@ -77,7 +77,7 @@ if (m.ledger && !builtFor(m, ONE_FILE_STORE_SINCE)) {
 	warn(`"ledger": "${m.ledger}" is older than ${ONE_FILE_STORE_SINCE}: raise it to ">=${ONE_FILE_STORE_SINCE}" so the one-file-store rules apply (Ledger shows older modules as needing an update)`);
 }
 
-// 1b. One file store (Ledger 0.26.0): every file goes in Documents (ctx.documents); none in the
+// 1b. One file store (Ledger 0.27.0): every file goes in Documents (ctx.documents); none in the
 // module's own storage or tables. Checked in all of the module's server-side code.
 {
 	const serverFiles: string[] = [];

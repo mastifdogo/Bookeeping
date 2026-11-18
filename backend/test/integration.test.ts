@@ -2096,12 +2096,12 @@ test("one file store: any file type, tags on files, extracted data, and no files
 		]);
 		return request("POST", "/api/v1/documents", { rawBody: body, cookie, headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` } });
 	};
-	// A table with a binary column, as a module from before 0.26.0 might have.
+	// A table with a binary column, as a module from before 0.27.0 might have.
 	await db.query(`CREATE SCHEMA mod_hoarder; CREATE TABLE mod_hoarder.blobs (id int, content bytea)`);
 	await loadModules(t, app, {
 		// Built for the Ledger that has one file store.
 		reader: {
-			manifest: { ledger: ">=0.26.0" },
+			manifest: { ledger: ">=0.27.0" },
 			code: `export default function (ctx) {
 				const changes = [];
 				ctx.documents.tags.onChange((c) => changes.push([c.document_id, c.action, c.tag, c.module_id]));
@@ -2125,7 +2125,7 @@ test("one file store: any file type, tags on files, extracted data, and no files
 			}`,
 		},
 		taker: {
-			manifest: { ledger: ">=0.26.0", files: { accepts: ["statement", "transaction"] } },
+			manifest: { ledger: ">=0.27.0", files: { accepts: ["statement", "transaction"] } },
 			code: `export default function (ctx) {
 				const added = [];
 				ctx.documents.onAdded((d) => added.push(d.title));
@@ -2134,8 +2134,8 @@ test("one file store: any file type, tags on files, extracted data, and no files
 				ctx.route("GET", "/sees/:id", (req) => ctx.documents.extracted(req.params.id));
 			}`,
 		},
-		// Built for 0.26.0 but still keeping files in a table: not started.
-		hoarder: { manifest: { ledger: ">=0.26.0" }, code: `export default function (ctx) { ctx.route("GET", "/x", () => 1); }` },
+		// Built for 0.27.0 but still keeping files in a table: not started.
+		hoarder: { manifest: { ledger: ">=0.27.0" }, code: `export default function (ctx) { ctx.route("GET", "/x", () => 1); }` },
 		// Built for an older Ledger: its own storage still works, and the Modules page says so.
 		oldie: { manifest: { ledger: ">=0.19.0" }, code: `export default function (ctx) { ctx.route("POST", "/put", () => ctx.storage.put("a/b.csv", Buffer.from("x"))); }` },
 	});
@@ -2176,7 +2176,7 @@ test("one file store: any file type, tags on files, extracted data, and no files
 	assert.deepEqual((await call("GET", "/m/taker/added")).json().filter((x: string) => x === "notes" || x === "moved"), ["notes"]);
 	assert.deepEqual((await call("GET", "/m/reader/csvs")).json(), ["March statement"]);
 
-	// No files of a module's own: storage can't be written by a module built for 0.26.0, and one with a binary column isn't started.
+	// No files of a module's own: storage can't be written by a module built for 0.27.0, and one with a binary column isn't started.
 	r = await call("POST", "/m/reader/put");
 	expectStatus(r, 410);
 	assert.match(r.json().error.message, /ctx\.documents\.add/);
@@ -2252,7 +2252,7 @@ test("one file store: any file type, tags on files, extracted data, and no files
 	assert.deepEqual(r.json(), [["transaction", "lines.csv", "text/csv", handed.document_id, "a,b\n1,2\n"], ["statement", "March statement.CSV", "text/csv", csv.id, "Date,Description,Amount\n2026-03-01,Coffee,-4.50\n"]]);
 	assert.ok(!(await call("GET", "/m/taker/added")).json().includes("lines"), "the receiver isn't also told a document was added");
 	expectStatus(await call("POST", `/m/reader/hand/999999`), 422);
-	// A hand-off from before 0.26.0 (bytes in the database) is filed in Documents at startup.
+	// A hand-off from before 0.27.0 (bytes in the database) is filed in Documents at startup.
 	await db.query(`INSERT INTO module_files (sender, recipient, kind, filename, content_type, size_bytes, sha256, data) VALUES ('reader', 'taker', 'statement', 'old.ofx', 'application/x-ofx', 3, 'x', 'OLD')`);
 	await fileOldHandoffs(app);
 	const old = (await db.query(`SELECT document_id, data FROM module_files WHERE filename = 'old.ofx'`)).rows[0];

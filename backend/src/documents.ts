@@ -512,7 +512,7 @@ export function documentsFor(app: App, self: string, actorOf: (u: unknown) => nu
 			listeners.push(fn);
 		},
 		/**
-		 * Tags on files, shared by Ledger and every module (Ledger 0.26.0), like ctx.tags on
+		 * Tags on files, shared by Ledger and every module (Ledger 0.27.0), like ctx.tags on
 		 * journal entries: "posted", "paid", "billed", "overdue", or any lowercase word. A tag is on
 		 * the document, not owned by whoever set it. "extracted" is kept by Ledger: see setExtracted.
 		 */
