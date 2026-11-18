@@ -528,7 +528,7 @@ const buf = await ctx.documents.read(id);    // Buffer; 404 if the file is missi
 const made = await ctx.documents.add({ kind, filename, data: Buffer, origin?: "created" (default) | "imported", title?, doc_date?, entity_id?, account_code?, note?, content_type? }, req.user);
 const { document, added } = await ctx.documents.ensure({ …same… }, req.user); // files it, or returns the document that already holds the same bytes
 await ctx.documents.ensure({ … }, null, { announce: false }); // (add too) file it without telling other modules' onAdded: only for moving already-handled files into the store
-await ctx.documents.update(id, { kind?, title?, doc_date?, entity_id?, account_code?, note? });
+await ctx.documents.update(id, { kind?, title?, doc_date?, entity_id?, account_code?, note? }); // any document, also one a person or another module added: change only what the module knows better
 await ctx.documents.remove(id);              // only documents this module added (else 403)
 await ctx.documents.mark(id, "done" | "skipped", note?);   // this module's own "handled it"; list({ unmarked: true }) then leaves it out
 await ctx.documents.unmark(id);
@@ -692,7 +692,7 @@ A module that keeps customers or vendors should accept them, show what it
 would add for the user to approve, then mark the file `done`.
 
 ```js
-ctx.files.targets("statement");            // → [{ id, name, version, accepts }] running modules that take statements (no kind: every module that takes files)
+ctx.files.targets("statement");            // → [{ id, name, version, accepts }] the other running modules that take statements (no kind: every one that takes files)
 const f = await ctx.files.send({ to: "autosort", kind: "statement", document_id: 31, meta: { account_code: "1000" }, note: "October" }, req.user); // → summary
 // or with bytes, which are filed in Documents first: { to, kind, filename: "oct.csv", data: buffer, contentType: "text/csv", … }
 await ctx.files.outbox({ status, kind, limit });  // what this module sent → [summary]
@@ -748,7 +748,8 @@ longer can**: every file goes in `ctx.documents`. For a module built for
 old files out:
 
 ```js
-for (const f of await ctx.storage.list("")) {        // [{ path, size, content_type, modified_at, url }]
+await ctx.storage.stat(path);                        // { path, size, content_type, modified_at, url } or null
+for (const f of await ctx.storage.list("")) {        // [the same]
 	const got = await ctx.storage.get(f.path);       // → { ...f, data: Buffer } or null
 	const { document } = await ctx.documents.ensure({ kind: "other", filename: f.path.split("/").at(-1), data: got.data, origin: "imported" });
 	/* store document.id where the path was */

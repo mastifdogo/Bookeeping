@@ -83,7 +83,7 @@ export class HttpError extends Error {
 	constructor(status: number, message: string, code?: string) {
 		super(message);
 		this.status = status;
-		this.code = code ?? (status === 404 ? "not_found" : status === 409 ? "conflict" : status === 401 ? "unauthorized" : status === 403 ? "forbidden" : status >= 500 ? "internal_error" : "bad_request");
+		this.code = code ?? (status === 404 ? "not_found" : status === 409 ? "conflict" : status === 401 ? "unauthorized" : status === 403 ? "forbidden" : status === 422 ? "validation_failed" : status === 413 ? "payload_too_large" : status >= 500 ? "internal_error" : "bad_request");
 	}
 }
 

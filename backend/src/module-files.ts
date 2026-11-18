@@ -98,10 +98,10 @@ export function filesFor(app: App, self: string, actorOf: (u: unknown) => number
 	};
 
 	return {
-		/** Modules that accept `kind`: [{ id, name, accepts }]. */
+		/** Other modules that accept `kind`: [{ id, name, version, accepts }]. The module asking is left out. */
 		targets: (kind?: FileKind) => {
 			if (kind !== undefined && !FILE_KINDS.includes(kind)) bad("kind", `must be one of ${FILE_KINDS.join(", ")}`);
-			return fileTargets(app, kind);
+			return fileTargets(app, kind).filter((t) => t.id !== self);
 		},
 
 		/** Sends a file; the receiver's onReceive listeners run right after. Pass req.user to record who sent it. */
