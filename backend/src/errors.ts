@@ -11,6 +11,8 @@ export const MAX_REPORTED_ERRORS = 100;
 
 /** Reports every problem found in a request at once (HTTP 422). */
 export class ValidationError extends Error {
+	/** The HTTP status it answers with (modules can go by err.status, as with HttpError). */
+	readonly status = 422;
 	details: FieldError[] = [];
 
 	constructor() {
@@ -44,9 +46,12 @@ export function invalid(field: string, message: string): never {
 }
 
 /** A well-formed request that clashes with existing ledger state (HTTP 409). */
-export class ConflictError extends Error {}
+export class ConflictError extends Error {
+	readonly status = 409;
+}
 
 export class NotFoundError extends Error {
+	readonly status = 404;
 	constructor() {
 		super("not found");
 	}

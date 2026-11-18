@@ -859,6 +859,14 @@ organization's admins fill in the module's form for their books, and
 (`onChange` is called inside that organization). New organizations start
 from the defaults. `ctx.llm` and `ctx.gmail` are shared by the whole server.
 
+Listeners run inside the organization where the thing happened
+(`ctx.tags.onChange`, `ctx.documents.onAdded`,
+`ctx.documents.tags.onChange`, `ctx.files.onReceive`,
+`ctx.settings.onChange`, `ctx.ledger.onAccountCodeChanged`): `ctx.db` and
+the rest already point at that organization's books. Don't wrap a listener's
+work in `ctx.orgs.forEach`: entry and document ids are per organization, so
+the same id elsewhere is a different record.
+
 Work outside a request (timers, startup) runs in the main books. Repeat it
 for every organization with `forEach`:
 

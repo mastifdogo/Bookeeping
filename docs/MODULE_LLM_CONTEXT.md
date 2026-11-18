@@ -808,8 +808,19 @@ values, `get()` returns the current organization's (defaults in a new one),
 and `onChange` runs inside the organization that changed. `ctx.llm` and
 `ctx.gmail` are server-wide.
 
-Background work (timers, `onReceive` outside a request, startup) runs in the
-main books. To do it for every organization:
+**Listeners run inside the organization where the thing happened**
+(`ctx.tags.onChange`, `ctx.documents.onAdded`, `ctx.documents.tags.onChange`,
+`ctx.files.onReceive`, `ctx.settings.onChange`,
+`ctx.ledger.onAccountCodeChanged`): `ctx.db` and the rest already point at
+that organization's books. Never wrap a listener's work in
+`ctx.orgs.forEach`: ids (entries, documents) are per organization, so the
+same id in another organization is a different record.
+
+Errors thrown by `ctx` carry `status` (404 not found, 409 conflict, 422
+validation, or the `HttpError`'s own): go by `err.status`, not the message.
+
+Background work (timers, startup) runs in the main books. To do it for every
+organization:
 
 ```js
 await ctx.orgs.forEach(async (org) => { /* ctx.db, ctx.ledger here use org's books */ }); // org: { id, name, kind }
