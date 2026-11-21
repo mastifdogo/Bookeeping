@@ -426,9 +426,13 @@
 	.shell {
 		display: grid;
 		grid-template-columns: 13rem minmax(0, 1fr);
+		/* One screen-tall row: a long page scrolls inside its window, so the
+		   sidebar (Settings and Log out at its foot) always stays in view. */
+		grid-template-rows: minmax(0, 1fr);
 		gap: var(--win-gap);
 		padding: var(--win-gap);
 		height: 100vh;
+		height: 100dvh;
 		transition: grid-template-columns 0.15s ease;
 	}
 	.shell.collapsed {
