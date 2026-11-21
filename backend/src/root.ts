@@ -215,7 +215,7 @@ export async function rootUpdateAccount(app: App, code: string, input: { type?: 
 		// A sub-account sits under an account of its own type and currency, and a tag fits the type: what no longer fits comes loose.
 		await tx.query(
 			`UPDATE accounts SET type = $2::text::account_type, currency = $3::text,
-			        kind = CASE WHEN kind IS NULL OR (kind IN ('chequing', 'savings') AND $2::text = 'asset') OR (kind = 'credit_card' AND $2::text = 'liability') OR (kind = 'clearing' AND $2::text IN ('asset', 'liability')) THEN kind END,
+			        kind = CASE WHEN kind IS NULL OR (kind IN ('chequing', 'savings', 'receivable') AND $2::text = 'asset') OR (kind IN ('credit_card', 'payable') AND $2::text = 'liability') OR (kind = 'clearing' AND $2::text IN ('asset', 'liability')) THEN kind END,
 			        parent_id = CASE WHEN parent_id IS NULL OR EXISTS (SELECT 1 FROM accounts p WHERE p.id = accounts.parent_id AND p.type::text = $2::text AND btrim(p.currency) = $3::text) THEN parent_id END
 			  WHERE id = $1`,
 			[acc.id, type, currency],

@@ -2549,10 +2549,10 @@ export interface components {
             is_active?: boolean;
         };
         /**
-         * @description What a bank-type account is (chequing and savings are asset accounts, credit_card a liability), or clearing for an in-between asset or liability account whose balance should return to zero.
+         * @description What a bank-type account is (chequing and savings are asset accounts, credit_card a liability), clearing for an in-between asset or liability account whose balance should return to zero, receivable for accounts receivable (an asset; customers' invoices are posted there) or payable for accounts payable (a liability; vendors' bills and receipts).
          * @enum {string}
          */
-        AccountKind: "chequing" | "savings" | "credit_card" | "clearing";
+        AccountKind: "chequing" | "savings" | "credit_card" | "clearing" | "receivable" | "payable";
         JournalEntryCreate: {
             /** @description The vendor or customer the entry is with */
             entity_id?: number | null;

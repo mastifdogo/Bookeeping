@@ -16,6 +16,9 @@ export const ACCOUNT_KINDS: { value: AccountKind; label: string; type: Schemas['
 	{ value: 'chequing', label: 'Chequing', type: 'asset' },
 	{ value: 'savings', label: 'Savings', type: 'asset' },
 	{ value: 'credit_card', label: 'Credit card', type: 'liability' },
+	// Where customers' invoices (receivable) and vendors' bills and receipts (payable) are posted.
+	{ value: 'receivable', label: 'Accounts receivable', type: 'asset' },
+	{ value: 'payable', label: 'Accounts payable', type: 'liability' },
 	// An in-between account: what is posted to it is cleared again later, so it returns to zero.
 	{ value: 'clearing', label: 'Clearing', type: 'asset' },
 	{ value: 'clearing', label: 'Clearing', type: 'liability' }

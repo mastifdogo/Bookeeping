@@ -377,6 +377,28 @@ balances still count them); **Settings → Clearing accounts** lists them all,
 with who made each and its balance, and a switch to show one. The Accounts
 page still points out any that aren't at zero.
 
+### Accounts receivable and accounts payable
+
+Customers' invoices are posted to accounts receivable, vendors' bills and
+receipts to accounts payable. Ledger knows which accounts those are by
+their tag on the Accounts page, next to the bank and card tags: an asset
+account can be tagged **Accounts receivable**, a liability account
+**Accounts payable** (one for each currency you use). Accounts already
+named that way are tagged for you, and so are the starter chart's 1200 and
+2000. Modules use the same tags: Sales posts invoices to the receivable
+account and Auto sort posts bills and receipts to the payable account
+unless you chose other accounts in their settings.
+
+On **New entry**, the quick **Expense** form does the same once a vendor is
+chosen: one entry debits the expense account and credits accounts payable,
+and a second, linked to it, pays it from the bank or card (the first then
+reads "paid"). Tick **Not paid yet (a bill)** to post only the first and
+leave it in accounts payable. Without a vendor, or with no account tagged
+Accounts payable in that currency, the expense is posted in one entry
+straight from the account it was paid from, as before. When **Edit…** on
+an entry has a customer or vendor and none of its lines is in accounts
+receivable or payable, it says so and names the account.
+
 ### Editing an entry
 
 An entry's page has **Edit…**: every field opens at once. Change the date,

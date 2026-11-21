@@ -230,7 +230,9 @@ export async function finishSetup(app: App, org: Organization): Promise<Organiza
 	try {
 		await inOrg(org, async () => {
 			for (const [code, name, type] of STARTER_CHARTS[kind] ?? []) {
-				await createAccount(app, { code, name, type, currency, description: "" }).catch((err) => {
+				// Accounts receivable and payable are tagged: invoices and bills are posted there.
+				const kind = name === "Accounts receivable" ? "receivable" : name === "Accounts payable" ? "payable" : null;
+				await createAccount(app, { code, name, type, currency, description: "", kind }).catch((err) => {
 					if (!(err instanceof Error && /already exists/.test(err.message))) throw err;
 				});
 			}

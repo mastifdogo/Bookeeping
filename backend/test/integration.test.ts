@@ -1234,6 +1234,14 @@ test("reconciliation: debits and credits, and finishing with a difference posts 
 	expectStatus(r, 409);
 	assert.match(r.json().error.message, /ticked on the reconciliation to 2026-11-30; untick it there/);
 
+	// Accounts receivable (an asset) and accounts payable (a liability) are tagged like bank accounts.
+	r = await call("POST", "/accounts", { code: "1250", name: "Trade debtors", type: "asset", currency: "CAD", description: "", kind: "receivable" });
+	expectStatus(r, 201);
+	assert.equal(r.json().kind, "receivable");
+	expectStatus(await call("POST", "/accounts", { code: "2050", name: "Trade creditors", type: "liability", currency: "CAD", description: "", kind: "payable" }), 201);
+	expectStatus(await call("POST", "/accounts", { code: "2051", name: "Wrong side", type: "liability", currency: "CAD", description: "", kind: "receivable" }), 422);
+	expectStatus(await call("PATCH", "/accounts/1250", { kind: "payable" }), 422);
+
 	// Clearing accounts are hidden unless shown; other accounts aren't.
 	r = await call("POST", "/accounts", { code: "1950", name: "Transfers in transit", type: "asset", currency: "CAD", description: "", kind: "clearing" });
 	assert.equal(r.json().hidden, true);

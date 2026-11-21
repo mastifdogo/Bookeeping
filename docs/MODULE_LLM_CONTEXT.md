@@ -154,6 +154,13 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
   Offer tagged accounts first wherever the user picks a bank or card
   account (statements, payments), and pass `kind` to `createAccount` when
   you create one.
+- **Receivables and payables** (Ledger ≥ 0.30.0): `Account.kind` is also
+  `"receivable"` (an asset: accounts receivable) or `"payable"` (a
+  liability: accounts payable). A customer's invoice is posted to the
+  receivable account and a vendor's bill or receipt to the payable account
+  in its currency: when the module's own setting for that account is empty,
+  use the tagged one (`listAccounts()` filtered by `kind` and `currency`),
+  and never offer either as the account a sale or a cost is for.
 - **Sub-accounts** (Ledger ≥ 0.15.0): `Account.parent_code` is the account
   it sits under (same type and currency, at most 5 levels) or `null`;
   `balance_cents` is the account's own postings and `total_balance_cents`

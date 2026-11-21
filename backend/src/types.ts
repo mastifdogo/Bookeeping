@@ -26,11 +26,11 @@ export interface CurrencyInfo {
 	minor_units: number;
 }
 
-export const ACCOUNT_KINDS = ["chequing", "savings", "credit_card", "clearing"] as const;
+export const ACCOUNT_KINDS = ["chequing", "savings", "credit_card", "clearing", "receivable", "payable"] as const;
 export type AccountKind = (typeof ACCOUNT_KINDS)[number];
 /** The account type each tag belongs to. */
 /** The account types each tag goes with. */
-export const KIND_TYPE: Record<AccountKind, AccountType[]> = { chequing: ["asset"], savings: ["asset"], credit_card: ["liability"], clearing: ["asset", "liability"] };
+export const KIND_TYPE: Record<AccountKind, AccountType[]> = { chequing: ["asset"], savings: ["asset"], credit_card: ["liability"], clearing: ["asset", "liability"], receivable: ["asset"], payable: ["liability"] };
 
 export interface Account {
 	code: string;

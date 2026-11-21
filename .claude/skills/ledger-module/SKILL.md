@@ -323,7 +323,12 @@ Decide, and state briefly to the user:
   (a `role` column says customer, vendor or both).
 - **Accounts**: `Account.kind` (Ledger 0.16.0) tags bank and card accounts
   (`chequing`, `savings`, `credit_card`): list tagged accounts first
-  wherever the user picks where money came from or went. Accounts can be
+  wherever the user picks where money came from or went. Since Ledger
+  0.30.0 `kind` is also `receivable` (accounts receivable) or `payable`
+  (accounts payable): a customer's invoice is posted to the receivable
+  account and a vendor's bill or receipt to the payable account in its
+  currency. Keep the module's account setting, but when it is empty use the
+  tagged account, and work without one on an older Ledger. Accounts can be
   **sub-accounts** (Ledger 0.15.0): `parent_code` is the parent,
   `balance_cents` the account's own postings, `total_balance_cents` adds
   everything below it. Show account pickers and lists as a tree (indent

@@ -825,7 +825,11 @@ await ctx.ledger.createJournalEntry({ entry_date, description, entity_id: vendor
 `list`, `get`, `find(name)`, `create`, `update` and `ensure` are described
 in `docs/MODULE_LLM_CONTEXT.md`. Entities are made inactive, never deleted.
 Accounts also carry a tag (`kind`: chequing, savings or credit card) so you
-can offer bank and card accounts first.
+can offer bank and card accounts first. Since Ledger 0.30.0 the tag also
+says which accounts are accounts receivable (`receivable`) and accounts
+payable (`payable`): customers' invoices are posted to the first, vendors'
+bills and receipts to the second, by Ledger and by every module, so use
+the tagged account in the entry's currency when your own setting is empty.
 
 ## Files the module kept (`ctx.storage`)
 

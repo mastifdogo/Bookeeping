@@ -64,6 +64,17 @@
 			return { currency: t.currency, debit, credit, bad };
 		})
 	);
+	// A customer's invoices are posted to accounts receivable and a vendor's bills and receipts to accounts
+	// payable: with one chosen and no line in that account, the form says so and names the account.
+	let steer = $derived.by(() => {
+		const who = editing && !paired ? data.entities.find((x) => String(x.id) === head.entity) : undefined;
+		if (!who) return null;
+		const kinds: string[] = [...(who.is_customer ? ['receivable'] : []), ...(who.is_vendor ? ['payable'] : [])];
+		const kindOf = (code: string) => data.accounts.find((a) => a.code === code)?.kind ?? '';
+		if (e.lines.some((l) => kinds.includes(kindOf(draft[l.line_number]?.account ?? l.account_code)))) return null;
+		const targets = data.accounts.filter((a) => a.is_active && kinds.includes(a.kind ?? '') && e.lines.some((l) => l.currency === a.currency));
+		return targets.length > 0 ? { who, targets } : null;
+	});
 	// Only what was changed is sent.
 	let changedHead = $derived({
 		...(head.date !== e.entry_date ? { entry_date: head.date } : {}),
@@ -382,6 +393,14 @@
 			{#if paired}<strong>This entry {e.reverses_id ? 'is a reversal' : 'was reversed'}: its amounts and accounts stay as they are.</strong>{/if}
 			{#if e.links.length > 0}<strong>A module posted this entry; its own record does not change.</strong>{/if}
 		</p>
+		{#if steer}
+			<p class="steer" style="margin:0.5rem 0 0">
+				<strong>{steer.who.name}</strong> is a {steer.who.is_customer && steer.who.is_vendor ? 'customer and vendor' : steer.who.is_customer ? 'customer' : 'vendor'}:
+				{steer.who.is_customer && steer.who.is_vendor ? 'invoices are posted to accounts receivable, bills and receipts to accounts payable' : steer.who.is_customer ? 'invoices are posted to accounts receivable' : 'bills and receipts are posted to accounts payable'}
+				({steer.targets.map((a) => `${a.code} ${a.name}`).join(', ')}). None of this entry's lines is there; if it is one of those, or its
+				payment, choose that account on a line below.
+			</p>
+		{/if}
 		<div class="toolbar" style="margin:0.6rem 0 0; align-items:flex-end">
 			<label style="flex:1; min-width:14rem">Why (optional) <input bind:value={reason} maxlength="500" placeholder="e.g. receipt total was 45.00" /></label>
 			{#each draftTotals as t (t.currency)}
@@ -629,6 +648,9 @@
 	}
 	.amend .off {
 		color: var(--danger);
+	}
+	.amend .steer {
+		color: var(--warn, #92400e);
 	}
 	.root-tools {
 		border-color: var(--danger);

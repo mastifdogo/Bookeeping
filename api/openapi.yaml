@@ -3698,8 +3698,8 @@ components:
         is_active: { type: boolean }
     AccountKind:
       type: string
-      enum: [chequing, savings, credit_card, clearing]
-      description: What a bank-type account is (chequing and savings are asset accounts, credit_card a liability), or clearing for an in-between asset or liability account whose balance should return to zero.
+      enum: [chequing, savings, credit_card, clearing, receivable, payable]
+      description: What a bank-type account is (chequing and savings are asset accounts, credit_card a liability), clearing for an in-between asset or liability account whose balance should return to zero, receivable for accounts receivable (an asset; customers' invoices are posted there) or payable for accounts payable (a liability; vendors' bills and receipts).
     JournalEntryCreate:
       type: object
       required: [entry_date, description, lines]
