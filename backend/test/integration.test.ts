@@ -4517,6 +4517,14 @@ test("tags on entries are shared: a tag one module sets, another module and peop
 	assert.deepEqual((await call("GET", "/tags")).json().data.map((x: any) => [x.tag, x.entries]), [["paid", 1], ["billed", 1], ["overdue", 0], ["customer", 0], ["vendor", 0], ["rate", 0], ["disputed", 1]]);
 	expectStatus(await call("GET", "/journal-entries?tag=Bad%20Tag"), 422);
 
+	// So do an account's ledger and a reconciliation: each line carries its entry's tags.
+	r = await call("GET", "/accounts/1200/ledger");
+	assert.deepEqual(r.json().lines.map((l: any) => [l.journal_entry_id, l.tags.map((x: any) => x.tag)]), [[inv.id, ["billed", "paid"]], [other.id, ["disputed"]]]);
+	r = await call("POST", "/reconciliations", { account_code: "1200", statement_date: "2026-03-01", statement_balance_cents: 50000 });
+	expectStatus(r, 201);
+	assert.deepEqual(r.json().lines.map((l: any) => [l.journal_entry_id, l.tags.map((x: any) => x.tag)]), [[inv.id, ["billed", "paid"]]]);
+	expectStatus(await call("DELETE", `/reconciliations/${r.json().reconciliation.id}`), 204);
+
 	// Deleting a tagged entry in root mode and reversing it brings its tags back.
 	await call("POST", "/auth/root", { on: true });
 	r = await call("DELETE", `/journal-entries/${inv.id}/root`);

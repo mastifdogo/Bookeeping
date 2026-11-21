@@ -5,6 +5,7 @@
 	import StatementPicker from '#lib/components/StatementPicker.svelte';
 	import { api, unwrap, type ReconciliationDetail } from '#lib/api/client.ts';
 	import { centsToInput, formatCents, parseSignedAmount } from '#lib/money.ts';
+	import { tagLabel } from '#lib/tags.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -403,6 +404,9 @@
 						<td><a href="/journal/{l.journal_entry_id}">{l.journal_entry_id}</a></td>
 						<td>
 							{l.description}{#if l.reference}<span class="muted small"> · {l.reference}</span>{/if}
+							{#each l.tags as t (t.id)}
+								<span class="badge tag {t.tag}" title={t.module_id ? `Set by ${t.module_id}` : 'Set by a person'}>{tagLabel(t)}</span>
+							{/each}
 							{#if l.memo}<div class="muted small">{l.memo}</div>{/if}
 							{#if aiMatch.get(l.transaction_id)}
 								{@const m = aiMatch.get(l.transaction_id)!}

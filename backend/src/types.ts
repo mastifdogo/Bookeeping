@@ -210,6 +210,8 @@ export interface AccountLedgerLine {
 	debit_cents: bigint;
 	credit_cents: bigint;
 	running_balance_cents: bigint;
+	/** The tags of the line's entry (paid, billed, customer…). */
+	tags: import("./tags.ts").EntryTag[];
 }
 
 export interface AccountLedger {

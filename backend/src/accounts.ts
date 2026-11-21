@@ -5,6 +5,7 @@ import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
 import { splitAmount } from "./money.ts";
 import { checkText, trimSpace } from "./text.ts";
 import { today } from "./date.ts";
+import { tagsOfEntries } from "./tags.ts";
 import {
 	ACCOUNT_CODE_RE,
 	ACCOUNT_KINDS,
@@ -344,6 +345,7 @@ export async function getAccountLedger(app: App, code: string, from: string | nu
 			  ORDER BY e.entry_date, e.id, t.line_number`,
 			[acc.id, from, to],
 		);
+		const tags = await tagsOfEntries(tx, [...new Set(rows.map((r) => r.entry_id))]);
 		let running = opening;
 		const lines = rows.map((r) => {
 			running += r.amount;
@@ -358,6 +360,7 @@ export async function getAccountLedger(app: App, code: string, from: string | nu
 				debit_cents: debit,
 				credit_cents: credit,
 				running_balance_cents: running,
+				tags: tags.get(Number(r.entry_id)) ?? [],
 			};
 		});
 		return { account: toAccount(acc), opening_balance_cents: opening, closing_balance_cents: running, lines };

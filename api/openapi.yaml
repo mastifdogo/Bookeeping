@@ -3728,7 +3728,7 @@ components:
           type: array
           items:
             type: object
-            required: [journal_entry_id, line_id, entry_date, description, memo, debit_cents, credit_cents, running_balance_cents]
+            required: [journal_entry_id, line_id, entry_date, description, memo, debit_cents, credit_cents, running_balance_cents, tags]
             properties:
               journal_entry_id: { type: integer, format: int64 }
               line_id: { type: integer, format: int64 }
@@ -3739,6 +3739,10 @@ components:
               debit_cents: { $ref: '#/components/schemas/Cents' }
               credit_cents: { $ref: '#/components/schemas/Cents' }
               running_balance_cents: { $ref: '#/components/schemas/SignedCents' }
+              tags:
+                type: array
+                description: The tags of the line's entry
+                items: { $ref: '#/components/schemas/EntryTag' }
 
     TrialBalance:
       type: object
@@ -4026,7 +4030,7 @@ components:
         document_type: { type: string, nullable: true }
     ReconciliationLine:
       type: object
-      required: [transaction_id, journal_entry_id, entry_date, description, reference, memo, debit_cents, credit_cents, amount_cents, cleared]
+      required: [transaction_id, journal_entry_id, entry_date, description, reference, memo, debit_cents, credit_cents, amount_cents, cleared, tags]
       properties:
         transaction_id: { type: integer, format: int64 }
         journal_entry_id: { type: integer, format: int64 }
@@ -4040,6 +4044,10 @@ components:
           allOf: [{ $ref: '#/components/schemas/SignedCents' }]
           description: In the account's natural sign
         cleared: { type: boolean }
+        tags:
+          type: array
+          description: The tags of the line's entry
+          items: { $ref: '#/components/schemas/EntryTag' }
     ReconciliationDetail:
       type: object
       required: [reconciliation, opening_balance_cents, cleared_balance_cents, difference_cents, lines, totals, reading, previous_statement_date, gap_days, gap_warning]

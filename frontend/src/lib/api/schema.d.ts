@@ -2609,6 +2609,8 @@ export interface components {
                 debit_cents: components["schemas"]["Cents"];
                 credit_cents: components["schemas"]["Cents"];
                 running_balance_cents: components["schemas"]["SignedCents"];
+                /** @description The tags of the line's entry */
+                tags: components["schemas"]["EntryTag"][];
             }[];
         };
         TrialBalance: {
@@ -2897,6 +2899,8 @@ export interface components {
             /** @description In the account's natural sign */
             amount_cents: components["schemas"]["SignedCents"];
             cleared: boolean;
+            /** @description The tags of the line's entry */
+            tags: components["schemas"]["EntryTag"][];
         };
         ReconciliationDetail: {
             /**

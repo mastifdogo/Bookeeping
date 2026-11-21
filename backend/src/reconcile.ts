@@ -9,6 +9,7 @@ import { ensureClearingAccount } from "./accounts.ts";
 import { queryRow, queryRows, withTx, type Queryable } from "./db.ts";
 import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
 import { checkLinesPostable, insertJournalEntry, jsonFieldNames, lockAccounts, validateEntry } from "./ledger.ts";
+import { tagsOfEntries, type EntryTag } from "./tags.ts";
 import type { AccountType, Currency, JournalEntryCreate } from "./types.ts";
 import { moveLines, syncUnreconciledLater, UNRECONCILED_WHERE } from "./unreconciled.ts";
 
@@ -69,6 +70,8 @@ export interface ReconciliationLine {
 	/** In the account's natural sign. */
 	amount_cents: bigint;
 	cleared: boolean;
+	/** The tags of the line's entry (paid, billed, customer…). */
+	tags: EntryTag[];
 }
 
 /** How many lines, and how much, on each side of the account. */
@@ -193,6 +196,7 @@ export async function getReconciliation(app: App, id: bigint, db: Queryable = ap
 		  ORDER BY je.entry_date, t.journal_entry_id, t.line_number`,
 		[r.account_id, id, r.statement_date],
 	);
+	const tags = await tagsOfEntries(db, [...new Set(lines.map((l) => l.journal_entry_id))]);
 	const openingCents = s * (opening?.total ?? 0n);
 	let cleared = openingCents;
 	const out: ReconciliationLine[] = lines.map((l) => {
@@ -209,6 +213,7 @@ export async function getReconciliation(app: App, id: bigint, db: Queryable = ap
 			credit_cents: l.amount < 0n ? -l.amount : 0n,
 			amount_cents: amount,
 			cleared: l.cleared,
+			tags: tags.get(Number(l.journal_entry_id)) ?? [],
 		};
 	});
 	const prev = await queryRow<{ date: string; days: number; late: boolean }>(
