@@ -23,6 +23,7 @@ import { builtFor, compatible, scanInstalled, type InstalledModule, type ModuleM
 import { createAccount, ensureClearingAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listClearingAccounts } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
+import { relateEntries, relatedEntries, unrelateEntries } from "./related.ts";
 import { createEntity, ensureEntity, findEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
 import { moduleValues, saveSettings, type SettingValue } from "./module-settings.ts";
 import type { SearchProvider } from "./search.ts";
@@ -475,6 +476,19 @@ function makeContext(app: App, m: LoadedModule) {
 			unlinkJournalEntry: (entryId: number | bigint | string, ref: string) => unlinkJournalEntry(app, entryIdOf(entryId), id, ref),
 			/** Entries linked to one of this module's records (all of them without ref): [{ entry_id, ref, label, href, reversed }]. */
 			linkedEntries: (ref?: string) => linkedEntries(app, id, ref === undefined ? undefined : String(ref)),
+			/**
+			 * Links two journal entries to each other (a payment and the invoice
+			 * it settles): each then shows on the other's page. opts.note says
+			 * what the link is; the same pair again changes the note.
+			 */
+			relateEntries: async (entryId: number | bigint | string, otherId: number | bigint | string, opts: { note?: string } = {}, user?: { username: string }) => {
+				await relateEntries(app, entryIdOf(entryId), entryIdOf(otherId), opts?.note, { moduleId: id, userId: actorOf(user) });
+				return relatedEntries(app, entryIdOf(entryId));
+			},
+			/** Takes off the link between two entries (whoever made it); false if there was none. */
+			unrelateEntries: (entryId: number | bigint | string, otherId: number | bigint | string) => unrelateEntries(app, entryIdOf(entryId), entryIdOf(otherId)),
+			/** Every entry linked to this one, oldest first: [{ id, entry_date, description, reference, totals, tags, reversed, direct, why }]. */
+			relatedEntries: (entryId: number | bigint | string) => relatedEntries(app, entryIdOf(entryId)),
 			reverseJournalEntry: (entryId: number | bigint, opts: { entry_date?: string; description?: string } = {}, user?: { username: string }) =>
 				reverseJournalEntry(app, BigInt(entryId), opts, actorOf(user)),
 			trialBalance: (opts: { asOf?: string; currency?: string } = {}) => getTrialBalance(app, opts.asOf ?? null, cur(opts.currency)),

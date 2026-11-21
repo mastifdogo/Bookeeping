@@ -2,6 +2,7 @@
 // serves the built SvelteKit frontend.
 
 import { listTags, removeTag, removeTags, setTag, setTags } from "./tags.ts";
+import { relateEntries, unrelateEntries } from "./related.ts";
 import { backgroundImage, chooseBackground, dimBackground, getBackground, removeBackground, searchWallhaven } from "./wallhaven.ts";
 import { MAX_CENTS } from "./money.ts";
 import { closeSession, consoleOpen, emit, installConsole, listen, onSessionClose, withConsoleContext } from "./console.ts";
@@ -1158,6 +1159,26 @@ async function handleRemoveTag(c: Ctx): Promise<void> {
 	const e = c.query.get("entity_id");
 	const t = c.query.get("id");
 	await removeTag(c.app, id, { tag: c.params.tag ?? "", entity_id: e ? Number(e) : null, id: t ? Number(t) : null }, { moduleId: null });
+	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
+}
+
+/** Links this entry to another one (or changes that link's note). */
+async function handleRelateEntry(c: Ctx): Promise<void> {
+	const id = pathId(c, "entryId");
+	const b = await decodeBody(c, true, objectBody(["entry_id", "note"]));
+	const other = tagNum(b.entry_id);
+	if (other === null || !Number.isSafeInteger(other) || other < 1) {
+		const v = new ValidationError();
+		v.add("entry_id", "must be the number of a journal entry");
+		throw v;
+	}
+	await relateEntries(c.app, id, BigInt(other), b.note, { moduleId: null, userId: c.user!.id });
+	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
+}
+
+async function handleUnrelateEntry(c: Ctx): Promise<void> {
+	const id = pathId(c, "entryId");
+	if (!(await unrelateEntries(c.app, id, pathId(c, "otherId")))) throw new NotFoundError();
 	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
 }
 
@@ -2527,6 +2548,8 @@ const ROUTES: Route[] = [
 	route("POST", "/journal-entries/:entryId/tags", true, handleSetTag),
 	route("POST", "/journal-entries/tags", true, handleBatchTags),
 	route("DELETE", "/journal-entries/:entryId/tags/:tag", true, handleRemoveTag),
+	route("POST", "/journal-entries/:entryId/related", true, handleRelateEntry),
+	route("DELETE", "/journal-entries/:entryId/related/:otherId", true, handleUnrelateEntry),
 
 	route("GET", "/search", true, handleSearch),
 	route("GET", "/dashboard", true, handleGetDashboard),

@@ -1,4 +1,5 @@
 import type { App } from "./app.ts";
+import { relatedEntries } from "./related.ts";
 import { tagsOfEntries } from "./tags.ts";
 import { entryMoves } from "./unreconciled.ts";
 import { withTx, queryRow, queryRows, toNumber, type Queryable } from "./db.ts";
@@ -625,7 +626,16 @@ export async function getJournalEntry(app: App, id: bigint): Promise<JournalEntr
 	e.changes = e.amended ? await entryChanges(app.db, id) : [];
 	e.moves = await entryMoves(app.db, id);
 	e.date_changes = await entryDateChanges(app.db, id);
+	e.related = await relatedEntries(app, id);
 	return e;
+}
+
+/** The given entries with their lines, totals, links and tags (no particular order). */
+export async function journalEntriesByIds(app: App, ids: number[]): Promise<JournalEntry[]> {
+	if (ids.length === 0) return [];
+	const entries = (await queryRows<EntryRow>(app.db, ENTRY_SELECT + ` WHERE e.id = ANY($1::bigint[])`, [ids])).map(toEntry);
+	await attachLines(app, entries);
+	return entries;
 }
 
 export interface EntryFilter {

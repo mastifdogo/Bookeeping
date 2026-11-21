@@ -147,6 +147,8 @@ export interface JournalEntry {
 	moves?: import("./unreconciled.ts").EntryMove[];
 	/** Every change to its date, oldest first (only when one entry is fetched). */
 	date_changes?: EntryDateChange[];
+	/** Every entry linked to this one, oldest first (only when one entry is fetched; related.ts). */
+	related?: import("./related.ts").RelatedEntry[];
 }
 
 /** One change to the date of a posted entry. */

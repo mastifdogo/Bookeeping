@@ -786,6 +786,55 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /journal-entries/{entryId}/related:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      tags: [Journal Entries]
+      operationId: relateEntry
+      summary: Link this entry to another one
+      description: |
+        Links two journal entries to each other (a payment and the invoice it
+        settled, a transfer's two halves). Each then shows on the other's
+        page, under `related`. The same pair again changes the note.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entry_id]
+              additionalProperties: false
+              properties:
+                entry_id: { type: integer, format: int64, description: The other entry }
+                note: { type: string, maxLength: 200, description: What the link is }
+      responses:
+        '200':
+          description: The entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JournalEntry' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /journal-entries/{entryId}/related/{otherId}:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+      - { name: otherId, in: path, required: true, schema: { type: integer, format: int64 } }
+    delete:
+      tags: [Journal Entries]
+      operationId: unrelateEntry
+      summary: Take off the link between two entries
+      responses:
+        '200':
+          description: The entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JournalEntry' }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /unreconciled:
     get:
       tags: [Reconciliation]
@@ -3258,6 +3307,43 @@ components:
             url: { type: string, description: "The picture's page on Wallhaven" }
             dim: { type: integer, description: 'How much of the page colour is laid over the picture, percent' }
             version: { type: integer, format: int64 }
+    RelatedEntry:
+      type: object
+      description: An entry linked to the one fetched
+      required: [id, entry_date, description, reference, totals, tags, reversed, direct, why]
+      properties:
+        id: { type: integer, format: int64 }
+        entry_date: { type: string, format: date }
+        description: { type: string }
+        reference: { type: string }
+        totals:
+          type: array
+          items: { $ref: '#/components/schemas/CurrencyTotal' }
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/EntryTag' }
+        reversed: { type: boolean, description: It was reversed, or is itself a reversal }
+        direct: { type: boolean, description: The two entries are linked themselves; that link can be taken off }
+        why:
+          type: array
+          description: Each reason it is shown
+          items:
+            type: object
+            required: [kind, note, module_id, set_by, label, href, through]
+            properties:
+              kind:
+                type: string
+                enum: [linked, chain, record, reverses, reversed_by]
+                description: |
+                  linked: the two entries are linked. chain: linked to an entry
+                  linked to this one. record: both are linked to the same record
+                  of a module. reverses / reversed_by: the entry and its reversal.
+              note: { type: string, description: 'linked: what the link is' }
+              module_id: { type: string, nullable: true, description: 'linked: the module that made it (null: a person). record: whose record it is' }
+              set_by: { type: string, nullable: true, description: 'linked: who made it' }
+              label: { type: string, description: 'record: its name' }
+              href: { type: string, description: 'record: where it opens' }
+              through: { type: integer, format: int64, nullable: true, description: 'chain: the linked entry it was reached through' }
     EntryTag:
       type: object
       required: [id, tag, entity, note, module_id, set_by, set_at]
@@ -3603,6 +3689,10 @@ components:
           description: Tags shared by Ledger and every module (paid, billed, overdue, customer, vendor, and others)
           items: { $ref: '#/components/schemas/EntryTag' }
         amended: { type: boolean, description: Whether any of its amounts were changed after it was posted }
+        related:
+          type: array
+          description: Every entry linked to this one, oldest first (only when one entry is fetched)
+          items: { $ref: '#/components/schemas/RelatedEntry' }
         date_changes:
           type: array
           description: Every change to its date, oldest first (only when one entry is fetched)

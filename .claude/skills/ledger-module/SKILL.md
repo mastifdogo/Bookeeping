@@ -106,6 +106,21 @@ Decide, and state briefly to the user:
   journal to the invoice or bank line, and find a record's entries with
   `ctx.ledger.linkedEntries(ref)`. Account codes the module uses are
   **settings** (e.g. `receivable_account`, default `1200`), never hard-coded.
+- **Linked entries** (Ledger 0.28.0; needs `"ledger": ">=0.28.0"`): an
+  entry's page lists every entry linked to it, with date, amount and tags.
+  Entries linked to the same record (the same `ref`: an invoice's entry and
+  each of its payments on `invoice:31`) show with each other already, and so
+  do reversals. For entries that belong together without a record in common
+  (a payment and the bill another module posted, a transfer's two halves, a
+  refund and its sale), link the two:
+  `await ctx.ledger.relateEntries(entryId, otherId, { note }, req.user)`,
+  `ctx.ledger.unrelateEntries(entryId, otherId)`,
+  `ctx.ledger.relatedEntries(entryId)` → `[{ id, entry_date, description,
+  totals, tags, reversed, direct, why: [{ kind: "linked" | "chain" |
+  "record" | "reverses" | "reversed_by", note, module_id, label, href,
+  through }] }]` (also `related` on `getJournalEntry`). A link belongs to
+  the entries, so a person or another module can take it off; it says the
+  entries belong together, nothing more (paid and billed stay tags).
 - **Settings**: everything the user configures (API keys as `secret`
   fields, account codes, options) goes in the manifest's `settings.fields`.
   Ledger renders the form on the module's Settings tab. A module with many

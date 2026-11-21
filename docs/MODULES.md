@@ -186,6 +186,9 @@ amounts can be numbers, bigints or digit strings.
 | `linkJournalEntry(id, { ref, label, href }, req.user)` | Links an entry to one of the module's records (Ledger 0.11.2 and later). `createJournalEntry` also takes `links: [{ ref, label, href }]`. |
 | `unlinkJournalEntry(id, ref)` | Removes one of the module's links. |
 | `linkedEntries(ref?)` | `[{ entry_id, ref, label, href, reversed }]` for one record, or all of the module's links. |
+| `relateEntries(id, otherId, { note }, req.user)` | Links two journal entries to each other (Ledger 0.28.0 and later); returns `relatedEntries(id)`. See [Linked entries](#linked-entries). |
+| `unrelateEntries(id, otherId)` | Takes that link off; `false` if there was none. |
+| `relatedEntries(id)` | Every entry linked to that one, oldest first. |
 | `trialBalance({ asOf, currency })`, `balanceSheet({ asOf, currency })`, `incomeStatement({ from, to, currency })` | |
 
 **`ctx.dashboard`** puts notifications and to-dos on Ledger's dashboard,
@@ -333,6 +336,39 @@ longer carry the amounts it posted. Where the figure matters (an invoice's
 balance, a bill marked paid), read it from the entry
 (`ctx.ledger.linkedEntries(ref)`) instead of trusting the module's own copy,
 and show a difference to the user rather than overwriting either side.
+
+## Linked entries
+
+Since Ledger 0.28.0 an entry's page lists every entry linked to it, with
+its date, amount and tags, and `getJournalEntry(id)` carries the same list
+as `related`. An entry shows there when:
+
+- the two were **linked to each other**, by a person on the entry's page or
+  by a module (`kind: "linked"`), or it is linked to an entry that is
+  (`"chain"`, with `through`);
+- both are linked to the **same record of a module**: the same `ref` from
+  the same module (`"record"`). So linking an invoice's entry and each of its
+  payments to `invoice:31` is enough for them to show with each other;
+- one **reverses** the other (`"reverses"`, `"reversed_by"`).
+
+Link entries that belong together and have no record in common: a payment
+and the invoice or bill it settles when another module posted one of them, a
+transfer's two halves, a refund and its sale.
+
+```js
+await ctx.ledger.relateEntries(paymentEntryId, invoiceEntryId, { note: "payment of invoice 12" }, req.user);
+const related = await ctx.ledger.relatedEntries(invoiceEntryId);
+// [{ id, entry_date, description, reference, totals, tags, reversed, direct,
+//    why: [{ kind, note, module_id, set_by, label, href, through }] }]
+await ctx.ledger.unrelateEntries(paymentEntryId, invoiceEntryId);   // true, or false if there was none
+```
+
+A link has no direction and is there once per pair: the same pair again,
+either way round, changes the note (up to 200 characters). Like a tag, it
+belongs to the entries, not to the module that made it: any module or person
+can take it off (`direct: true` marks the ones that can be). It says the
+entries belong together, nothing more: whether something is paid or billed
+is still a tag. At most 200 entries are listed for one entry.
 
 ## Tags: one system for every module
 

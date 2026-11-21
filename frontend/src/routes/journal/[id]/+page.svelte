@@ -6,6 +6,8 @@
 	import { api, today, unwrap } from '#lib/api/client.ts';
 	import { centsToInput, formatCents, parseAmount } from '#lib/money.ts';
 	import TagFields from '#lib/components/TagFields.svelte';
+	import EntryTotals from '#lib/components/EntryTotals.svelte';
+	import { openRow } from '#lib/rows.ts';
 	import { emptyTagForm, tagBody, tagLabel } from '#lib/tags.ts';
 	import type { PageProps } from './$types';
 
@@ -235,6 +237,45 @@
 			unwrap(await api().DELETE('/journal-entries/{entryId}/tags/{tag}', { params: { path: { entryId: e.id, tag: t.tag }, query: { entity_id: t.entity?.id, id: t.tag === 'rate' ? t.id : undefined } } }))
 		);
 
+	// Linked entries: every entry linked to this one (the payment of an invoice, a transfer's other half).
+	let related = $derived(e.related ?? []);
+	let linkTo = $state('');
+	let linkNote = $state('');
+	const whyText = (w: (typeof related)[number]['why'][number]) =>
+		w.kind === 'linked'
+			? `Linked${w.note ? `: ${w.note}` : ''}${w.module_id ? ` (by ${moduleName(w.module_id)})` : w.set_by ? ` (by ${w.set_by})` : ''}`
+			: w.kind === 'chain'
+				? `Through #${w.through}`
+				: w.kind === 'record'
+					? `${w.label} (${moduleName(w.module_id ?? '')})`
+					: w.kind === 'reverses'
+						? 'Reversed by this entry'
+						: 'Reverses this entry';
+	async function linkAct(fn: () => Promise<unknown>) {
+		busy = true;
+		error = null;
+		try {
+			await fn();
+			linkTo = '';
+			linkNote = '';
+			await invalidateAll();
+		} catch (err) {
+			error = err;
+		} finally {
+			busy = false;
+		}
+	}
+	const addLink = (ev: SubmitEvent) => {
+		ev.preventDefault();
+		const other = Number(linkTo.trim().replace(/^#/, ''));
+		if (!Number.isSafeInteger(other) || other < 1) {
+			error = new Error('Type the number of the entry to link, e.g. 412.');
+			return;
+		}
+		return linkAct(async () => unwrap(await api().POST('/journal-entries/{entryId}/related', { params: { path: { entryId: e.id } }, body: { entry_id: other, note: linkNote.trim() } })));
+	};
+	const dropLink = (other: number) => linkAct(async () => unwrap(await api().DELETE('/journal-entries/{entryId}/related/{otherId}', { params: { path: { entryId: e.id, otherId: other } } })));
+
 	// One log of what changed after posting: amounts, the date and lines moved to another account.
 	type LogRow = { key: string; at: string; by: string | null; what: string; was: string; now: string; why: string };
 	const money = (c: number) => formatCents(c);
@@ -402,6 +443,48 @@
 				</li>
 			{/each}
 		</ul>
+	</div>
+{/if}
+
+{#if related.length > 0 || canEdit}
+	<div class="card related">
+		<div class="muted small">Linked entries <span title="Entries linked to this one here or by a module, entries of the same module record, and reversals.">({related.length})</span></div>
+		{#if related.length > 0}
+			<div class="table-wrap" style="margin-top:0.35rem">
+				<table>
+					<thead>
+						<tr><th>Date</th><th>#</th><th>Description</th><th>Why</th><th class="num">Amount</th><th></th></tr>
+					</thead>
+					<tbody>
+						{#each related as r (r.id)}
+							<tr class="clickable" onclick={(ev) => openRow(ev, `/journal/${r.id}`)}>
+								<td class="mono">{r.entry_date}</td>
+								<td><a class="quiet" href="/journal/{r.id}">{r.id}</a></td>
+								<td>
+									{r.description}{#if r.reference}<span class="muted small"> · {r.reference}</span>{/if}
+									{#each r.tags as t (t.id)}<span class="badge tag {t.tag}">{tagLabel(t)}</span>{/each}
+									{#if r.reversed}<span class="badge warn">reversed</span>{/if}
+								</td>
+								<td class="small">
+									{#each r.why as w, i (i)}
+										<div>{#if w.kind === 'record' && w.href}<a href={w.href}>{w.label}</a> <span class="muted">({moduleName(w.module_id ?? '')})</span>{:else}{whyText(w)}{/if}</div>
+									{/each}
+								</td>
+								<td class="num"><EntryTotals totals={r.totals} /></td>
+								<td>{#if canEdit && r.direct}<button type="button" class="link small" disabled={busy} title="Take off the link to entry {r.id}" aria-label="Take off the link to entry {r.id}" onclick={() => dropLink(r.id)}>Unlink</button>{/if}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+		{#if canEdit}
+			<form class="toolbar" style="margin:0.5rem 0 0" onsubmit={addLink}>
+				<label>Entry # <input bind:value={linkTo} inputmode="numeric" size="8" placeholder="412" required /></label>
+				<label style="flex:1">Note <input bind:value={linkNote} maxlength="200" placeholder="e.g. payment of this invoice" /></label>
+				<button disabled={busy}>Link entry</button>
+			</form>
+		{/if}
 	</div>
 {/if}
 

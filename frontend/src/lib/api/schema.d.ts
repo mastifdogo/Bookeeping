@@ -482,6 +482,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/journal-entries/{entryId}/related": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link this entry to another one
+         * @description Links two journal entries to each other (a payment and the invoice it
+         *     settled, a transfer's two halves). Each then shows on the other's
+         *     page, under `related`. The same pair again changes the note.
+         */
+        post: operations["relateEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/journal-entries/{entryId}/related/{otherId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                otherId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Take off the link between two entries */
+        delete: operations["unrelateEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/unreconciled": {
         parameters: {
             query?: never;
@@ -2177,6 +2221,46 @@ export interface components {
                 version: number;
             } | null;
         };
+        /** @description An entry linked to the one fetched */
+        RelatedEntry: {
+            /** Format: int64 */
+            id: number;
+            /** Format: date */
+            entry_date: string;
+            description: string;
+            reference: string;
+            totals: components["schemas"]["CurrencyTotal"][];
+            tags: components["schemas"]["EntryTag"][];
+            /** @description It was reversed */
+            reversed: boolean;
+            /** @description The two entries are linked themselves; that link can be taken off */
+            direct: boolean;
+            /** @description Each reason it is shown */
+            why: {
+                /**
+                 * @description linked: the two entries are linked. chain: linked to an entry
+                 *     linked to this one. record: both are linked to the same record
+                 *     of a module. reverses / reversed_by: the entry and its reversal.
+                 * @enum {string}
+                 */
+                kind: "linked" | "chain" | "record" | "reverses" | "reversed_by";
+                /** @description linked: what the link is */
+                note: string;
+                /** @description linked: the module that made it (null: a person). record: whose record it is */
+                module_id: string | null;
+                /** @description linked: who made it */
+                set_by: string | null;
+                /** @description record: its name */
+                label: string;
+                /** @description record: where it opens */
+                href: string;
+                /**
+                 * Format: int64
+                 * @description chain: the linked entry it was reached through
+                 */
+                through: number | null;
+            }[];
+        };
         EntryTag: {
             /** @description The tag's own number; tells an entry's rate items apart */
             id: number;
@@ -2486,6 +2570,8 @@ export interface components {
             tags: components["schemas"]["EntryTag"][];
             /** @description Whether any of its amounts were changed after it was posted */
             amended: boolean;
+            /** @description Every entry linked to this one, oldest first (only when one entry is fetched) */
+            related?: components["schemas"]["RelatedEntry"][];
             /** @description Every change to its date, oldest first (only when one entry is fetched) */
             date_changes?: {
                 id: number;
@@ -4462,6 +4548,68 @@ export interface operations {
             path: {
                 entryId: components["parameters"]["EntryId"];
                 tag: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
+            404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    relateEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int64
+                     * @description The other entry
+                     */
+                    entry_id: number;
+                    /** @description What the link is */
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    unrelateEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+                otherId: number;
             };
             cookie?: never;
         };

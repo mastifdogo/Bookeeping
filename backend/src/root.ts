@@ -69,6 +69,17 @@ async function putBack(tx: Queryable, id: bigint, table: string, key: string): P
 	);
 }
 
+/** Links between entries come back where the entry at the other end is still there. */
+async function putBackRelations(tx: Queryable, id: bigint): Promise<void> {
+	await tx.query(
+		`INSERT INTO journal_entry_relations OVERRIDING SYSTEM VALUE
+		 SELECT r.* FROM jsonb_populate_recordset(NULL::journal_entry_relations, (SELECT coalesce(undo->'relations', '[]'::jsonb) FROM root_actions WHERE id = $1)) r
+		  WHERE EXISTS (SELECT 1 FROM journal_entries e WHERE e.id = r.entry_id) AND EXISTS (SELECT 1 FROM journal_entries e WHERE e.id = r.related_id)
+		 ON CONFLICT DO NOTHING`,
+		[id],
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Bookkeeping accounts
 // ---------------------------------------------------------------------------
@@ -147,6 +158,8 @@ export async function rootDeleteAccount(app: App, code: string, user: User): Pro
 		await keep(tx, id, "links", `SELECT * FROM journal_entry_links WHERE entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "code_changes", `SELECT * FROM account_code_changes WHERE account_id = $2`, [a]);
 		await keep(tx, id, "tags", `SELECT * FROM journal_entry_tags WHERE entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "relations", `SELECT * FROM journal_entry_relations WHERE entry_id = ANY($2::bigint[]) OR related_id = ANY($2::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entry_relations WHERE entry_id = ANY($1::bigint[]) OR related_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM journal_entry_tags WHERE entry_id = ANY($1::bigint[])`, [e]);
 
 		await tx.query(
@@ -444,6 +457,7 @@ export async function reverseRootAction(app: App, scope: RootAction["scope"], id
 			await putBack(tx, id, "journal_entry_links", "links");
 			await putBack(tx, id, "account_code_changes", "code_changes");
 			await putBack(tx, id, "journal_entry_tags", "tags");
+			await putBackRelations(tx, id);
 			const acc = `(SELECT (undo->'account'->0->>'id')::bigint FROM root_actions WHERE id = $1)`;
 			await tx.query(`UPDATE accounts SET parent_id = ${acc} WHERE id IN (SELECT (c->>'id')::bigint FROM jsonb_array_elements((SELECT undo->'children' FROM root_actions WHERE id = $1)) c)`, [id]);
 			await tx.query(`UPDATE documents SET account_id = ${acc} WHERE id IN (SELECT (c->>'id')::bigint FROM jsonb_array_elements((SELECT undo->'documents' FROM root_actions WHERE id = $1)) c)`, [id]);
@@ -467,6 +481,7 @@ async function putBackEntries(tx: Queryable, id: bigint): Promise<void> {
 	await putBack(tx, id, "journal_entry_date_changes", "dates");
 	await putBack(tx, id, "journal_entry_links", "links");
 	await putBack(tx, id, "journal_entry_tags", "tags");
+	await putBackRelations(tx, id);
 }
 
 /** Deletes a journal entry whole (with the entry that reverses it, or that it reverses). */
@@ -485,6 +500,8 @@ export async function rootDeleteEntry(app: App, entryId: bigint, user: User): Pr
 		await keep(tx, id, "dates", `SELECT * FROM journal_entry_date_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "links", `SELECT * FROM journal_entry_links WHERE entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "tags", `SELECT * FROM journal_entry_tags WHERE entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "relations", `SELECT * FROM journal_entry_relations WHERE entry_id = ANY($2::bigint[]) OR related_id = ANY($2::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entry_relations WHERE entry_id = ANY($1::bigint[]) OR related_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM journal_entry_tags WHERE entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM reconciliation_lines WHERE transaction_id IN (SELECT id FROM transactions WHERE journal_entry_id = ANY($1::bigint[]))`, [e]);
 		await tx.query(`DELETE FROM transaction_changes WHERE journal_entry_id = ANY($1::bigint[])`, [e]);

@@ -176,7 +176,7 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
 | `listAccounts({ includeInactive? })` | `Account[]` |
 | `getAccount(code)` | `Account` (throws 404 if missing) |
 | `createAccount({ code, name, type, currency, description?, parent_code? })` | `Account` (`parent_code`: Ledger ≥ 0.15.0) |
-| `accountLedger(code, { from?, to? })` | `{ account, opening_balance_cents, closing_balance_cents, lines: [{ journal_entry_id, line_id, entry_date, description, reference, memo, debit_cents, credit_cents, running_balance_cents }] }` |
+| `accountLedger(code, { from?, to? })` | `{ account, opening_balance_cents, closing_balance_cents, lines: [{ journal_entry_id, line_id, entry_date, description, reference, memo, debit_cents, credit_cents, running_balance_cents, tags }] }` (`tags`: the entry's, Ledger ≥ 0.28.0) |
 | `listJournalEntries({ from?, to?, accountCode?, limit? (1-500, default 50), offset? })` | `JournalEntry[]`, newest first |
 | `getJournalEntry(id)` | `JournalEntry` |
 | `createJournalEntry({ entry_date, description, reference?, lines: [{ account_code, debit_cents?, credit_cents?, memo? }], links?: [{ ref, label, href? }] }, req.user)` | `JournalEntry`. Amounts: number, bigint or digit string. Pass `req.user` to attribute it. `links` (Ledger ≥ 0.11.2) are saved in the same transaction. Invalid → throws (API answers 422). |
@@ -184,6 +184,9 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
 | `linkJournalEntry(id, { ref, label, href? }, req.user)` | `JournalEntry` (Ledger ≥ 0.11.2). Links the entry to one of your records; the same `ref` again updates it. |
 | `unlinkJournalEntry(id, ref)` | `true`, or `false` if there was no such link (only your own links) |
 | `linkedEntries(ref?)` | `[{ entry_id, ref, label, href, reversed }]`: entries linked to that record (all of your links without `ref`) |
+| `relateEntries(id, otherId, { note? }, req.user)` | `RelatedEntry[]` of `id` (Ledger ≥ 0.28.0). Links two journal entries to each other; the same pair again changes the note. |
+| `unrelateEntries(id, otherId)` | `true`, or `false` if the two weren't linked (anyone's link) |
+| `relatedEntries(id)` | `RelatedEntry[]`: every entry linked to that one, oldest first (at most 200) |
 | `trialBalance({ asOf?, currency? })` | `{ as_of, rows: [{ account_code, account_name, account_type, currency, debit_cents, credit_cents }], totals: [{ currency, debit_cents, credit_cents }] }` |
 | `balanceSheet({ asOf?, currency? })` | `{ as_of, currencies: [{ currency, assets, liabilities, equity: ReportLine[], net_income_cents, total_assets_cents, total_liabilities_cents, total_equity_cents, balanced }] }` |
 | `incomeStatement({ from?, to?, currency? })` | `{ from, to, currencies: [{ currency, revenue, expenses: ReportLine[], total_revenue_cents, total_expenses_cents, net_income_cents }] }` |
@@ -201,6 +204,23 @@ Acme"`), `href` where it opens in Ledger (`/apps/<id>?invoice=31`, optional).
 Ledger shows them on the entry and in the journal. Use `linkedEntries(ref)` to
 find a record's entries (e.g. to see whether an invoice was posted or
 reversed) instead of storing entry ids only in your own tables.
+
+**Linked entries** (Ledger ≥ 0.28.0): an entry's page lists every entry
+linked to it, and `getJournalEntry(id)` carries them as `related`.
+
+`RelatedEntry = { id, entry_date, description, reference, totals, tags, reversed, direct, why: [{ kind, note, module_id, set_by, label, href, through }] }`
+
+`why[].kind` is `"linked"` (the two entries were linked to each other, by a
+person or with `relateEntries`; `note`, `module_id` or `set_by` say what and
+by whom), `"chain"` (linked to the linked entry `through`), `"record"` (both
+are linked to the same `ref` of the same module; `label`, `href`) or
+`"reverses"` / `"reversed_by"`. `direct` is true when the two are linked to
+each other, which `unrelateEntries` can take off. Entries you link to one
+record (`invoice:31`: the invoice and each payment) already show with each
+other; use `relateEntries` for entries that belong together without a
+record in common (a payment and the bill another module posted, a
+transfer's two halves, a refund and its sale). It says the entries belong
+together, nothing more: paid, billed and overdue stay tags.
 
 ### Settings (manifest `settings`, Ledger ≥ 0.9.0)
 

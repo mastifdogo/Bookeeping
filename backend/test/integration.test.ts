@@ -4634,3 +4634,90 @@ test("rate tags carry quantity and price for forms; batch tagging; dashboard lay
 	expectStatus(await call("PUT", "/settings/dashboard-layout", { tiles: [] }), 200);
 	assert.deepEqual((await call("GET", "/settings/dashboard-layout")).json(), { tiles: [] });
 });
+
+test("linked entries: an entry shows every entry linked to it, by people, modules, shared records and reversals", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "1200", "Receivable", "asset", "CAD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	const post = async (date: string, what: string, ...lines: any[]) => (await call("POST", "/journal-entries", entry(date, what, ...lines))).json();
+	const inv = await post("2026-03-01", "Invoice 12", dr("1200", 50000), cr("4000", 50000));
+	const pay = await post("2026-03-10", "Payment", dr("1000", 50000), cr("1200", 50000));
+	const fee = await post("2026-03-11", "Bank fee refund", dr("1000", 500), cr("4000", 500));
+	const lone = await post("2026-03-12", "Unrelated", dr("1000", 100), cr("4000", 100));
+	await loadModules(t, app, {
+		sales: `export default function (ctx) {
+			ctx.route("POST", "/record", (req) => ctx.ledger.linkJournalEntry(req.body.entry, { ref: "invoice:12", label: "Invoice 12", href: "/apps/sales?invoice=12" }, req.user));
+			ctx.route("POST", "/relate", (req) => ctx.ledger.relateEntries(req.body.a, req.body.b, { note: req.body.note }, req.user));
+			ctx.route("POST", "/unrelate", async (req) => ({ removed: await ctx.ledger.unrelateEntries(req.body.a, req.body.b) }));
+			ctx.route("GET", "/related/:id", (req) => ctx.ledger.relatedEntries(req.params.id));
+		}`,
+	});
+	const shown = (e: any) => e.related.map((r: any) => [r.id, r.direct, r.why.map((w: any) => w.kind)]);
+	assert.deepEqual((await call("GET", `/journal-entries/${inv.id}`)).json().related, []);
+
+	// A person links the payment to the invoice: each shows on the other.
+	let r = await call("POST", `/journal-entries/${pay.id}/related`, { entry_id: inv.id, note: "payment of invoice 12" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().related.map((x: any) => [x.id, x.entry_date, x.description, x.totals[0].amount_cents, x.direct, x.why[0].kind, x.why[0].note, x.why[0].set_by, x.why[0].module_id]), [
+		[inv.id, "2026-03-01", "Invoice 12", 50000, true, "linked", "payment of invoice 12", "tester", null],
+	]);
+	assert.deepEqual(shown((await call("GET", `/journal-entries/${inv.id}`)).json()), [[pay.id, true, ["linked"]]]);
+	// Linking the same pair again, either way round, only changes the note.
+	r = await call("POST", `/journal-entries/${inv.id}/related`, { entry_id: pay.id, note: "paid in full" });
+	assert.deepEqual(r.json().related.map((x: any) => x.why[0].note), ["paid in full"]);
+	// The list of entries doesn't carry them: only one entry fetched does.
+	assert.equal((await call("GET", "/journal-entries")).json().data[0].related, undefined);
+
+	// What can't be linked.
+	expectStatus(await call("POST", `/journal-entries/${inv.id}/related`, { entry_id: inv.id }), 422);
+	expectStatus(await call("POST", `/journal-entries/${inv.id}/related`, { entry_id: 9999 }), 422);
+	expectStatus(await call("POST", `/journal-entries/${inv.id}/related`, { entry_id: "x" }), 422);
+	expectStatus(await call("POST", `/journal-entries/${inv.id}/related`, { entry_id: pay.id, note: "x".repeat(201) }), 422);
+	expectStatus(await call("POST", `/journal-entries/9999/related`, { entry_id: pay.id }), 404);
+	expectStatus(await call("DELETE", `/journal-entries/${inv.id}/related/${lone.id}`), 404);
+
+	// A module links the refund to the payment: the invoice sees it through the payment, with its tags.
+	expectStatus(await call("POST", `/journal-entries/${fee.id}/tags`, { tag: "paid" }), 200);
+	r = await call("POST", "/m/sales/relate", { a: pay.id, b: fee.id, note: "refund" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().map((x: any) => [x.id, x.why[0].kind, x.why[0].module_id]), [[inv.id, "linked", null], [fee.id, "linked", "sales"]]);
+	r = await call("GET", `/journal-entries/${inv.id}`);
+	assert.deepEqual(r.json().related.map((x: any) => [x.id, x.direct, x.why[0].kind, x.why[0].through, x.tags.map((g: any) => g.tag)]), [
+		[pay.id, true, "linked", null, []],
+		[fee.id, false, "chain", pay.id, ["paid"]],
+	]);
+
+	// Entries of the same module record show with each other, and so does a reversal.
+	expectStatus(await call("POST", "/m/sales/record", { entry: inv.id }), 200);
+	expectStatus(await call("POST", "/m/sales/record", { entry: lone.id }), 200);
+	const rev = (await call("POST", `/journal-entries/${lone.id}/reverse`, {})).json();
+	r = await call("GET", `/journal-entries/${lone.id}`);
+	assert.deepEqual(r.json().related.map((x: any) => [x.id, x.direct, x.reversed, x.why.map((w: any) => [w.kind, w.label, w.href])]), [
+		[inv.id, false, false, [["record", "Invoice 12", "/apps/sales?invoice=12"]]],
+		[rev.id, false, true, [["reversed_by", "", ""]]],
+	]);
+	assert.deepEqual(shown((await call("GET", `/journal-entries/${rev.id}`)).json()), [[lone.id, false, ["reverses"]]]);
+	// An entry both linked and on the same record says both.
+	assert.deepEqual((await call("GET", `/m/sales/related/${inv.id}`)).json().find((x: any) => x.id === lone.id).why.map((w: any) => w.kind), ["record"]);
+	expectStatus(await call("POST", `/journal-entries/${inv.id}/related`, { entry_id: lone.id }), 200);
+	assert.deepEqual((await call("GET", `/m/sales/related/${inv.id}`)).json().find((x: any) => x.id === lone.id).why.map((w: any) => w.kind), ["linked", "record"]);
+
+	// Taking a link off, by a module or a person, whoever made it.
+	assert.deepEqual((await call("POST", "/m/sales/unrelate", { a: lone.id, b: inv.id })).json(), { removed: true });
+	assert.deepEqual((await call("POST", "/m/sales/unrelate", { a: lone.id, b: inv.id })).json(), { removed: false });
+	r = await call("DELETE", `/journal-entries/${fee.id}/related/${pay.id}`);
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().related, []);
+
+	// Deleting a linked entry in root mode takes its links with it; reversing that brings them back.
+	await call("POST", "/auth/root", { on: true });
+	r = await call("DELETE", `/journal-entries/${pay.id}/root`);
+	expectStatus(r, 200);
+	assert.deepEqual(shown((await call("GET", `/journal-entries/${inv.id}`)).json()), [[lone.id, false, ["record"]]]);
+	expectStatus(await call("POST", `/root-actions/books/${r.json().id}/reverse`), 200);
+	assert.deepEqual(shown((await call("GET", `/journal-entries/${inv.id}`)).json()), [[pay.id, true, ["linked"]], [lone.id, false, ["record"]]]);
+	expectStatus(await call("POST", "/auth/root", { on: false }), 200);
+});

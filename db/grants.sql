@@ -38,6 +38,7 @@ GRANT SELECT, INSERT                  ON account_code_changes                   
 GRANT SELECT, INSERT                  ON transaction_moves                       TO :"app_role";
 GRANT SELECT, INSERT                  ON journal_entry_date_changes              TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON journal_entry_tags                      TO :"app_role";
+GRANT SELECT, INSERT, UPDATE, DELETE  ON journal_entry_relations                 TO :"app_role";
 -- Root mode (migration 024): the database guards refuse these unless the
 -- transaction has set ledger.root = 'on', and every root action is logged.
 GRANT SELECT, INSERT, UPDATE          ON root_actions                            TO :"app_role";
