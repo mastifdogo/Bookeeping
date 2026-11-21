@@ -89,10 +89,12 @@ The template is **not rebuilt for every Ledger release**: it keeps the same
 name and URL, and a container made from it installs the latest Ledger release
 on its first boot (first-boot setup asks the updater for a check; follow it on
 the **Updates** page). So one downloaded template keeps working, and new
-features arrive through the updater. The template is rebuilt, by running
-`.github/workflows/release.yml` with **Rebuild the LXC template** ticked, only
-when the container itself changes (first-boot setup, its packages,
-PostgreSQL's major version or the Debian release). Skip to "Using it" below.
+features arrive through the updater. The Release workflow
+(`.github/workflows/release.yml`) rebuilds the template automatically when a
+release raises the middle number (e.g. v0.27.3 → v0.28.0), not for fix
+releases; tick **Rebuild the LXC template** to rebuild it for any other
+release, e.g. when the container itself changes (first-boot setup, its
+packages, PostgreSQL's major version or the Debian release). Skip to "Using it" below.
 
 **Or build it yourself:**
 
