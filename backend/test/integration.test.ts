@@ -1921,12 +1921,13 @@ test("A posted entry's amounts can be changed, and every change is logged", asyn
 	assert.deepEqual([e.changes[3].old_credit_cents, e.changes[3].new_credit_cents, e.changes[3].reason], [5500, 5300, ""]);
 	assert.equal((await call("GET", "/journal-entries")).json().data.find((x: any) => x.id === id).amended, true);
 
-	// The database itself keeps the rule: no change without saying who, nothing but the amount, and the log can't be edited.
+	// The database itself keeps the rule: no change without saying who, nothing but the amount, account and memo, and the log can't be edited.
 	await assert.rejects(app.db.query(`UPDATE transactions SET amount = amount + 1 WHERE journal_entry_id = $1`, [id]), /immutable/);
+	await assert.rejects(app.db.query(`UPDATE transactions SET memo = 'x' WHERE journal_entry_id = $1`, [id]), /immutable/);
 	const one = await app.db.connect();
 	try {
 		for (const [sql, why] of [
-			[`UPDATE transactions SET memo = 'x' WHERE journal_entry_id = $1`, /immutable/],
+			[`UPDATE transactions SET line_number = line_number + 100 WHERE journal_entry_id = $1`, /immutable/],
 			[`UPDATE transactions SET amount = amount + 1 WHERE journal_entry_id = $1 AND line_number = 1`, /balance/i],
 		] as const) {
 			await one.query("BEGIN");
@@ -4719,5 +4720,97 @@ test("linked entries: an entry shows every entry linked to it, by people, module
 	assert.deepEqual(shown((await call("GET", `/journal-entries/${inv.id}`)).json()), [[lone.id, false, ["record"]]]);
 	expectStatus(await call("POST", `/root-actions/books/${r.json().id}/reverse`), 200);
 	assert.deepEqual(shown((await call("GET", `/journal-entries/${inv.id}`)).json()), [[pay.id, true, ["linked"]], [lone.id, false, ["record"]]]);
+	expectStatus(await call("POST", "/auth/root", { on: false }), 200);
+});
+
+test("editing an entry: every field in one go, each change logged", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	await createAccount(ta, "1000", "Chequing", "asset", "CAD");
+	await createAccount(ta, "1100", "USD account", "asset", "USD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	await createAccount(ta, "6200", "Repairs", "expense", "CAD");
+	const staples = (await call("POST", "/entities", { name: "Staples", is_vendor: true })).json();
+	const depot = (await call("POST", "/entities", { name: "Home Depot", is_vendor: true })).json();
+	let r = await call("POST", "/journal-entries", { ...entry("2026-03-02", "Paper", { ...dr("6100", 2500), memo: "ream" }, cr("1000", 2500)), reference: "INV-1", entity_id: staples.id });
+	expectStatus(r, 201);
+	const id = r.json().id;
+	const edit = (body: unknown) => call("PATCH", `/journal-entries/${id}`, body);
+
+	// Everything at once.
+	r = await edit({
+		entry_date: "2026-03-04",
+		description: " Lumber ",
+		reference: "INV-2",
+		entity_id: depot.id,
+		lines: [
+			{ line_number: 1, account_code: "6200", memo: "2x4s", debit_cents: 3000, credit_cents: 0 },
+			{ line_number: 2, debit_cents: 0, credit_cents: 3000 },
+		],
+		reason: "wrong receipt",
+	});
+	expectStatus(r, 200);
+	let e = r.json();
+	assert.deepEqual([e.entry_date, e.description, e.reference, e.entity.name, e.amended], ["2026-03-04", "Lumber", "INV-2", "Home Depot", true]);
+	assert.deepEqual(e.lines.map((l: any) => [l.account_code, l.memo, l.debit_cents, l.credit_cents]), [["6200", "2x4s", 3000, 0], ["1000", "", 0, 3000]]);
+	assert.deepEqual(e.edits.map((x: any) => [x.field, x.line_number, x.old_value, x.new_value, x.reason, x.changed_by]), [
+		["description", null, "Paper", "Lumber", "wrong receipt", "tester"],
+		["reference", null, "INV-1", "INV-2", "wrong receipt", "tester"],
+		["entity", null, "Staples", "Home Depot", "wrong receipt", "tester"],
+		["memo", 1, "ream", "2x4s", "wrong receipt", "tester"],
+	]);
+	assert.deepEqual(e.date_changes.map((x: any) => [x.old_date, x.new_date]), [["2026-03-02", "2026-03-04"]]);
+	assert.deepEqual(e.moves.map((x: any) => [x.line_number, x.from_code, x.to_code]), [[1, "6100", "6200"]]);
+	assert.deepEqual(e.changes.map((x: any) => [x.line_number, x.old_debit_cents + x.old_credit_cents, x.new_debit_cents + x.new_credit_cents]), [[1, 2500, 3000], [2, 2500, 3000]]);
+	assert.equal((await call("GET", "/accounts/6200")).json().balance_cents, 3000);
+
+	// What is sent unchanged isn't logged; taking the customer or vendor off is.
+	r = await edit({ description: "Lumber", entity_id: null, lines: [{ line_number: 1, account_code: "6200", memo: "2x4s", debit_cents: 3000, credit_cents: 0 }] });
+	expectStatus(r, 200);
+	e = r.json();
+	assert.equal(e.entity, null);
+	assert.deepEqual(e.edits.slice(4).map((x: any) => [x.field, x.old_value, x.new_value]), [["entity", "Home Depot", ""]]);
+	assert.equal(e.changes.length, 2);
+
+	// Refused, and nothing of the request is kept: nothing changed, out of balance, another currency, no such line, an empty description.
+	expectStatus(await edit({ description: "Lumber" }), 422);
+	expectStatus(await edit({ description: "Kept?", lines: [{ line_number: 1, debit_cents: 9999, credit_cents: 0 }] }), 422);
+	expectStatus(await edit({ lines: [{ line_number: 1, account_code: "1100" }] }), 422);
+	expectStatus(await edit({ lines: [{ line_number: 1, account_code: "nope" }] }), 422);
+	expectStatus(await edit({ lines: [{ line_number: 3, memo: "x" }] }), 422);
+	expectStatus(await edit({ description: "  " }), 422);
+	expectStatus(await edit({ entry_date: "2026-02-30" }), 422);
+	expectStatus(await edit({ entity_id: 999999 }), 422);
+	expectStatus(await edit({ colour: "red" }), 400);
+	assert.equal((await call("GET", `/journal-entries/${id}`)).json().description, "Lumber");
+
+	// A line ticked on a reconciliation keeps its amount, its account and the entry's date; the words can still change.
+	r = await call("POST", "/reconciliations", { account_code: "1000", statement_date: "2026-03-31", statement_balance_cents: -3000 });
+	expectStatus(r, 201);
+	const rec = r.json();
+	await call("POST", `/reconciliations/${rec.reconciliation.id}/cleared`, { clear: [e.lines[1].id] });
+	r = await edit({ entry_date: "2026-03-05" });
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /line 2 is ticked on the reconciliation to 2026-03-31; untick it there before changing the entry's date/);
+	r = await edit({ lines: [{ line_number: 1, debit_cents: 3100, credit_cents: 0 }, { line_number: 2, debit_cents: 0, credit_cents: 3100 }] });
+	expectStatus(r, 409);
+	assert.match(r.json().error.message, /before changing its amount/);
+	expectStatus(await edit({ description: "Lumber and nails", lines: [{ line_number: 2, memo: "debit card" }, { line_number: 1, account_code: "6100" }] }), 200);
+	await call("POST", `/reconciliations/${rec.reconciliation.id}/cleared`, { unclear: [e.lines[1].id] });
+
+	// A reversed entry keeps its amounts and accounts; its words can change.
+	expectStatus(await call("POST", `/journal-entries/${id}/reverse`, { entry_date: "2026-03-06" }), 201);
+	expectStatus(await edit({ lines: [{ line_number: 1, account_code: "6200" }] }), 409);
+	r = await edit({ reference: "void" });
+	expectStatus(r, 200);
+	assert.equal(r.json().reference, "void");
+
+	// Root mode still deletes an edited entry, and puts it back with its log.
+	await call("POST", "/auth/root", { on: true });
+	r = await call("DELETE", `/journal-entries/${id}/root`);
+	expectStatus(r, 200);
+	expectStatus(await call("POST", `/root-actions/books/${r.json().id}/reverse`), 200);
+	assert.equal((await call("GET", `/journal-entries/${id}`)).json().edits.length, 8);
 	expectStatus(await call("POST", "/auth/root", { on: false }), 200);
 });

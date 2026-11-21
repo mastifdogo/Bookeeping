@@ -16,9 +16,9 @@ GRANT SELECT                          ON currencies                             
 GRANT SELECT, INSERT, UPDATE          ON accounts                                TO :"app_role";
 GRANT SELECT, INSERT                  ON journal_entries, transactions, csv_imports TO :"app_role";
 -- Only a posted line's amount or account can change, and the database logs each change (migrations 019, 022).
-GRANT UPDATE (amount, account_id)     ON transactions                            TO :"app_role";
+GRANT UPDATE (amount, account_id, memo) ON transactions                          TO :"app_role";
 -- And an entry's date (migration 023), logged the same way.
-GRANT UPDATE (entry_date)             ON journal_entries                         TO :"app_role";
+GRANT UPDATE (entry_date, description, reference, entity_id) ON journal_entries  TO :"app_role";
 GRANT SELECT, INSERT                  ON transaction_changes                     TO :"app_role";
 GRANT SELECT, INSERT, UPDATE          ON users                                   TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON sessions                                TO :"app_role";
@@ -37,6 +37,8 @@ GRANT SELECT, INSERT, UPDATE          ON entities                               
 GRANT SELECT, INSERT                  ON account_code_changes                    TO :"app_role";
 GRANT SELECT, INSERT                  ON transaction_moves                       TO :"app_role";
 GRANT SELECT, INSERT                  ON journal_entry_date_changes              TO :"app_role";
+-- The rest of an entry's "Edit": description, reference, customer or vendor, memos (migration 032).
+GRANT SELECT, INSERT                  ON journal_entry_edits                     TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON journal_entry_tags                      TO :"app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE  ON journal_entry_relations                 TO :"app_role";
 -- Root mode (migration 024): the database guards refuse these unless the

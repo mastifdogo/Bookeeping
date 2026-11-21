@@ -155,6 +155,7 @@ export async function rootDeleteAccount(app: App, code: string, user: User): Pro
 		await keep(tx, id, "amounts", `SELECT * FROM transaction_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "moves", `SELECT * FROM transaction_moves WHERE journal_entry_id = ANY($3::bigint[]) OR old_account_id = $2 OR new_account_id = $2`, [a, e]);
 		await keep(tx, id, "dates", `SELECT * FROM journal_entry_date_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "edits", `SELECT * FROM journal_entry_edits WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "links", `SELECT * FROM journal_entry_links WHERE entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "code_changes", `SELECT * FROM account_code_changes WHERE account_id = $2`, [a]);
 		await keep(tx, id, "tags", `SELECT * FROM journal_entry_tags WHERE entry_id = ANY($2::bigint[])`, [e]);
@@ -171,6 +172,7 @@ export async function rootDeleteAccount(app: App, code: string, user: User): Pro
 		await tx.query(`DELETE FROM transaction_changes WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM transaction_moves WHERE journal_entry_id = ANY($2::bigint[]) OR old_account_id = $1 OR new_account_id = $1`, [a, e]);
 		await tx.query(`DELETE FROM journal_entry_date_changes WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entry_edits WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM journal_entry_links WHERE entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM transactions WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM journal_entries WHERE id = ANY($1::bigint[]) AND reverses_id IS NOT NULL`, [e]);
@@ -424,6 +426,7 @@ export async function reverseRootAction(app: App, scope: RootAction["scope"], id
 			await putBack(tx, id, "reconciliation_lines", "rec_lines");
 			await putBack(tx, id, "transaction_changes", "amounts");
 			await putBack(tx, id, "transaction_moves", "moves");
+			await putBack(tx, id, "journal_entry_edits", "edits");
 		} else if (a.action === "line.update") {
 			await tx.query(
 				`UPDATE transactions t SET account_id = b.account_id, currency = b.currency, amount = b.amount
@@ -454,6 +457,7 @@ export async function reverseRootAction(app: App, scope: RootAction["scope"], id
 			await putBack(tx, id, "transaction_changes", "amounts");
 			await putBack(tx, id, "transaction_moves", "moves");
 			await putBack(tx, id, "journal_entry_date_changes", "dates");
+			await putBack(tx, id, "journal_entry_edits", "edits");
 			await putBack(tx, id, "journal_entry_links", "links");
 			await putBack(tx, id, "account_code_changes", "code_changes");
 			await putBack(tx, id, "journal_entry_tags", "tags");
@@ -479,6 +483,7 @@ async function putBackEntries(tx: Queryable, id: bigint): Promise<void> {
 	await putBack(tx, id, "transaction_changes", "amounts");
 	await putBack(tx, id, "transaction_moves", "moves");
 	await putBack(tx, id, "journal_entry_date_changes", "dates");
+	await putBack(tx, id, "journal_entry_edits", "edits");
 	await putBack(tx, id, "journal_entry_links", "links");
 	await putBack(tx, id, "journal_entry_tags", "tags");
 	await putBackRelations(tx, id);
@@ -498,6 +503,7 @@ export async function rootDeleteEntry(app: App, entryId: bigint, user: User): Pr
 		await keep(tx, id, "amounts", `SELECT * FROM transaction_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "moves", `SELECT * FROM transaction_moves WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "dates", `SELECT * FROM journal_entry_date_changes WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
+		await keep(tx, id, "edits", `SELECT * FROM journal_entry_edits WHERE journal_entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "links", `SELECT * FROM journal_entry_links WHERE entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "tags", `SELECT * FROM journal_entry_tags WHERE entry_id = ANY($2::bigint[])`, [e]);
 		await keep(tx, id, "relations", `SELECT * FROM journal_entry_relations WHERE entry_id = ANY($2::bigint[]) OR related_id = ANY($2::bigint[])`, [e]);
@@ -507,6 +513,7 @@ export async function rootDeleteEntry(app: App, entryId: bigint, user: User): Pr
 		await tx.query(`DELETE FROM transaction_changes WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM transaction_moves WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM journal_entry_date_changes WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
+		await tx.query(`DELETE FROM journal_entry_edits WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM journal_entry_links WHERE entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM transactions WHERE journal_entry_id = ANY($1::bigint[])`, [e]);
 		await tx.query(`DELETE FROM journal_entries WHERE id = ANY($1::bigint[]) AND reverses_id IS NOT NULL`, [e]);
@@ -539,9 +546,11 @@ export async function rootDeleteLine(app: App, entryId: bigint, lineNumber: numb
 		await keep(tx, id, "rec_lines", `SELECT * FROM reconciliation_lines WHERE transaction_id = $2`, [l.id]);
 		await keep(tx, id, "amounts", `SELECT * FROM transaction_changes WHERE transaction_id = $2`, [l.id]);
 		await keep(tx, id, "moves", `SELECT * FROM transaction_moves WHERE transaction_id = $2`, [l.id]);
+		await keep(tx, id, "edits", `SELECT * FROM journal_entry_edits WHERE transaction_id = $2`, [l.id]);
 		await tx.query(`DELETE FROM reconciliation_lines WHERE transaction_id = $1`, [l.id]);
 		await tx.query(`DELETE FROM transaction_changes WHERE transaction_id = $1`, [l.id]);
 		await tx.query(`DELETE FROM transaction_moves WHERE transaction_id = $1`, [l.id]);
+		await tx.query(`DELETE FROM journal_entry_edits WHERE transaction_id = $1`, [l.id]);
 		await tx.query(`DELETE FROM transactions WHERE id = $1`, [l.id]);
 		return id;
 	});

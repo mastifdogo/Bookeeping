@@ -565,6 +565,54 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+    patch:
+      tags: [Journal Entries]
+      operationId: editJournalEntry
+      summary: Edit a posted entry (the entry page's "Edit"); every change is logged
+      description: |
+        Whatever is given changes; what is left out, or is the same as
+        before, stays. Lines can't be added or taken away, a line stays in
+        its currency, and the entry must still balance. Amounts and accounts
+        are refused (409) on an entry that was reversed or is a reversal and
+        on a line ticked on a reconciliation; the date on an entry with any
+        ticked line. All of it is saved together or not at all. The changes
+        read back in `changes` (amounts), `moves` (accounts), `date_changes`
+        and `edits` (description, reference, customer or vendor, memos).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                entry_date: { type: string, format: date }
+                description: { type: string, maxLength: 500 }
+                reference: { type: string, maxLength: 100 }
+                entity_id: { type: integer, nullable: true, description: The customer or vendor; null takes it off }
+                lines:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [line_number]
+                    properties:
+                      line_number: { type: integer, minimum: 1 }
+                      account_code: { type: string, description: An active account in the line's currency }
+                      memo: { type: string, maxLength: 500 }
+                      debit_cents: { type: integer, minimum: 0 }
+                      credit_cents: { type: integer, minimum: 0 }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Edited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JournalEntry' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /journal-entries/{entryId}/amounts:
     parameters:
       - $ref: '#/components/parameters/EntryId'
@@ -3703,6 +3751,21 @@ components:
               id: { type: integer }
               old_date: { type: string, format: date }
               new_date: { type: string, format: date }
+              reason: { type: string }
+              changed_by: { type: string, nullable: true }
+              changed_at: { type: string, format: date-time }
+        edits:
+          type: array
+          description: Every change to its description, reference, customer or vendor and its lines' memos, oldest first (only when one entry is fetched)
+          items:
+            type: object
+            required: [id, field, line_number, old_value, new_value, reason, changed_by, changed_at]
+            properties:
+              id: { type: integer }
+              field: { type: string, enum: [description, reference, entity, memo] }
+              line_number: { type: integer, nullable: true, description: The line, for a memo }
+              old_value: { type: string, description: For "entity" the customer's or vendor's name; empty is none }
+              new_value: { type: string }
               reason: { type: string }
               changed_by: { type: string, nullable: true }
               changed_at: { type: string, format: date-time }

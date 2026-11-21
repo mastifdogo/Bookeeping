@@ -330,7 +330,10 @@ a person can also change an entry's date (logged in `date_changes`), and
 finishing a reconciliation moves the reconciled account's unticked lines to
 Ledger's Unreconciled clearing account until a person moves each on (logged
 in `moves`): an entry a module posted to the bank may, for a while, have
-that line in Unreconciled instead. Modules
+that line in Unreconciled instead. Since 0.29.0 the entry's page has one
+**Edit** for all of it, which also changes the description, reference,
+customer or vendor (`entity`), any line's account, and memos (logged in
+`edits`). Modules
 can't do this, but they see the result: an entry a module posted may no
 longer carry the amounts it posted. Where the figure matters (an invoice's
 balance, a bill marked paid), read it from the entry

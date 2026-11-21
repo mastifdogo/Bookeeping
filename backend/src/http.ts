@@ -37,6 +37,7 @@ import {
 	decodePasswordChange,
 	decodeReverseRequest,
 	decodeEntryAmend,
+	decodeEntryEdit,
 	decodeReconciliationCreate,
 	decodeReconciliationFromStatement,
 	decodeReconciliationUpdate,
@@ -58,7 +59,7 @@ import {
 	writeUpdateRepo,
 } from "./update.ts";
 import { createAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listCurrencies, updateAccount } from "./accounts.ts";
-import { amendEntryAmounts, changeEntryDate, createJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry, type EntryFilter } from "./ledger.ts";
+import { amendEntryAmounts, changeEntryDate, createJournalEntry, editJournalEntry, getJournalEntry, listJournalEntries, reverseJournalEntry, type EntryFilter } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { CSV_FILENAME_RE, MAX_FILE_BYTES, exportGeneralLedger, listCsvFiles, openCsvFile, saveUploadedCsv } from "./files.ts";
 import { importJournalEntries } from "./import.ts";
@@ -1099,6 +1100,13 @@ async function handleMoveEntryLine(c: Ctx): Promise<void> {
 	});
 	await moveUnreconciledLine(c.app, id, n, body, c.user!.id);
 	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
+}
+
+/** The entry page's "Edit": any of its date, description, reference, customer or vendor, and its lines' accounts, memos and amounts. */
+async function handleEditJournalEntry(c: Ctx): Promise<void> {
+	const id = pathId(c, "entryId");
+	const input = await decodeBody(c, true, decodeEntryEdit);
+	writeJSON(c.res, 200, await editJournalEntry(c.app, id, input, c.user!.id));
 }
 
 async function handleChangeEntryDate(c: Ctx): Promise<void> {
@@ -2543,6 +2551,7 @@ const ROUTES: Route[] = [
 	route("PATCH", "/journal-entries/:entryId/amounts", true, handleAmendJournalEntry),
 	route("PATCH", "/journal-entries/:entryId/lines/:lineNumber/account", true, handleMoveEntryLine),
 	route("PATCH", "/journal-entries/:entryId/date", true, handleChangeEntryDate),
+	route("PATCH", "/journal-entries/:entryId", true, handleEditJournalEntry),
 	route("GET", "/unreconciled", true, handleUnreconciled),
 	route("GET", "/tags", true, handleListTags),
 	route("POST", "/journal-entries/:entryId/tags", true, handleSetTag),

@@ -147,6 +147,8 @@ export interface JournalEntry {
 	moves?: import("./unreconciled.ts").EntryMove[];
 	/** Every change to its date, oldest first (only when one entry is fetched). */
 	date_changes?: EntryDateChange[];
+	/** Every change to its description, reference, customer or vendor and its lines' memos, oldest first (only when one entry is fetched). */
+	edits?: EntryFieldEdit[];
 	/** Every entry linked to this one, oldest first (only when one entry is fetched; related.ts). */
 	related?: import("./related.ts").RelatedEntry[];
 }
@@ -175,6 +177,31 @@ export interface EntryChange {
 	reason: string;
 	changed_by: string | null;
 	changed_at: Date;
+}
+
+/** One change to an entry's description, reference or customer or vendor, or to a line's memo. */
+export interface EntryFieldEdit {
+	id: number;
+	field: "description" | "reference" | "entity" | "memo";
+	/** The line, for a memo. */
+	line_number: number | null;
+	/** For "entity" the customer's or vendor's name; "" is none. */
+	old_value: string;
+	new_value: string;
+	reason: string;
+	changed_by: string | null;
+	changed_at: Date;
+}
+
+/** The entry page's "Edit": whatever is given changes, the rest stays. */
+export interface EntryEdit {
+	entry_date?: string;
+	description?: string;
+	reference?: string;
+	/** null takes the customer or vendor off. */
+	entity_id?: number | null;
+	lines?: { line_number: number; account_code?: string; memo?: string; debit_cents?: bigint; credit_cents?: bigint }[];
+	reason?: string;
 }
 
 /** New amounts for some lines of a posted entry. */

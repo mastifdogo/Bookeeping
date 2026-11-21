@@ -4,7 +4,7 @@
 // parsed exactly from their source text.
 
 import { parseDate } from "./date.ts";
-import type { AccountCreate, AccountUpdate, EntryAmend, JournalEntryCreate, JournalLineCreate, ReverseRequest } from "./types.ts";
+import type { AccountCreate, AccountUpdate, EntryAmend, EntryEdit, JournalEntryCreate, JournalLineCreate, ReverseRequest } from "./types.ts";
 
 /** A malformed request body (HTTP 400 "invalid JSON: ..."). */
 export class DecodeError extends Error {}
@@ -173,6 +173,44 @@ export function decodeEntryAmend(v: unknown): EntryAmend {
 	});
 	const reason = str(o, "reason", "EntryAmend.");
 	return reason === undefined ? { lines } : { lines, reason };
+}
+
+/** { entry_date?, description?, reference?, entity_id?, lines?: [{ line_number, account_code?, memo?, debit_cents?, credit_cents? }], reason? } */
+export function decodeEntryEdit(v: unknown): EntryEdit {
+	const p = "EntryEdit.";
+	const o = object(v, "EntryEdit", ["entry_date", "description", "reference", "entity_id", "lines", "reason"]);
+	const out: EntryEdit = {};
+	// The date is checked with the rest (422), not here.
+	const d = str(o, "entry_date", p);
+	if (d !== undefined) out.entry_date = d;
+	const description = str(o, "description", p);
+	if (description !== undefined) out.description = description;
+	const reference = str(o, "reference", p);
+	if (reference !== undefined) out.reference = reference;
+	if (o.entity_id === null) out.entity_id = null;
+	else if (o.entity_id !== undefined) out.entity_id = Number(int64(o, "entity_id", p));
+	if (o.lines !== undefined && o.lines !== null) {
+		if (!Array.isArray(o.lines)) throw new DecodeError("EntryEdit.lines must be a list");
+		out.lines = o.lines.map((x, i) => {
+			const lp = `EntryEdit.lines[${i}].`;
+			const l = object(x, `EntryEdit.lines[${i}]`, ["line_number", "account_code", "memo", "debit_cents", "credit_cents"]);
+			const n = int64(l, "line_number", lp);
+			if (n === undefined || n < 1n || n > 100000n) throw new DecodeError(`${lp}line_number must be a line's number`);
+			const line: NonNullable<EntryEdit["lines"]>[number] = { line_number: Number(n) };
+			const code = str(l, "account_code", lp);
+			if (code !== undefined) line.account_code = code;
+			const memo = str(l, "memo", lp);
+			if (memo !== undefined) line.memo = memo;
+			const debit = int64(l, "debit_cents", lp);
+			const credit = int64(l, "credit_cents", lp);
+			if (debit !== undefined) line.debit_cents = debit;
+			if (credit !== undefined) line.credit_cents = credit;
+			return line;
+		});
+	}
+	const reason = str(o, "reason", p);
+	if (reason !== undefined) out.reason = reason;
+	return out;
 }
 
 export function decodeReverseRequest(v: unknown): ReverseRequest {

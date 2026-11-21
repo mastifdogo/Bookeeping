@@ -1,7 +1,7 @@
 import type { App } from "./app.ts";
 import { relatedEntries } from "./related.ts";
 import { tagsOfEntries } from "./tags.ts";
-import { entryMoves } from "./unreconciled.ts";
+import { entryMoves, syncUnreconciledLater, UNRECONCILED_WHERE } from "./unreconciled.ts";
 import { withTx, queryRow, queryRows, toNumber, type Queryable } from "./db.ts";
 import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
 import { MAX_CENTS, formatCents, splitAmount } from "./money.ts";
@@ -14,6 +14,8 @@ import {
 	type EntryAmend,
 	type EntryChange,
 	type EntryDateChange,
+	type EntryEdit,
+	type EntryFieldEdit,
 	type EntryLink,
 	type EntryLinkInput,
 	type JournalEntry,
@@ -618,6 +620,171 @@ async function entryDateChanges(db: Queryable, id: bigint): Promise<EntryDateCha
 	return rows.map((r) => ({ id: Number(r.id), old_date: r.old_date, new_date: r.new_date, reason: r.reason, changed_by: r.username, changed_at: r.changed_at }));
 }
 
+/** Every change to an entry's description, reference, customer or vendor, and its lines' memos, oldest first. */
+async function entryFieldEdits(db: Queryable, id: bigint): Promise<EntryFieldEdit[]> {
+	const rows = await queryRows<{ id: bigint; field: EntryFieldEdit["field"]; line_number: number | null; old_value: string; new_value: string; reason: string; username: string | null; changed_at: Date }>(
+		db,
+		`SELECT c.id, c.field, t.line_number, c.old_value, c.new_value, c.reason, u.username, c.changed_at
+		   FROM journal_entry_edits c LEFT JOIN transactions t ON t.id = c.transaction_id LEFT JOIN users u ON u.id = c.changed_by
+		  WHERE c.journal_entry_id = $1 ORDER BY c.id`,
+		[id],
+	);
+	return rows.map((r) => ({ id: Number(r.id), field: r.field, line_number: r.line_number, old_value: r.old_value, new_value: r.new_value, reason: r.reason, changed_by: r.username, changed_at: r.changed_at }));
+}
+
+/**
+ * The entry page's "Edit": changes whatever is given of a posted entry's
+ * date, description, reference and customer or vendor, and of its lines'
+ * accounts, memos and amounts; what isn't given, or is the same as before,
+ * stays. Lines can't be added or taken away, and a line stays in its
+ * currency. The entry must still balance. Amounts and accounts are refused
+ * on an entry that was reversed or is a reversal, and on a line ticked on a
+ * reconciliation; the date on an entry with any ticked line. All of it is
+ * saved together or not at all, and the database logs every change with who
+ * made it and why.
+ */
+export async function editJournalEntry(app: App, id: bigint, input: EntryEdit, actorId: number | null): Promise<JournalEntry> {
+	const orig = await getJournalEntry(app, id);
+	const v = new ValidationError();
+	const reason = trimSpace(input.reason ?? "");
+	if (reason.length > 500) v.add("reason", "must be at most 500 characters");
+
+	// The entry's own fields: only those that really change.
+	const head: { entry_date?: string; description?: string; reference?: string; entity_id?: number | null } = {};
+	if (input.entry_date !== undefined && input.entry_date !== orig.entry_date) {
+		const d = input.entry_date;
+		let ok = false;
+		try {
+			ok = parseDate(d) === d;
+		} catch {
+			// not a date
+		}
+		if (!ok) v.add("entry_date", "must be a date (YYYY-MM-DD)");
+		else if (dateYear(d) < 1900 || dateYear(d) > 9999) v.add("entry_date", "year must be between 1900 and 9999");
+		else head.entry_date = d;
+	}
+	if (input.description !== undefined) {
+		checkText(v, "description", input.description, 1, 500);
+		if (trimSpace(input.description) !== orig.description) head.description = trimSpace(input.description);
+	}
+	if (input.reference !== undefined) {
+		checkText(v, "reference", trimSpace(input.reference), 0, 100);
+		if (trimSpace(input.reference) !== orig.reference) head.reference = trimSpace(input.reference);
+	}
+	if (input.entity_id !== undefined && input.entity_id !== (orig.entity?.id ?? null)) {
+		if (input.entity_id !== null && !(Number.isSafeInteger(input.entity_id) && input.entity_id > 0)) v.add("entity_id", "there is no such customer or vendor");
+		else head.entity_id = input.entity_id;
+	}
+
+	// The lines: only what really changes of each.
+	const byNumber = new Map(orig.lines.map((l) => [l.line_number, l]));
+	const amounts = new Map<number, bigint>();
+	const accounts = new Map<number, string>();
+	const memos = new Map<number, string>();
+	const seen = new Set<number>();
+	(input.lines ?? []).forEach((l, i) => {
+		const f = `lines[${i}]`;
+		const cur = byNumber.get(l.line_number);
+		if (!cur) return v.add(`${f}.line_number`, `entry ${id} has no line ${l.line_number}`);
+		if (seen.has(l.line_number)) return v.add(`${f}.line_number`, "is given twice");
+		seen.add(l.line_number);
+		if (l.account_code !== undefined && l.account_code !== cur.account_code) accounts.set(l.line_number, l.account_code);
+		if (l.memo !== undefined) {
+			checkText(v, `${f}.memo`, trimSpace(l.memo), 0, 500);
+			if (trimSpace(l.memo) !== cur.memo) memos.set(l.line_number, trimSpace(l.memo));
+		}
+		if (l.debit_cents !== undefined || l.credit_cents !== undefined) {
+			const debit = l.debit_cents ?? 0n;
+			const credit = l.credit_cents ?? 0n;
+			if (debit < 0n || credit < 0n) return v.add(f, "amounts can't be negative");
+			if (debit > 0n === credit > 0n) return v.add(f, "give a debit or a credit, not both and not neither");
+			if (debit > MAX_CENTS || credit > MAX_CENTS) return v.add(f, "the amount is too large");
+			if (debit - credit !== cur.debit_cents - cur.credit_cents) amounts.set(l.line_number, debit - credit);
+		}
+	});
+	v.throwIfAny();
+	if (Object.keys(head).length === 0 && amounts.size === 0 && accounts.size === 0 && memos.size === 0) {
+		v.add("", "nothing was changed");
+		v.throwIfAny();
+	}
+	if (amounts.size > 0 || accounts.size > 0) {
+		const what = amounts.size > 0 ? "amounts" : "accounts";
+		if (orig.reverses_id !== null) throw new ConflictError(`entry ${id} is a reversal; its ${what} follow the entry it reverses`);
+		if (orig.reversed_by_id !== null) throw new ConflictError(`entry ${id} was reversed by entry ${orig.reversed_by_id}; its ${what} can't change any more`);
+	}
+	// Each currency must still balance (a line stays in its currency).
+	const sums = new Map<Currency, bigint>();
+	for (const l of orig.lines) sums.set(l.currency, (sums.get(l.currency) ?? 0n) + (amounts.get(l.line_number) ?? l.debit_cents - l.credit_cents));
+	for (const [cur, sum] of sums) {
+		if (sum !== 0n) v.add("lines", `the ${cur} lines don't balance: debits and credits differ by ${formatCents(sum < 0n ? -sum : sum)}`);
+	}
+	v.throwIfAny();
+
+	await withTx(app.db, {}, async (tx) => {
+		if (!(await queryRow(tx, `SELECT 1 FROM journal_entries WHERE id = $1 FOR UPDATE`, [id]))) throw new NotFoundError();
+		if (head.entity_id !== undefined && head.entity_id !== null) {
+			const ent = await queryRow<{ is_active: boolean }>(tx, `SELECT is_active FROM entities WHERE id = $1`, [head.entity_id]);
+			if (!ent) v.add("entity_id", "there is no such customer or vendor");
+			else if (!ent.is_active) v.add("entity_id", "that customer or vendor is inactive");
+		}
+		const to = new Map<string, { id: bigint; currency: string; is_active: boolean; unreconciled: boolean }>();
+		if (accounts.size > 0) {
+			const rows = await queryRows<{ code: string; id: bigint; currency: string; is_active: boolean; unreconciled: boolean }>(
+				tx,
+				`SELECT a.code, a.id, a.currency, a.is_active, (${UNRECONCILED_WHERE}) AS unreconciled FROM accounts a WHERE a.code = ANY($1) ORDER BY a.id FOR SHARE`,
+				[[...new Set(accounts.values())]],
+			);
+			for (const r of rows) to.set(r.code, r);
+			(input.lines ?? []).forEach((l, i) => {
+				const code = accounts.get(l.line_number);
+				if (code === undefined) return;
+				const f = `lines[${i}].account_code`;
+				const a = to.get(code);
+				const cur = byNumber.get(l.line_number)!;
+				if (!a) v.add(f, `account ${JSON.stringify(code)} does not exist`);
+				else if (a.unreconciled) v.add(f, "choose the account the line belongs in, not Unreconciled");
+				else if (a.currency.trim() !== cur.currency.trim()) v.add(f, `must be a ${cur.currency.trim()} account, like the line`);
+				else if (!a.is_active) v.add(f, "that account is inactive");
+			});
+		}
+		v.throwIfAny();
+
+		const lineIds = (m: Map<number, unknown>) => [...m.keys()].map((n) => byNumber.get(n)!.id);
+		const ticked = await queryRow<{ line_number: number; statement_date: string; status: string; mine: boolean }>(
+			tx,
+			`SELECT t.line_number, r.statement_date, r.status, t.id = ANY($2::bigint[]) AS mine
+			   FROM reconciliation_lines l JOIN transactions t ON t.id = l.transaction_id JOIN reconciliations r ON r.id = l.reconciliation_id
+			  WHERE t.journal_entry_id = $1 AND ($3::boolean OR t.id = ANY($2::bigint[]))
+			  ORDER BY mine DESC, t.line_number LIMIT 1`,
+			[id, [...lineIds(amounts), ...lineIds(accounts)], head.entry_date !== undefined],
+		);
+		if (ticked) {
+			const what = !ticked.mine ? "the entry's date" : amounts.has(ticked.line_number) ? "its amount" : "its account";
+			throw new ConflictError(
+				`line ${ticked.line_number} is ticked on the reconciliation to ${ticked.statement_date}; ${ticked.status === "finished" ? "undo that reconciliation" : "untick it there"} before changing ${what}`,
+			);
+		}
+
+		// The database only lets these change inside a transaction that says who is changing them, and logs each.
+		await tx.query(`SELECT set_config('ledger.amend_by', $1, true), set_config('ledger.amend_reason', $2, true)`, [String(actorId ?? "system"), reason]);
+		if (Object.keys(head).length > 0) {
+			await tx.query(
+				`UPDATE journal_entries
+				    SET entry_date = coalesce($2::date, entry_date), description = coalesce($3, description), reference = coalesce($4, reference),
+				        entity_id = CASE WHEN $5 THEN $6::bigint ELSE entity_id END
+				  WHERE id = $1`,
+				[id, head.entry_date ?? null, head.description ?? null, head.reference ?? null, head.entity_id !== undefined, head.entity_id ?? null],
+			);
+		}
+		// A line's account and its amount are logged apart, so they change one after the other.
+		for (const [n, code] of accounts) await tx.query(`UPDATE transactions SET account_id = $2 WHERE id = $1`, [byNumber.get(n)!.id, to.get(code)!.id]);
+		for (const [n, memo] of memos) await tx.query(`UPDATE transactions SET memo = $2 WHERE id = $1`, [byNumber.get(n)!.id, memo]);
+		for (const [n, amount] of amounts) await tx.query(`UPDATE transactions SET amount = $2 WHERE id = $1`, [byNumber.get(n)!.id, amount]);
+	});
+	if (accounts.size > 0) await syncUnreconciledLater(app);
+	return getJournalEntry(app, id);
+}
+
 export async function getJournalEntry(app: App, id: bigint): Promise<JournalEntry> {
 	const row = await queryRow<EntryRow>(app.db, ENTRY_SELECT + ` WHERE e.id = $1`, [id]);
 	if (!row) throw new NotFoundError();
@@ -626,6 +793,7 @@ export async function getJournalEntry(app: App, id: bigint): Promise<JournalEntr
 	e.changes = e.amended ? await entryChanges(app.db, id) : [];
 	e.moves = await entryMoves(app.db, id);
 	e.date_changes = await entryDateChanges(app.db, id);
+	e.edits = await entryFieldEdits(app.db, id);
 	e.related = await relatedEntries(app, id);
 	return e;
 }

@@ -329,7 +329,18 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Edit a posted entry (the entry page's "Edit"); every change is logged
+         * @description Whatever is given changes; what is left out, or is the same as
+         *     before, stays. Lines can't be added or taken away, a line stays in
+         *     its currency, and the entry must still balance. Amounts and accounts
+         *     are refused (409) on an entry that was reversed or is a reversal and
+         *     on a line ticked on a reconciliation; the date on an entry with any
+         *     ticked line. All of it is saved together or not at all. The changes
+         *     read back in `changes` (amounts), `moves` (accounts), `date_changes`
+         *     and `edits` (description, reference, customer or vendor, memos).
+         */
+        patch: operations["editJournalEntry"];
         trace?: never;
     };
     "/journal-entries/{entryId}/amounts": {
@@ -2584,6 +2595,21 @@ export interface components {
                 /** Format: date-time */
                 changed_at: string;
             }[];
+            /** @description Every change to its description, reference, customer or vendor and its lines' memos, oldest first (only when one entry is fetched) */
+            edits?: {
+                id: number;
+                /** @enum {string} */
+                field: "description" | "reference" | "entity" | "memo";
+                /** @description The line */
+                line_number: number | null;
+                /** @description For "entity" the customer's or vendor's name; empty is none */
+                old_value: string;
+                new_value: string;
+                reason: string;
+                changed_by: string | null;
+                /** Format: date-time */
+                changed_at: string;
+            }[];
             /** @description Every move of one of its lines to another account, oldest first (only when one entry is fetched) */
             moves?: {
                 id: number;
@@ -4318,6 +4344,51 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    editJournalEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: components["parameters"]["EntryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: date */
+                    entry_date?: string;
+                    description?: string;
+                    reference?: string;
+                    /** @description The customer or vendor; null takes it off */
+                    entity_id?: number | null;
+                    lines?: {
+                        line_number: number;
+                        /** @description An active account in the line's currency */
+                        account_code?: string;
+                        memo?: string;
+                        debit_cents?: number;
+                        credit_cents?: number;
+                    }[];
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Edited */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

@@ -377,18 +377,20 @@ balances still count them); **Settings → Clearing accounts** lists them all,
 with who made each and its balance, and a switch to show one. The Accounts
 page still points out any that aren't at zero.
 
-### Changing an entry's amounts and date
+### Editing an entry
 
-An entry's page has **Change amounts…**: type new debit and credit figures
-for its lines (they must still balance) and, optionally, why. **Change
-date…** moves the entry to another date. Descriptions and the number of
-lines can't change; for those, reverse the entry and post a new one. Every
-change is kept and shown under the entry in one **Changes** log (amounts,
-the date, and lines moved out of Unreconciled): what it was, what it is
-now, who changed it, when and why. The entry is marked "amounts changed"
-or "date changed". Amounts can't be changed on an entry that was reversed
-or is a reversal; neither amounts nor the date on an entry with a line
-ticked on a reconciliation (untick it, or undo the reconciliation, first).
+An entry's page has **Edit…**: every field opens at once. Change the date,
+description, reference and customer or vendor, and each line's account,
+memo and debit or credit (they must still balance), say why if you like,
+and **Save changes**; it is all saved together or not at all. Lines can't
+be added or taken away, and a line stays in its currency; for those,
+reverse the entry and post a new one. Every change is kept and shown under
+the entry, on the same page, in one **Changes** log: what it was, what it
+is now, who changed it, when and why. The entry is marked "amounts
+changed", "date changed" or "edited". Amounts and accounts can't be changed
+on an entry that was reversed or is a reversal, nor on a line ticked on a
+reconciliation, and the date can't on an entry with any ticked line (untick
+it, or undo the reconciliation, first).
 
 ### Tags
 
