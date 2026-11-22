@@ -641,6 +641,10 @@ click its split icon to **open it beside** the current page. Panes fill the
 window's height and sit side by side with the same gap between them: drag a
 pane's header onto another to move it, drag the gap between two to resize, ✕
 to close, or ⤢ to open it full width. Each browser remembers its panes.
+Every window has a title bar with ✕, the first one and the last one too:
+closing the first while others are open puts the next in its place, and
+closing the only window leaves the page area empty until you choose a page
+from the sidebar (or **Reopen**).
 
 **Columns and fields resize**, in Ledger and in every module: drag the right
 edge of a column heading, or of a text box or dropdown, to make it wider or

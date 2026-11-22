@@ -149,7 +149,18 @@
 	wideQuery.addEventListener('change', (e) => (wide = e.matches));
 	let showPanes = $derived(wide && panes.split && !embedded);
 	const MAIN_PANE: Pane = { id: MAIN_ID, path: null, weight: 1, order: 0 };
-	let shown = $derived(showPanes ? panes.list : [MAIN_PANE]);
+	// Any window can be closed, the last one too: the page area is then empty until a page is chosen.
+	let closed = $state(false);
+	afterNavigate(() => (closed = false));
+	let shown = $derived(showPanes ? panes.list : closed ? [] : [MAIN_PANE]);
+	function closeMain() {
+		// With others open, the next window takes this one's place.
+		const next = showPanes ? panes.ordered.find((p) => p.id !== MAIN_ID) : undefined;
+		if (!next) return void (closed = true);
+		const path = next.path ?? '/';
+		panes.promote(next.id);
+		goto(path);
+	}
 	let lastOrder = $derived(Math.max(...shown.map((p) => p.order)));
 
 	let container: HTMLElement | undefined = $state();
@@ -315,7 +326,7 @@
 									<NavIcon d={l.icon} fill={l.iconFill} url={l.iconUrl} /><span class="label">{l.label}</span>
 								</a>
 								{#if wide && !collapsed && !panes.full}
-									<button class="icon-button beside" title="Open {l.label} beside" onclick={() => panes.open(l.href)}>
+									<button class="icon-button beside" title="Open {l.label} beside" onclick={() => (closed ? goto(l.href) : panes.open(l.href))}>
 										{@render icon(ICONS.split)}<span class="sr-only">Open {l.label} beside</span>
 									</button>
 								{/if}
@@ -338,6 +349,12 @@
 			</nav>
 		</aside>
 		<div class="panes" class:split={showPanes} class:busy={dragId !== null || busyPointer} bind:this={container}>
+			{#if shown.length === 0}
+				<section class="pane none" aria-label="No window open">
+					<p>No window is open. Choose a page from the sidebar.</p>
+					<button onclick={() => (closed = false)}>Reopen {pageTitle(page.url.pathname, nav)}</button>
+				</section>
+			{/if}
 			{#each shown as p (p.id)}
 				{@const title = pageTitle(p.path ?? page.url.pathname, nav)}
 				<section
@@ -350,19 +367,19 @@
 					ondrop={(e) => drop(e, p.id)}
 					aria-label={title}
 				>
-					{#if showPanes}
+					{#if !embedded}
 						<!-- svelte-ignore a11y_no_static_element_interactions (keyboard users close/open panes with the buttons) -->
-						<header draggable="true" ondragstart={(e) => dragStart(e, p.id)} ondragend={() => (dragId = null)} title="Drag to move">
-							{@render icon(ICONS.grip)}
+						<header class:alone={!showPanes} draggable={showPanes ? 'true' : undefined} ondragstart={(e) => showPanes && dragStart(e, p.id)} ondragend={() => (dragId = null)} title={showPanes ? 'Drag to move' : undefined}>
+							{#if showPanes}{@render icon(ICONS.grip)}{/if}
 							<span class="pane-title">{title}</span>
 							{#if p.id !== MAIN_ID}
 								<button class="icon-button" title="Open here, full width" onclick={() => openHere(p)}>
 									{@render icon(ICONS.expand)}<span class="sr-only">Open here</span>
 								</button>
-								<button class="icon-button" title="Close" onclick={() => panes.close(p.id)}>
-									{@render icon(ICONS.close)}<span class="sr-only">Close</span>
-								</button>
 							{/if}
+							<button class="icon-button" title="Close" onclick={() => (p.id === MAIN_ID ? closeMain() : panes.close(p.id))}>
+								{@render icon(ICONS.close)}<span class="sr-only">Close</span>
+							</button>
 						</header>
 					{/if}
 					<div class="pane-body" bind:this={() => (p.id === MAIN_ID ? mainBody : undefined), (el) => p.id === MAIN_ID && (mainBody = el)}>
@@ -739,6 +756,23 @@
 		color: var(--muted);
 		cursor: grab;
 		user-select: none;
+	}
+	/* One window alone: nothing to drag. On the dashboard, whose tiles are the panels, the bar is a panel of its own. */
+	.pane header.alone {
+		cursor: default;
+		padding-left: 0.9rem;
+	}
+	.pane.bare header {
+		border: 1px solid var(--border);
+		border-radius: var(--win-radius);
+		margin-bottom: var(--win-gap);
+	}
+	.pane.none {
+		flex: 1;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		color: var(--muted);
 	}
 	.pane header svg {
 		width: 16px;

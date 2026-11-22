@@ -83,6 +83,19 @@ class Panes {
 		this.save();
 	}
 
+	/**
+	 * The main pane was closed while others are open: pane `id` takes its
+	 * place (the caller shows that pane's page in the main one).
+	 */
+	promote(id: string) {
+		const p = this.list.find((x) => x.id === id);
+		const main = this.list.find((x) => x.id === MAIN_ID);
+		if (!p || !main || p === main) return;
+		main.order = p.order;
+		main.weight = p.weight;
+		this.close(id);
+	}
+
 	navigated(id: string, path: string) {
 		const p = this.list.find((x) => x.id === id);
 		if (p && p.path !== path) {
