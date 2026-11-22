@@ -4477,7 +4477,7 @@ test("tags on entries are shared: a tag one module sets, another module and peop
 			ctx.route("POST", "/paid/:id", (req) => ctx.tags.set(req.params.id, "paid"));
 		}`,
 	});
-	assert.deepEqual((await call("GET", "/m/collect/standard")).json(), ["paid", "billed", "overdue", "customer", "vendor", "rate"]);
+	assert.deepEqual((await call("GET", "/m/collect/standard")).json(), ["paid", "partially_paid", "unpaid", "billed", "overdue", "customer", "vendor", "rate"]);
 
 	// Sales tags the invoice's entry billed, overdue, and to its customer.
 	expectStatus(await call("POST", "/m/sales/tag", { entry: inv.id, tag: "billed", note: "Invoice 12" }), 200);
@@ -4523,7 +4523,7 @@ test("tags on entries are shared: a tag one module sets, another module and peop
 	// The journal lists tags, filters by them, and knows which are in use.
 	r = await call("GET", "/journal-entries?tag=paid");
 	assert.deepEqual(r.json().data.map((e: any) => [e.id, e.tags.map((x: any) => x.tag)]), [[inv.id, ["billed", "paid"]]]);
-	assert.deepEqual((await call("GET", "/tags")).json().data.map((x: any) => [x.tag, x.entries]), [["paid", 1], ["billed", 1], ["overdue", 0], ["customer", 0], ["vendor", 0], ["rate", 0], ["disputed", 1]]);
+	assert.deepEqual((await call("GET", "/tags")).json().data.map((x: any) => [x.tag, x.entries]), [["paid", 1], ["partially_paid", 0], ["unpaid", 0], ["billed", 1], ["overdue", 0], ["customer", 0], ["vendor", 0], ["rate", 0], ["disputed", 1]]);
 	expectStatus(await call("GET", "/journal-entries?tag=Bad%20Tag"), 422);
 
 	// So do an account's ledger and a reconciliation: each line carries its entry's tags.

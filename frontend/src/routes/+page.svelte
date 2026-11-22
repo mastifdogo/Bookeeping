@@ -5,7 +5,7 @@
 	import { api, today, unwrap, type DashboardItem } from '#lib/api/client.ts';
 	import { invalidate } from '$app/navigation';
 	import { openRow } from '#lib/rows.ts';
-	import { completeLayout, readingOrder, type Tile, type TileId, closeEmptyRows } from '#lib/dashboard-layout.ts';
+	import { TILE_LABELS, completeLayout, readingOrder, type Tile, type TileId, closeEmptyRows } from '#lib/dashboard-layout.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -26,6 +26,23 @@
 			)
 		)
 	);
+	// A tile can be taken off the dashboard with its ✕ and put back from the row under the tiles
+	// (the same "hidden" that Settings → UI has). Saved for this user.
+	let all = $derived(completeLayout(data.layout as Tile[], currencies));
+	let removed = $derived(all.filter((t) => t.hidden && (!t.id.startsWith('summary-') || currencies.includes(t.id.slice(8)))));
+	let saving = $state(false);
+	async function setHidden(id: TileId, hidden: boolean) {
+		error = null;
+		saving = true;
+		try {
+			unwrap(await api().PUT('/settings/dashboard-layout', { body: { tiles: all.map((t) => (t.id === id ? { ...t, hidden } : t)) } }));
+			await invalidate('app:dashboard-layout');
+		} catch (e) {
+			error = e;
+		} finally {
+			saving = false;
+		}
+	}
 	const tileStyle = (t: Tile) => `grid-column:${t.x} / span ${t.w};grid-row:${t.y} / span ${t.h}`;
 	const summaryOf = (id: TileId) => summary.currencies.find((c) => 'summary-' + c.currency === id)!;
 
@@ -62,12 +79,17 @@
 	</div>
 {/if}
 
+{#snippet remove(t: Tile)}
+	<button class="tile-x" disabled={saving} title="Remove {TILE_LABELS[t.id]} from the dashboard" aria-label="Remove {TILE_LABELS[t.id]} from the dashboard" onclick={() => setHidden(t.id, true)}>✕</button>
+{/snippet}
+
 <div class="tiles-box">
 	<div class="tiles">
 		{#each tiles as t (t.id)}
 			{#if t.id === 'summary-CAD' || t.id === 'summary-USD'}
 				{@const s = summaryOf(t.id)}
 				<section class="card tile" style={tileStyle(t)}>
+					{@render remove(t)}
 					<h2 style="margin-top:0">{s.currency}</h2>
 					<div class="stat">
 						<span class="muted small">Net worth</span>
@@ -123,6 +145,7 @@
 				</section>
 			{:else if t.id === 'notifications'}
 				<section class="card tile" style={tileStyle(t)}>
+					{@render remove(t)}
 					<h2 style="margin-top:0">Notifications</h2>
 					{#if notifications.length === 0}
 						<p class="muted">Nothing new.</p>
@@ -148,6 +171,7 @@
 				</section>
 			{:else if t.id === 'todos'}
 				<section class="card tile" style={tileStyle(t)}>
+					{@render remove(t)}
 					<h2 style="margin-top:0">To-do {#if openTodos > 0}<span class="badge">{openTodos}</span>{/if}</h2>
 					{#if todos.length === 0}
 						<p class="muted">Nothing to do. Modules add to-dos here.</p>
@@ -186,6 +210,7 @@
 						<h2 style="margin:0">Recent entries</h2>
 						<span class="spacer"></span>
 						<a class="button" href="/journal/new">+ New entry</a>
+						{@render remove(t)}
 					</div>
 
 					<div class="table-wrap">
@@ -214,6 +239,15 @@
 		{/each}
 	</div>
 </div>
+
+{#if removed.length > 0}
+	<p class="removed muted small">
+		Removed from the dashboard:
+		{#each removed as t (t.id)}
+			<button disabled={saving} title="Put {TILE_LABELS[t.id]} back on the dashboard" onclick={() => setHidden(t.id, false)}>+ {TILE_LABELS[t.id]}</button>
+		{/each}
+	</p>
+{/if}
 
 <style>
 	.stat {
@@ -261,6 +295,33 @@
 		grid-template-columns: repeat(12, minmax(0, 1fr));
 		grid-auto-rows: 2.5rem;
 		gap: var(--win-gap);
+	}
+	.tile-x {
+		all: unset;
+		float: right;
+		margin: -0.35rem -0.35rem 0 0.4rem;
+		padding: 0.1rem 0.4rem;
+		border-radius: 6px;
+		color: var(--muted);
+		cursor: pointer;
+		font-size: 0.85rem;
+		line-height: 1.4;
+	}
+	.toolbar .tile-x {
+		float: none;
+		margin: 0;
+	}
+	.tile-x:hover,
+	.tile-x:focus-visible {
+		background: var(--surface);
+		color: var(--text);
+	}
+	.removed {
+		margin: 0.6rem 0 0;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		align-items: center;
 	}
 	.tile {
 		margin: 0;

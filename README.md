@@ -364,7 +364,9 @@ Each of these is a **tile** on a 12-column grid. **Settings → UI** moves
 and resizes them (drag a tile, or its corner, or type its column, row,
 width and height) and hides the ones you don't want; each person has their
 own layout, and **Standard layout** puts it back. In a narrow window the
-tiles stack, top to bottom.
+tiles stack, top to bottom. A tile can also be removed right on the
+dashboard with its ✕; the ones removed are listed under the tiles, where a
+click puts one back.
 
 ### Clearing accounts
 
