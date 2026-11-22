@@ -125,6 +125,22 @@
 			// storage blocked
 		}
 	}
+	// Which side the statement is on: the left (as it comes) or, swapped, the right. Remembered in this browser.
+	const SIDE_STORAGE = 'ledger.reconcile.side';
+	let flip = $state(false);
+	try {
+		flip = localStorage.getItem(SIDE_STORAGE) === 'right';
+	} catch {
+		// storage blocked: for this page only
+	}
+	function setFlip(on: boolean) {
+		flip = on;
+		try {
+			localStorage.setItem(SIDE_STORAGE, on ? 'right' : 'left');
+		} catch {
+			// storage blocked
+		}
+	}
 	function setTall(on: boolean) {
 		tall = on;
 		try {
@@ -178,11 +194,12 @@
 	function dragMove(e: PointerEvent) {
 		if (!dragging || !splitEl) return;
 		const box = splitEl.getBoundingClientRect();
-		setLeft(((e.clientX - box.left) / box.width) * 100);
+		// `left` is the statement's share of the width, whichever side it is on.
+		setLeft(((flip ? box.right - e.clientX : e.clientX - box.left) / box.width) * 100);
 	}
 	function dragKey(e: KeyboardEvent) {
-		if (e.key === 'ArrowLeft') setLeft(left - 2);
-		else if (e.key === 'ArrowRight') setLeft(left + 2);
+		const wider = flip ? 'ArrowLeft' : 'ArrowRight';
+		if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') setLeft(left + (e.key === wider ? 2 : -2));
 		else return;
 		e.preventDefault();
 	}
@@ -200,7 +217,7 @@
 
 {#if !(split && tall)}<p class="small back"><a href="/reconcile?list">← All reconciliations</a></p>{/if}
 
-<div class="split" class:on={split} class:tall={split && tall} class:dragging bind:this={splitEl} style="--left:{left}%">
+<div class="split" class:on={split} class:tall={split && tall} class:flip={split && flip} class:dragging bind:this={splitEl} style="--left:{left}%">
 	{#if split}
 		<section class="doc" aria-label="Statement">
 			<div class="docbar">
@@ -211,6 +228,7 @@
 				{#if rec.document_type === 'application/pdf'}
 					<button class="link" aria-pressed={!pdfBar} title={pdfBar ? "Hide the PDF viewer's toolbar (page, zoom, print), so only the page shows" : "Show the PDF viewer's toolbar again"} onclick={() => setPdfBar(!pdfBar)}>{pdfBar ? 'Hide toolbar' : 'Show toolbar'}</button>
 				{/if}
+				<button class="link" title="Put the statement on the {flip ? 'left' : 'right'} and the transactions on the {flip ? 'right' : 'left'}" onclick={() => setFlip(!flip)}>{flip ? 'Move left' : 'Move right'}</button>
 				<button class="link" aria-pressed={tall} title={tall ? 'Back to the statement under the page heading' : 'The statement fills the window from top to bottom'} onclick={() => setTall(!tall)}>{tall ? 'Normal height' : 'Full height'}</button>
 				<button class="link" onclick={() => (showDoc = false)}>Hide</button>
 			</div>
@@ -503,6 +521,28 @@
 		overflow: auto;
 		padding-left: 0.6rem;
 	}
+	/* Swapped: the transactions on the left, the statement on the right. */
+	.split.on.flip {
+		grid-template-columns: minmax(0, 1fr) 0.6rem var(--left);
+	}
+	.split.on.flip .work {
+		order: 1;
+		padding-left: 0;
+		padding-right: 0.6rem;
+	}
+	.split.on.flip .divider {
+		order: 2;
+	}
+	.split.on.flip .doc {
+		order: 3;
+	}
+	.split.tall.flip .doc {
+		border-width: 0 0 0 1px;
+	}
+	.split.tall.flip .work {
+		padding-left: 0.75rem;
+		padding-right: 0.6rem;
+	}
 	.doc {
 		display: flex;
 		flex-direction: column;
@@ -520,10 +560,18 @@
 		border-bottom: 1px solid var(--border);
 		font-size: 0.85rem;
 		white-space: nowrap;
+		/* A narrow statement: its links go on a second line instead of being cut off. */
+		flex-wrap: wrap;
+		row-gap: 0.2rem;
 	}
 	.ellipsis {
 		overflow: hidden;
 		text-overflow: ellipsis;
+		flex: 1 1 8rem;
+		min-width: 0;
+	}
+	.docbar .spacer {
+		display: none;
 	}
 	.doc iframe {
 		flex: 1;
