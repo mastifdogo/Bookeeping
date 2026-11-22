@@ -101,6 +101,22 @@
 	// --- The statement beside the lines -------------------------------------
 	let pickId = $state<number | null>(null);
 	let showDoc = $state(true);
+	// Full height: the statement takes the whole window, top to bottom, with nothing above it. Remembered in this browser.
+	const TALL_STORAGE = 'ledger.reconcile.tall';
+	let tall = $state(false);
+	try {
+		tall = localStorage.getItem(TALL_STORAGE) === '1';
+	} catch {
+		// storage blocked: for this page only
+	}
+	function setTall(on: boolean) {
+		tall = on;
+		try {
+			localStorage.setItem(TALL_STORAGE, on ? '1' : '0');
+		} catch {
+			// storage blocked
+		}
+	}
 	let reading = $state(false);
 	const attach = (id: number | null) =>
 		run(async () => unwrap(await api().PATCH('/reconciliations/{reconciliationId}', { ...path(), body: { document_id: id } })));
@@ -166,9 +182,9 @@
 	}
 </script>
 
-<p class="small"><a href="/reconcile?list">← All reconciliations</a></p>
+{#if !(split && tall)}<p class="small back"><a href="/reconcile?list">← All reconciliations</a></p>{/if}
 
-<div class="split" class:on={split} class:dragging bind:this={splitEl} style="--left:{left}%">
+<div class="split" class:on={split} class:tall={split && tall} class:dragging bind:this={splitEl} style="--left:{left}%">
 	{#if split}
 		<section class="doc" aria-label="Statement">
 			<div class="docbar">
@@ -176,6 +192,7 @@
 				<span class="spacer"></span>
 				<a href={rec.document_url} target="_blank" rel="noopener">Open in a new tab</a>
 				{#if open}<button class="link" disabled={busy} onclick={() => attach(null)}>Take off</button>{/if}
+				<button class="link" aria-pressed={tall} title={tall ? 'Back to the statement under the page heading' : 'The statement fills the window from top to bottom'} onclick={() => setTall(!tall)}>{tall ? 'Normal height' : 'Full height'}</button>
 				<button class="link" onclick={() => (showDoc = false)}>Hide</button>
 			</div>
 			{#if rec.document_type === 'application/pdf'}
@@ -211,6 +228,7 @@
 		></div>
 	{/if}
 	<section class="work">
+{#if split && tall}<p class="small back"><a href="/reconcile?list">← All reconciliations</a></p>{/if}
 <div class="toolbar">
 	<h1 style="margin:0">
 		{new Date(`${rec.statement_date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
@@ -428,14 +446,36 @@
 
 <style>
 	/* With a statement attached the page uses the whole width: the statement on the left, the lines on the right. */
+	/* The page fills its window exactly: the statement and the lines share what is left under the link, each scrolling on its own. */
 	:global(main:has(.split.on)) {
 		max-width: none;
+		height: 100%;
+		box-sizing: border-box;
+		display: flex;
+		flex-direction: column;
+		padding-top: 0.5rem;
+		padding-bottom: 0.5rem;
+	}
+	/* Full height: nothing above or around the statement. */
+	:global(main:has(.split.tall)) {
+		padding: 0;
+	}
+	.split.tall .doc {
+		border-radius: 0;
+		border-width: 0 1px 0 0;
+	}
+	.split.tall .work {
+		padding-top: 0.5rem;
+		padding-right: 0.75rem;
+	}
+	.back {
+		margin: 0 0 0.4rem;
 	}
 	.split.on {
 		display: grid;
 		grid-template-columns: var(--left) 0.6rem minmax(0, 1fr);
-		height: calc(100vh - 6.5rem);
-		min-height: 24rem;
+		flex: 1;
+		min-height: 0;
 	}
 	.split.on .work {
 		overflow: auto;
@@ -509,6 +549,10 @@
 		user-select: none;
 	}
 	@media (max-width: 900px) {
+		:global(main:has(.split.on)) {
+			height: auto;
+			display: block;
+		}
 		.split.on {
 			display: block;
 			height: auto;

@@ -619,7 +619,10 @@ reconciliations only mark lines as cleared.
 Choose the statement (a PDF, a picture, or a CSV or OFX file under
 Documents, or import it there and then) and the page opens as a split
 screen: the statement on one side, the transactions on the other, with a
-divider you drag to resize. **Read statement and pre-reconcile** takes the
+divider you drag to resize. The two fill the window and scroll on their
+own; **Full height** above the statement lets it take the window from top
+to bottom, with nothing above it (each browser remembers the choice).
+**Read statement and pre-reconcile** takes the
 statement's closing date, balances and lines from what was already read out
 of the file, or else has the AI copy them out (the LLM connection for images
 and documents, which must be a provider that reads PDFs, or the one for
