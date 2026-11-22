@@ -276,8 +276,9 @@ export async function saveSettings(db: Queryable, moduleId: string, spec: Settin
 	}
 	// A newly chosen account must be one of this organization's, of the kind the field asks for.
 	for (const { f, code } of accounts) {
-		const a = await queryRow<{ type: string; currency: string; is_active: boolean }>(db, `SELECT type::text AS type, currency::text AS currency, is_active FROM accounts WHERE code = $1`, [code]);
+		const a = await queryRow<{ type: string; currency: string; is_active: boolean; own: string | null }>(db, `SELECT type::text AS type, currency::text AS currency, is_active, (SELECT n.name FROM entities n WHERE n.id = accounts.entity_id) AS own FROM accounts WHERE code = $1`, [code]);
 		if (!a) err.add(f.key, `there is no account ${code}`);
+		else if (a.own !== null) err.add(f.key, `account ${code} is ${a.own}'s own account; choose the account it sits under`);
 		else if (!a.is_active) err.add(f.key, `account ${code} is inactive`);
 		else if (f.currency && a.currency !== f.currency) err.add(f.key, `account ${code} is in ${a.currency}, not ${f.currency}`);
 		else if (f.account_types.length > 0 && !f.account_types.includes(a.type)) err.add(f.key, `account ${code} is ${/^[aeiou]/.test(a.type) ? "an" : "a"} ${a.type} account; choose ${f.account_types.join(" or ")}`);

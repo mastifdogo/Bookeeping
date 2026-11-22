@@ -12,6 +12,6 @@ export const load: PageLoad = async ({ fetch, params, parent }) => {
 	// What the module's "Import from CSV" takes, if it has one.
 	const imp = await api(fetch).GET('/modules/{moduleId}/import', { params: { path: { moduleId: params.id } } });
 	// Account fields offer the organization's accounts.
-	const accounts = settings?.fields.some((f) => f.type === 'account') ? ((await api(fetch).GET('/accounts')).data?.data ?? []) : [];
+	const accounts = settings?.fields.some((f) => f.type === 'account') ? ((await api(fetch).GET('/accounts')).data?.data ?? []).filter((a) => !a.entity) : [];
 	return { id: params.id, mod, settings, accounts, importInfo: imp.data?.available ? imp.data : null };
 };
