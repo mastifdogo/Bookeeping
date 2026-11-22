@@ -1256,7 +1256,7 @@ async function handleReconcileFromStatement(c: Ctx): Promise<void> {
 	const input = await decodeBody(c, true, decodeReconciliationFromStatement);
 	const acc = (await listAccounts(c.app, true)).find((a) => a.code === input.account_code);
 	if (!acc) throw new HttpError(422, `account ${JSON.stringify(input.account_code)} does not exist`, "validation_failed");
-	writeJSON(c.res, 201, await reconcileFromStatement(c.app, input, { name: acc.name, type: acc.type, currency: acc.currency }, c.user!.id));
+	writeJSON(c.res, 201, await reconcileFromStatement(c.app, input, { name: acc.name, type: acc.type, currency: acc.currency, entity_role: acc.entity?.role ?? null }, c.user!.id));
 }
 
 /** The AI reads the attached statement again and ticks the lines that match. */

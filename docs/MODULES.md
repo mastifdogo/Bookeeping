@@ -862,6 +862,14 @@ tags `unpaid`, `partially_paid` or `paid` on it, so modules don't work
 that out themselves: tag a new bill or invoice `unpaid`, link each payment
 as it is matched, and listen with `ctx.tags.onChange`.
 
+Since Ledger 0.34.0 a module can open a reconciliation on Ledger's
+Reconcile page: `const r = await ctx.reconcile.start({ account_code,
+document_id, lines? }, user)`, then send the user to `r.href`. Use it for a
+vendor's statement of account, against the vendor's own account
+(`ctx.entities.account`): Ledger shows the statement beside the vendor's
+bills and payments with the matching ones ticked, and what isn't ticked
+stays in the vendor's account when the reconciliation is finished.
+
 ## Files the module kept (`ctx.storage`)
 
 From Ledger 0.13.2 to 0.26 a module could keep files that weren't PDFs in a

@@ -4303,8 +4303,13 @@ components:
         ledger_version: { type: string }
     Reconciliation:
       type: object
-      required: [id, account_code, account_name, account_type, currency, statement_date, statement_balance_cents, status, created_by, created_at, finished_by, finished_at, cleared_count, document_id, document_title, document_url, document_type]
+      required: [id, account_code, account_name, account_type, currency, statement_date, statement_balance_cents, status, created_by, created_at, finished_by, finished_at, cleared_count, document_id, document_title, document_url, document_type, entity_role]
       properties:
+        entity_role:
+          type: string
+          enum: [customer, vendor]
+          nullable: true
+          description: Set when the account is a customer's or a vendor's own. The statement is theirs, and lines not ticked when it is finished stay in the account instead of moving to Unreconciled.
         id: { type: integer, format: int64 }
         account_code: { $ref: '#/components/schemas/AccountCode' }
         account_name: { type: string }

@@ -209,6 +209,27 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
     invoice `unpaid` yourself when it is posted; don't work out or set
     `partially_paid` / `paid` from payments yourself. `paid` set by hand
     with no payment linked (a person marking it paid) stays as set.
+  - **A vendor's (or customer's) statement of account** (Ledger ≥ 0.34.0)
+    is not a bill: don't post anything for it. Reconcile it against the
+    vendor's own account on Ledger's Reconcile page:
+    `const r = await ctx.reconcile.start({ account_code: (await
+    ctx.entities.account(vendorId, "vendor", currency)).code, document_id,
+    statement_date?, statement_balance_cents?, lines?, opening_balance_cents?,
+    period_start? }, user)` and send the user to `r.href`
+    (`/reconcile/<id>`). `lines: [{ date, description, amount_cents }]` are
+    the statement's lines when the module read them itself, in the
+    account's natural sign (a vendor's invoices and charges positive, our
+    payments and their credit notes negative; the balance is what is
+    owed); with only `document_id` Ledger reads the document (its AI).
+    Ledger ticks the journal lines that match (same amount, near date); the
+    page shows the statement beside the vendor's lines, which statement
+    lines aren't in the books and which book lines aren't on the statement.
+    A person finishes it. For a customer's or vendor's own account, lines
+    not ticked stay in the account (on a bank account they move to
+    Unreconciled). An account has one reconciliation in progress:
+    `start` returns that one; `ctx.reconcile.open(accountCode)` asks.
+    `r.reconciliation.entity_role` is `"vendor"`, `r.reading` has
+    `matched` / `unmatched`, `r.difference_cents` what is left to explain.
   - `ctx.ledger.moveLine(entryId, lineNumber, accountCode, { reason },
     user)` (Ledger ≥ 0.32.0) moves one line of a posted entry to another
     account of the same currency and returns the entry; the move is logged

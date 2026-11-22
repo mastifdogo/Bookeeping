@@ -85,7 +85,9 @@
 					(postsLines ? `, one entry for each of the ${notInBooks.length} statement lines not in your books` : '') +
 					', and ticked, so the account matches the statement.'
 			);
-		if (unticked > 0)
+		if (unticked > 0 && rec.entity_role)
+			parts.push(`${unticked} transaction${unticked === 1 ? '' : 's'} not ticked stay${unticked === 1 ? 's' : ''} in ${rec.account_code} ${rec.account_name}: not on this statement, so still to be checked against the next one.`);
+		else if (unticked > 0)
 			parts.push(
 				`${unticked} transaction${unticked === 1 ? '' : 's'} not ticked move${unticked === 1 ? 's' : ''} from ${rec.account_code} to the Unreconciled clearing account, each with a to-do, until you move ${unticked === 1 ? 'it' : 'them'} to the right account.`
 			);
@@ -325,7 +327,7 @@
 			{#if d.difference_cents === 0}{open ? 'Balanced. Ready to finish.' : `Reconciled${rec.finished_by ? ` by ${rec.finished_by}` : ''}.`}{:else}Tick
 				lines until this is 0.00, or finish and the difference goes to Unreconciled.{/if}
 			{#if open && d.totals.uncleared.debit_count + d.totals.uncleared.credit_count > 0}<br /><span class="muted"
-					>On finishing, lines not ticked move to Unreconciled.</span
+					>{rec.entity_role ? `On finishing, lines not ticked stay in this ${rec.entity_role}'s account.` : 'On finishing, lines not ticked move to Unreconciled.'}</span
 				>{/if}
 		</span>
 	</div>

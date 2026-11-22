@@ -32,6 +32,12 @@ export interface Reconciliation {
 	document_title: string | null;
 	document_url: string | null;
 	document_type: string | null;
+	/**
+	 * Set when the account is a customer's or a vendor's own: the statement is
+	 * theirs (a vendor's statement of account), and lines not ticked when it is
+	 * finished stay in the account instead of moving to Unreconciled.
+	 */
+	entity_role: "customer" | "vendor" | null;
 }
 
 /** One line of a statement as the AI read it; amounts in the account's natural sign. */
@@ -104,7 +110,7 @@ export interface ReconciliationDetail {
 const SELECT = `
 	SELECT r.id, a.code AS account_code, a.name AS account_name, a.type::text AS account_type, a.currency::text AS currency,
 	       r.statement_date, r.statement_balance_cents, r.status, cu.username AS created_by, r.created_at,
-	       fu.username AS finished_by, r.finished_at, r.account_id, r.document_id, d.title AS document_title, d.content_type AS document_type,
+	       fu.username AS finished_by, r.finished_at, r.account_id, r.document_id, d.title AS document_title, d.content_type AS document_type, a.entity_role,
 	       (SELECT count(*) FROM reconciliation_lines l WHERE l.reconciliation_id = r.id) AS cleared_count
 	  FROM reconciliations r
 	  JOIN accounts a ON a.id = r.account_id
@@ -397,7 +403,8 @@ export async function finishReconciliation(app: App, id: bigint, userId: number 
 			if (after.difference_cents !== 0n) throw new Error(`posting the difference left ${after.difference_cents}`);
 		}
 		const unticked = d.lines.filter((l) => !l.cleared).map((l) => BigInt(l.transaction_id));
-		if (unticked.length > 0) {
+		// A customer's or vendor's own account keeps what their statement doesn't show: it is still owed, or theirs to explain.
+		if (unticked.length > 0 && r.entity_role === null) {
 			const movable = await queryRows<{ id: bigint }>(
 				tx,
 				`SELECT t.id FROM transactions t JOIN journal_entries je ON je.id = t.journal_entry_id

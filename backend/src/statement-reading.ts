@@ -20,7 +20,8 @@ import { getDocument, readDocument } from "./documents.ts";
 import { getExtraction, setExtraction } from "./document-tags.ts";
 import { log } from "./log.ts";
 import { llmComplete, LlmError, pickConnection, PROVIDER_INFO, readLlmConfig } from "./llm.ts";
-import { changeCleared, createReconciliation, getReconciliation, saveReading, type ReconciliationDetail, type ReconciliationLine, type StatementLine, type StatementReading } from "./reconcile.ts";
+import { listAccounts } from "./accounts.ts";
+import { changeCleared, createReconciliation, getReconciliation, listReconciliations, saveReading, type ReconciliationDetail, type ReconciliationLine, type StatementLine, type StatementReading } from "./reconcile.ts";
 
 const MAX_STATEMENT_BYTES = 20 * 1024 * 1024;
 const MAX_LINES = 2000;
@@ -125,16 +126,22 @@ async function readingFromExtraction(app: App, documentId: unknown, account: { t
 }
 
 /** What the statement says: from what was already read out of it, else by asking the AI. Nothing is saved or changed. */
-export async function readStatement(app: App, documentId: unknown, account: { name: string; type: string; currency: string }): Promise<Reading> {
+export async function readStatement(app: App, documentId: unknown, account: { name: string; type: string; currency: string; entity_role?: "customer" | "vendor" | null }): Promise<Reading> {
 	const doc = await getDocument(app, documentId);
-	const known = await readingFromExtraction(app, doc.id, account);
+	// What a module read out of a bank or card statement; a vendor's or customer's statement is read for what it is.
+	const known = account.entity_role ? null : await readingFromExtraction(app, doc.id, account);
 	if (known) return known;
 	if (doc.size_bytes > MAX_STATEMENT_BYTES) throw new HttpError(413, `the statement is too large for the AI to read (${MAX_STATEMENT_BYTES / 1024 / 1024} MB at most)`, "payload_too_large");
 	const pdf = doc.content_type === "application/pdf";
 	const picture = /^image\/(png|jpeg|gif|webp)$/.test(doc.content_type);
 	const text = TEXT_TYPES.test(doc.content_type);
 	if (!pdf && !picture && !text) throw new HttpError(422, `the AI can't read this kind of file (${doc.filename}); attach the statement as a PDF, a picture, or a CSV or OFX file`, "validation_failed");
-	const about = `This is a statement for the account "${account.name}" (${account.type === "liability" ? "a credit card or loan: the balance is the amount owed" : "a bank account"}, ${account.currency}). Copy out its period, balances and every transaction line.`;
+	const about =
+		account.entity_role === "vendor"
+			? `This is a statement of account from the vendor "${account.name}" (${account.currency}): what we owe them. Its balance is the amount owed, a positive number. Invoices, charges and interest make it go up (positive); our payments, credit notes and refunds make it go down (negative). Copy out its period, balances and every line.`
+			: account.entity_role === "customer"
+				? `This is a statement of account sent to the customer "${account.name}" (${account.currency}): what they owe. Its balance is the amount owed, a positive number. Invoices and charges make it go up (positive); payments and credit notes make it go down (negative). Copy out its period, balances and every line.`
+				: `This is a statement for the account "${account.name}" (${account.type === "liability" ? "a credit card or loan: the balance is the amount owed" : "a bank account"}, ${account.currency}). Copy out its period, balances and every transaction line.`;
 	let r;
 	if (text) {
 		// A statement kept as text (CSV, OFX, QFX) goes in the prompt, to the connection for text.
@@ -232,11 +239,11 @@ export async function preReconcile(app: App, id: bigint): Promise<Reconciliation
 	const rec = d.reconciliation;
 	if (rec.status !== "open") throw new ConflictError("this reconciliation is finished; undo it to make changes");
 	if (rec.document_id === null) throw new ConflictError("attach the statement first");
-	return apply(app, id, await readStatement(app, rec.document_id, { name: rec.account_name, type: rec.account_type, currency: rec.currency }));
+	return apply(app, id, await readStatement(app, rec.document_id, { name: rec.account_name, type: rec.account_type, currency: rec.currency, entity_role: rec.entity_role }));
 }
 
 /** Starts a reconciliation from a statement: the AI reads its closing date and balance, then the matches are ticked. */
-export async function reconcileFromStatement(app: App, input: { account_code: string; document_id: bigint }, account: { name: string; type: string; currency: string }, userId: number | null): Promise<ReconciliationDetail> {
+export async function reconcileFromStatement(app: App, input: { account_code: string; document_id: bigint }, account: { name: string; type: string; currency: string; entity_role?: "customer" | "vendor" | null }, userId: number | null): Promise<ReconciliationDetail> {
 	// Checked before the AI is asked: a statement that belongs to another account isn't read for this one.
 	const doc = await getDocument(app, input.document_id);
 	if (doc.account_code !== null && doc.account_code !== input.account_code) {
@@ -284,4 +291,65 @@ export async function keepReading(app: App, d: ReconciliationDetail, userId: num
 	} catch (err) {
 		log.warn("could not keep a statement's reading with its document", { document: rec.document_id, err: (err as Error).message });
 	}
+}
+
+export interface ReconciliationStart {
+	account_code: string;
+	/** The statement, a document: shown beside the lines, and read when `lines` isn't given. */
+	document_id?: number | bigint | string | null;
+	/** Needed with `lines`, or when there is no document to read them from. */
+	statement_date?: string;
+	statement_balance_cents?: number | bigint | string;
+	/** The statement's lines when the caller has read them itself, in the account's natural sign (what makes the balance go up is positive). */
+	lines?: { date: string; description?: string; amount_cents: number }[];
+	opening_balance_cents?: number | null;
+	period_start?: string | null;
+}
+
+/**
+ * For modules (ctx.reconcile.start): opens a reconciliation of an account
+ * against a statement and ticks the journal lines that match its lines, so
+ * a person only checks what is left. With `lines` the caller has read the
+ * statement; with only a document Ledger reads it (the AI, or what was read
+ * out of it before); with neither, the date and balance start an empty one.
+ * An account has one open reconciliation at a time: that one is returned.
+ */
+export async function startReconciliation(app: App, input: ReconciliationStart, userId: number | null): Promise<ReconciliationDetail> {
+	const o = (input && typeof input === "object" ? input : {}) as ReconciliationStart;
+	const bad = (m: string): never => {
+		throw new HttpError(422, m, "validation_failed");
+	};
+	if (typeof o.account_code !== "string" || o.account_code === "") bad("account_code is required");
+	const acc = (await listAccounts(app, true)).find((a) => a.code === o.account_code);
+	if (!acc) bad(`account ${JSON.stringify(o.account_code)} does not exist`);
+	const open = (await listReconciliations(app, acc!.code)).find((r) => r.status === "open");
+	if (open) return getReconciliation(app, BigInt(open.id));
+	const account = { name: acc!.name, type: acc!.type, currency: acc!.currency, entity_role: acc!.entity?.role ?? null };
+	const documentId = o.document_id === undefined || o.document_id === null || o.document_id === "" ? null : /^[1-9]\d{0,17}$/.test(String(o.document_id)) ? BigInt(String(o.document_id)) : bad("document_id must be a document's number");
+	const cents = (x: unknown, what: string): bigint => (typeof x === "bigint" ? x : typeof x === "number" && Number.isSafeInteger(x) ? BigInt(x) : typeof x === "string" && /^-?\d{1,15}$/.test(x) ? BigInt(x) : bad(`${what} must be a whole number of cents`));
+	if (o.lines === undefined && documentId !== null && (o.statement_date === undefined || o.statement_balance_cents === undefined)) {
+		return reconcileFromStatement(app, { account_code: acc!.code, document_id: documentId }, account, userId);
+	}
+	if (!isDate(o.statement_date)) bad("statement_date must be a date (YYYY-MM-DD)");
+	if (o.statement_balance_cents === undefined) bad("statement_balance_cents is required");
+	const closing = cents(o.statement_balance_cents, "statement_balance_cents");
+	const d = await createReconciliation(app, { account_code: acc!.code, statement_date: o.statement_date!, statement_balance_cents: closing, document_id: documentId }, userId);
+	if (o.lines === undefined) return documentId === null ? d : preReconcile(app, BigInt(d.reconciliation.id)).catch(() => d);
+	if (!Array.isArray(o.lines) || o.lines.length > MAX_LINES) bad(`lines must be a list of at most ${MAX_LINES}`);
+	const lines: StatementLine[] = [];
+	o.lines.forEach((l, i) => {
+		if (!isDate(l?.date) || !Number.isSafeInteger(l?.amount_cents) || l.amount_cents === 0) bad(`lines[${i}] needs a date (YYYY-MM-DD) and amount_cents (whole cents, not 0)`);
+		lines.push({ date: l.date, description: String(l.description ?? "").replace(/\s+/g, " ").trim().slice(0, 300), amount_cents: l.amount_cents });
+	});
+	const opening = o.opening_balance_cents === undefined || o.opening_balance_cents === null ? null : Number(cents(o.opening_balance_cents, "opening_balance_cents"));
+	return apply(app, BigInt(d.reconciliation.id), {
+		read_at: new Date().toISOString(),
+		model: "",
+		period_start: isDate(o.period_start) ? o.period_start : null,
+		end_date: o.statement_date!,
+		opening_balance_cents: opening,
+		closing_balance_cents: Number(closing),
+		adds_up: addUp(lines, opening, Number(closing)),
+		lines,
+	});
 }

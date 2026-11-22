@@ -450,6 +450,14 @@ Ledger keeps true as payments are linked, taken off or reversed. Modules
 use the same links (Auto sort for a bill's payments), so a bill's page in
 Ledger shows the same payments the module does.
 
+**A vendor's statement.** A statement of account from a vendor is checked
+on the **Reconcile** page like a bank statement, against the vendor's own
+account: the statement beside the vendor's bills and payments, the
+matching ones ticked, the statement lines your books don't have listed.
+Auto sort starts it from a statement it received. When it is finished,
+bills and payments not ticked stay in the vendor's account (on a bank
+account they would move to Unreconciled).
+
 **Updating from an earlier version** converts the books by itself: every
 line in accounts receivable of an entry tagged with (or posted with) a
 customer, and every line in accounts payable of a vendor's entry, moves to

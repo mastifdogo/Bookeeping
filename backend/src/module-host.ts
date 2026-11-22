@@ -23,6 +23,8 @@ import { builtFor, compatible, scanInstalled, type InstalledModule, type ModuleM
 import { createAccount, ensureClearingAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listClearingAccounts } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry, editJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
+import { getReconciliation, listReconciliations } from "./reconcile.ts";
+import { startReconciliation, type ReconciliationStart } from "./statement-reading.ts";
 import { paymentsOf, relateEntries, relatedEntries, unrelateEntries } from "./related.ts";
 import { createEntity, ensureEntity, findEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
 import { entityAccount, postEntityPayment } from "./entity-accounts.ts";
@@ -442,6 +444,36 @@ function makeContext(app: App, m: LoadedModule) {
 			 */
 			payment: (entityId: number, p: { role: EntityRole; account_code: string; entry_date: string; amount_cents: number | bigint | string; description?: string; reference?: string }, user?: { username: string }) =>
 				postEntityPayment(app, Number(entityId), { ...p, amount_cents: toCents(p?.amount_cents, "amount_cents") }, actorOf(user)),
+		},
+		/**
+		 * Reconciling an account against a statement (Ledger 0.34.0), on Ledger's
+		 * Reconcile page: the statement beside the account's lines, the matching
+		 * ones ticked, a person checks the rest and finishes.
+		 */
+		reconcile: {
+			/**
+			 * Opens a reconciliation and returns it with `href`, the page to send
+			 * the user to: { account_code, document_id?, statement_date?,
+			 * statement_balance_cents?, lines?: [{ date, description, amount_cents }],
+			 * opening_balance_cents?, period_start? }. With `lines` (in the account's
+			 * natural sign: what makes its balance go up is positive) the module has
+			 * read the statement; with only document_id Ledger reads it; an account's
+			 * reconciliation already in progress is returned as it is. For a
+			 * vendor's statement use the vendor's own account
+			 * (ctx.entities.account): invoices are positive, payments negative, and
+			 * what isn't ticked stays in the account when it is finished.
+			 */
+			start: async (input: ReconciliationStart, user?: { username: string }) => {
+				const d = await startReconciliation(app, input, actorOf(user));
+				return { ...d, href: `/reconcile/${d.reconciliation.id}` };
+			},
+			/** The account's reconciliation in progress (with href), or null. */
+			open: async (accountCode: string) => {
+				const r = (await listReconciliations(app, String(accountCode))).find((x) => x.status === "open");
+				return r ? { ...(await getReconciliation(app, BigInt(r.id))), href: `/reconcile/${r.id}` } : null;
+			},
+			/** The account's reconciliations, newest first (open one first). */
+			list: (accountCode: string) => listReconciliations(app, String(accountCode)),
 		},
 		ledger: {
 			listAccounts: (opts: { includeInactive?: boolean } = {}) => listAccounts(app, opts.includeInactive ?? false),

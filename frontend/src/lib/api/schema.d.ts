@@ -3104,6 +3104,11 @@ export interface components {
             ledger_version: string;
         };
         Reconciliation: {
+            /**
+             * @description Set when the account is a customer's or a vendor's own. The statement is theirs, and lines not ticked when it is finished stay in the account instead of moving to Unreconciled.
+             * @enum {string|null}
+             */
+            entity_role: "customer" | "vendor" | null;
             /** Format: int64 */
             id: number;
             account_code: components["schemas"]["AccountCode"];

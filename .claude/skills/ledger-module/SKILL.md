@@ -345,7 +345,11 @@ Decide, and state briefly to the user:
   { amount_cents?, note? }, req.user)`. Ledger shows the payment on the
   entry's page with what is paid and what is left, and keeps one of the
   tags `unpaid`, `partially_paid` or `paid` on the entry paid; tag a new
-  bill or invoice `unpaid` and leave the other two to Ledger. Accounts can be
+  bill or invoice `unpaid` and leave the other two to Ledger. A vendor's
+  statement of account is not a bill (Ledger ≥ 0.34.0): post nothing, open
+  a reconciliation of the vendor's own account with
+  `ctx.reconcile.start({ account_code, document_id, lines? }, req.user)`
+  and send the user to its `href`. Accounts can be
   **sub-accounts** (Ledger 0.15.0): `parent_code` is the parent,
   `balance_cents` the account's own postings, `total_balance_cents` adds
   everything below it. Show account pickers and lists as a tree (indent

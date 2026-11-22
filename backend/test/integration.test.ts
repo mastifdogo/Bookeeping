@@ -10,6 +10,7 @@ import { readCsv } from "../src/csv.ts";
 import { createUser, login, setUserActive, SESSION_COOKIE } from "../src/auth.ts";
 import { LOGIN_MAX_FAILURES, LOGIN_MAX_FAILURES_PER_USER, LoginLimiter } from "../src/limiter.ts";
 import { ModuleHost } from "../src/module-host.ts";
+import { startReconciliation } from "../src/statement-reading.ts";
 import { fileOldHandoffs } from "../src/module-files.ts";
 import { fakeGitHub } from "./fake-github.ts";
 import { today } from "../src/date.ts";
@@ -5042,4 +5043,37 @@ test("linked payments: an entry shows its payments, what is left, and is tagged 
 	assert.deepEqual(tagsOf(r.json()), ["unpaid"]);
 	expectStatus(await call("POST", `/journal-entries/${bill.id}/related`, { entry_id: p2.id, amount_cents: 5 }), 422);
 	expectStatus(await call("POST", `/journal-entries/${bill.id}/related`, { entry_id: p2.id, payment: true, amount_cents: 0 }), 422);
+});
+
+test("a vendor's statement: reconciled against the vendor's own account, lines matched, the rest stays", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { app, call } = ta;
+	await createAccount(ta, "1000", "Bank", "asset", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	expectStatus(await call("POST", "/accounts", { code: "2000", name: "Accounts payable", type: "liability", currency: "CAD", description: "", kind: "payable" }), 201);
+	const hydro = (await call("POST", "/entities", { name: "Hydro", is_vendor: true })).json();
+	const bill = async (date: string, cents: number) => (await call("POST", "/journal-entries", { ...entry(date, "Bill", dr("6100", cents), cr("2000", cents)), entity_id: hydro.id })).json();
+	await bill("2026-06-03", 10000);
+	await bill("2026-06-12", 2500);
+	const late = await bill("2026-06-28", 700); // not on the vendor's statement yet
+	expectStatus(await call("POST", `/entities/${hydro.id}/payments`, { role: "vendor", account_code: "1000", entry_date: "2026-06-20", amount_cents: 10000 }), 201);
+	const code = `2000-${hydro.id}`;
+
+	// The module read the statement itself: invoices up, payments down, and one invoice the books don't have.
+	const d = await (() =>
+		startReconciliation(app, { account_code: code, statement_date: "2026-06-30", statement_balance_cents: 2900, opening_balance_cents: 0,
+			lines: [{ date: "2026-06-03", description: "Invoice 1", amount_cents: 10000 }, { date: "2026-06-12", description: "Invoice 2", amount_cents: 2500 }, { date: "2026-06-21", description: "Payment, thank you", amount_cents: -10000 }, { date: "2026-06-25", description: "Invoice 3", amount_cents: 400 }] }, null))();
+	assert.deepEqual([d.reconciliation.entity_role, d.reconciliation.account_code, d.reading!.adds_up, d.reading!.matched.length, d.reading!.unmatched], ["vendor", code, true, 3, [3]]);
+	assert.deepEqual([d.lines.filter((l) => l.cleared).length, d.lines.length, Number(d.difference_cents)], [3, 4, 400]);
+	// Asked again, the one in progress comes back.
+	assert.equal((await startReconciliation(app, { account_code: code, statement_date: "2026-07-31", statement_balance_cents: 0 }, null)).reconciliation.id, d.reconciliation.id);
+
+	// Finished with the difference posted: the missing invoice is in the books (against Unreconciled), and the unticked bill stays with the vendor.
+	let r = await call("POST", `/reconciliations/${d.reconciliation.id}/finish`, { post_difference: true });
+	expectStatus(r, 200);
+	assert.equal(r.json().reconciliation.status, "finished");
+	r = await call("GET", `/journal-entries/${late.id}`);
+	assert.equal(r.json().lines[1].account_code, code);
+	assert.equal((await call("GET", `/entities/${hydro.id}`)).json().accounts[0].owed_cents, 3600);
 });
