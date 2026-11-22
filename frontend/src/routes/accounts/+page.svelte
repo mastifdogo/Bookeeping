@@ -83,8 +83,30 @@
 	});
 	// By code (the default) the chart is a tree: each account, then its sub-accounts, indented.
 	let tree = $derived(sort.key === 'code' && !sort.desc);
-	let rows = $derived.by((): { a: Account; depth: number; kids: boolean }[] => {
-		if (!tree) return sorted.map((a) => ({ a, depth: 0, kids: false }));
+	// Sub-accounts are folded into their parent until it is expanded. Remembered in this browser.
+	const OPEN_STORAGE = 'ledger.accounts.open';
+	function readOpen(): string[] {
+		try {
+			const v = JSON.parse(localStorage.getItem(OPEN_STORAGE) ?? '[]');
+			return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+		} catch {
+			return [];
+		}
+	}
+	let open = $state<string[]>(readOpen());
+	function setOpen(next: string[]) {
+		open = next;
+		try {
+			localStorage.setItem(OPEN_STORAGE, JSON.stringify(next));
+		} catch {
+			// storage blocked: keep it for this page only
+		}
+	}
+	const toggle = (code: string) => setOpen(open.includes(code) ? open.filter((c) => c !== code) : [...open, code]);
+	let folded = $derived([...new Set(data.accounts.map((a) => a.parent_code).filter((c): c is string => !!c && data.accounts.some((a) => a.code === c)))]);
+	let allOpen = $derived(folded.length > 0 && folded.every((c) => open.includes(c)));
+	let rows = $derived.by((): { a: Account; depth: number; kids: number }[] => {
+		if (!tree) return sorted.map((a) => ({ a, depth: 0, kids: 0 }));
 		const codes = new Set(sorted.map((a) => a.code));
 		const under = new Map<string, Account[]>();
 		for (const a of sorted) {
@@ -92,11 +114,13 @@
 			const key = a.parent_code && codes.has(a.parent_code) ? a.parent_code : '';
 			under.set(key, [...(under.get(key) ?? []), a]);
 		}
-		const out: { a: Account; depth: number; kids: boolean }[] = [];
+		const out: { a: Account; depth: number; kids: number }[] = [];
+		// Every account below this one, however deep.
+		const below = (code: string, depth = 0): number => (depth > 10 ? 0 : (under.get(code) ?? []).reduce((n, c) => n + 1 + below(c.code, depth + 1), 0));
 		const walk = (key: string, depth: number) => {
 			for (const a of under.get(key) ?? []) {
-				out.push({ a, depth, kids: under.has(a.code) });
-				if (depth < 10) walk(a.code, depth + 1);
+				out.push({ a, depth, kids: below(a.code) });
+				if (depth < 10 && open.includes(a.code)) walk(a.code, depth + 1);
 			}
 		};
 		walk('', 0);
@@ -128,6 +152,9 @@
 <div class="toolbar">
 	<h1 style="margin:0">Accounts</h1>
 	<span class="spacer"></span>
+	{#if tree && folded.length > 0}
+		<button onclick={() => setOpen(allOpen ? [] : folded)}>{allOpen ? 'Collapse all' : 'Expand all'}</button>
+	{/if}
 	<label class="inline"><input type="checkbox" checked={data.includeInactive} onchange={toggleInactive} /> Show inactive</label>
 	<button class="primary" onclick={() => (showForm = !showForm)}>{showForm ? 'Close' : '+ New account'}</button>
 </div>
@@ -213,7 +240,12 @@
 					<tr class="clickable" onclick={(e) => openRow(e, a.code)}>
 						<td class="mono"><a href="/accounts/{encodeURIComponent(a.code)}">{a.code}</a></td>
 						<td style:padding-left={depth ? `${0.6 + depth * 1.25}rem` : undefined}>
-							{#if depth}<span class="muted" aria-hidden="true">↳ </span>{/if}{a.name}
+							{#if kids}
+								<button class="fold" aria-expanded={open.includes(a.code)} aria-label="{open.includes(a.code) ? 'Hide' : 'Show'} the sub-accounts of {a.name}" title="{open.includes(a.code) ? 'Hide' : 'Show'} the {kids} sub-account{kids === 1 ? '' : 's'} of {a.name}" onclick={() => toggle(a.code)}>
+									<span aria-hidden="true">{open.includes(a.code) ? '▾' : '▸'}</span>
+								</button>
+							{:else if depth}<span class="muted" aria-hidden="true">↳ </span>{/if}{a.name}
+							{#if kids && !open.includes(a.code)}<button class="link small" onclick={() => toggle(a.code)}>{kids} sub-account{kids === 1 ? '' : 's'}</button>{/if}
 							{#if a.entity}<a class="badge" href="/journal?entity_id={a.entity.id}" title="{a.entity.name}'s own account: what {a.entity.role === 'customer' ? 'they owe' : 'they are owed'}">{a.entity.role}</a>{/if}
 							{#if a.kind}<span class="badge" class:warn={a.kind === 'clearing' && a.balance_cents !== 0}>{kindLabel(a.kind)}{a.kind === 'clearing' && a.balance_cents !== 0 ? ': not cleared' : ''}</span>{/if}
 							{#if !tree && a.parent_code}<span class="muted small">(under {a.parent_code})</span>{/if}
@@ -235,14 +267,26 @@
 	{/if}
 </div>
 <p class="muted small">
-	Balances use each account's normal side: debit for assets and expenses, credit for liabilities, equity and revenue. Sub-accounts are
-	listed under their parent when the chart is sorted by code; a parent's own balance is what is posted to it directly.
+	Balances use each account's normal side: debit for assets and expenses, credit for liabilities, equity and revenue. Sorted by code,
+	sub-accounts are folded into their parent: ▸ shows them, and the parent's line gives the total with them. A parent's own balance is
+	what is posted to it directly.
 </p>
 
 <style>
 	.warn-note {
 		background: var(--warn-bg);
 		color: var(--text);
+	}
+	button.fold {
+		all: unset;
+		cursor: pointer;
+		display: inline-block;
+		width: 1.1rem;
+		color: var(--muted);
+	}
+	button.fold:focus-visible {
+		outline: 2px solid var(--accent);
+		border-radius: 3px;
 	}
 	button.sort {
 		all: unset;

@@ -410,6 +410,11 @@ owes you, or what you owe a vendor, is that account's balance: the
 lists every invoice, bill and payment behind it. Accounts receivable and
 payable show the total of all of them.
 
+On the **Accounts** page sub-accounts are folded into their parent, so a
+long list of customers or vendors doesn't fill the chart: ▸ next to a
+parent (or **Expand all**) shows them, and the parent's line gives the
+total with them. Each browser remembers what was expanded.
+
 You don't pick these accounts yourself. Post an entry with a customer or
 vendor and a line to accounts receivable or payable, and that line goes to
 their own account; so do the invoices Sales posts and the bills and
