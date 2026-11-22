@@ -621,7 +621,9 @@ Documents, or import it there and then) and the page opens as a split
 screen: the statement on one side, the transactions on the other, with a
 divider you drag to resize. The two fill the window and scroll on their
 own; **Full height** above the statement lets it take the window from top
-to bottom, with nothing above it (each browser remembers the choice).
+to bottom, with nothing above it, and **Hide toolbar** leaves out the
+PDF viewer's own strip of page, zoom and print buttons (each browser
+remembers both choices).
 **Read statement and pre-reconcile** takes the
 statement's closing date, balances and lines from what was already read out
 of the file, or else has the AI copy them out (the LLM connection for images

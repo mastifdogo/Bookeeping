@@ -109,6 +109,22 @@
 	} catch {
 		// storage blocked: for this page only
 	}
+	// The browser's own PDF toolbar (page, zoom, print) can be left out, so only the page shows. Remembered in this browser.
+	const BAR_STORAGE = 'ledger.reconcile.pdfbar';
+	let pdfBar = $state(true);
+	try {
+		pdfBar = localStorage.getItem(BAR_STORAGE) !== '0';
+	} catch {
+		// storage blocked: for this page only
+	}
+	function setPdfBar(on: boolean) {
+		pdfBar = on;
+		try {
+			localStorage.setItem(BAR_STORAGE, on ? '1' : '0');
+		} catch {
+			// storage blocked
+		}
+	}
 	function setTall(on: boolean) {
 		tall = on;
 		try {
@@ -192,11 +208,17 @@
 				<span class="spacer"></span>
 				<a href={rec.document_url} target="_blank" rel="noopener">Open in a new tab</a>
 				{#if open}<button class="link" disabled={busy} onclick={() => attach(null)}>Take off</button>{/if}
+				{#if rec.document_type === 'application/pdf'}
+					<button class="link" aria-pressed={!pdfBar} title={pdfBar ? "Hide the PDF viewer's toolbar (page, zoom, print), so only the page shows" : "Show the PDF viewer's toolbar again"} onclick={() => setPdfBar(!pdfBar)}>{pdfBar ? 'Hide toolbar' : 'Show toolbar'}</button>
+				{/if}
 				<button class="link" aria-pressed={tall} title={tall ? 'Back to the statement under the page heading' : 'The statement fills the window from top to bottom'} onclick={() => setTall(!tall)}>{tall ? 'Normal height' : 'Full height'}</button>
 				<button class="link" onclick={() => (showDoc = false)}>Hide</button>
 			</div>
 			{#if rec.document_type === 'application/pdf'}
-				<iframe src="{rec.document_url}#view=FitH" title="Statement: {rec.document_title}"></iframe>
+				<!-- The viewer reads its options when the file loads, so the frame is made again when they change. -->
+				{#key pdfBar}
+					<iframe src="{rec.document_url}#{pdfBar ? '' : 'toolbar=0&navpanes=0&'}view=FitH" title="Statement: {rec.document_title}"></iframe>
+				{/key}
 			{:else if rec.document_type?.startsWith('image/')}
 				<div class="picture"><img src={rec.document_url} alt="Statement: {rec.document_title}" /></div>
 			{:else if rec.document_type === 'text/csv' || rec.document_type === 'text/plain'}
