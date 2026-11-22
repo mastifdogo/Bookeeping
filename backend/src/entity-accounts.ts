@@ -148,10 +148,13 @@ export async function routeEntryLines(tx: Queryable, e: JournalEntryCreate): Pro
 	if (controls.length === 0) return e;
 	const who = await queryRow<{ is_customer: boolean; is_vendor: boolean; is_active: boolean }>(tx, `SELECT is_customer, is_vendor, is_active FROM entities WHERE id = $1`, [e.entity_id]);
 	if (!who || !who.is_active) return e; // refused by the posting itself
+	// An entry between receivables (or payables) and their own account moves an amount from one to the other: it stays as written.
+	const own = await queryRows<{ entity_role: string }>(tx, `SELECT entity_role FROM accounts WHERE code = ANY($1) AND entity_id = $2`, [e.lines.map((l) => l.account_code).filter((c) => ACCOUNT_CODE_RE.test(c)), e.entity_id]);
 	const to = new Map<string, string>();
 	for (const c of controls) {
 		const role = ROLE_OF_KIND[c.kind]!;
 		if (role === "customer" ? !who.is_customer : !who.is_vendor) continue;
+		if (own.some((o) => o.entity_role === role)) continue;
 		to.set(c.code, (await ensureEntityAccount(tx, e.entity_id, role, c.currency.trim() as Currency, c.id)).code);
 	}
 	return to.size === 0 ? e : { ...e, lines: e.lines.map((l) => (to.has(l.account_code) ? { ...l, account_code: to.get(l.account_code)! } : l)) };

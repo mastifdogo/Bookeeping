@@ -4853,6 +4853,11 @@ test("customers' and vendors' own accounts: posted to, paid, read as tags, renam
 	r = await call("POST", "/journal-entries", { ...entry("2026-04-01", "Odd", dr("1200", 100), cr("4000", 100)), entity_id: hydro.id });
 	assert.equal(r.json().lines[0].account_code, "1200");
 
+	// An entry between receivables and the customer's own account is posted as written.
+	r = await call("POST", "/journal-entries", { ...entry("2026-04-01", "Deposit applied", dr("1200", 300), cr(acmeCode, 300)), entity_id: acme.id });
+	assert.deepEqual(r.json().lines.map((l: any) => l.account_code), ["1200", acmeCode]);
+	expectStatus(await call("POST", "/journal-entries", { ...entry("2026-04-01", "And back", dr(acmeCode, 300), cr("1200", 300)), entity_id: acme.id }), 201);
+
 	// Receive payment: the bank is debited, the customer's account credited.
 	r = await call("POST", `/entities/${acme.id}/payments`, { role: "customer", account_code: "1000", entry_date: "2026-04-10", amount_cents: 20000, reference: "chq 12" });
 	expectStatus(r, 201);
@@ -4889,10 +4894,10 @@ test("customers' and vendors' own accounts: posted to, paid, read as tags, renam
 	assert.equal(r.json().moves.length, 1);
 	assert.equal(await ta.countRows("journal_entry_tags"), 0);
 	r = await call("GET", `/journal-entries?entity_id=${acme.id}`);
-	assert.deepEqual(r.json().data.map((e: any) => e.description).sort(), ["Invoice 1", "Invoice 2", "Payment received - Acme"]);
+	assert.deepEqual(r.json().data.map((e: any) => e.description).sort(), ["And back", "Deposit applied", "Invoice 1", "Invoice 2", "Payment received - Acme"]);
 	r = await call("GET", `/journal-entries?tag=customer`);
-	assert.equal(r.json().data.length, 3);
-	assert.equal((await call("GET", "/tags")).json().data.find((x: any) => x.tag === "customer").entries, 3);
+	assert.equal(r.json().data.length, 5);
+	assert.equal((await call("GET", "/tags")).json().data.find((x: any) => x.tag === "customer").entries, 5);
 	r = await call("DELETE", `/journal-entries/${inv2.id}/tags/customer?entity_id=${acme.id}`);
 	expectStatus(r, 200);
 	assert.deepEqual([r.json().lines[0].account_code, r.json().tags], ["1200", []]);

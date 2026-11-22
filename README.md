@@ -441,7 +441,11 @@ that customer's or vendor's own account, with the move logged on the
 entry, and the tags the accounts now express are removed. Left where they
 are: lines ticked on a reconciliation, entries tagged with several
 customers or several vendors (nothing says whose the line is), and entries
-with no line in receivables or payables, which keep their tags.
+with no line in receivables or payables, which keep their tags. Only
+accounts tagged **Accounts receivable** or **Accounts payable** are
+converted: if you keep receivables or payables in an account of another
+name, tag it on the Accounts page before updating (or tag the entries
+afterwards, which moves their lines the same way).
 
 ### Editing an entry
 
