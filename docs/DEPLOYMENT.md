@@ -563,6 +563,23 @@ At the scheduled time, `ledger-update.service` (root) runs:
    A manual or startup check reboots only after installing an update (so
    a startup check can't reboot in a loop).
 
+**A release that only changes the pages** (the web UI) is quicker. Every
+release carries `UPDATE.json`, which says which server release its pages go
+with, and `ledger-web-<tag>.tar.gz`, the pages alone (a few hundred kB). The
+release workflow works this out by itself: when nothing outside `frontend/`
+(and docs or tests) changed since the release before, the new release keeps
+that release's server version. When the installed server is that one
+(`/usr/local/lib/ledger/SERVER_VERSION`), steps 2 to 5 become: download the
+pages and verify their checksum, replace `/usr/local/lib/ledger/web` (the
+pages that were there are kept in `web.previous`), check the server hands
+them out, and put the old ones back if it doesn't. There is no database
+backup, no `install.sh`, no restart and no reboot: the server keeps running
+and people get the new pages the next time they load one. Settings →
+Updates then shows both, e.g. "v0.35.2 (server v0.35.0, pages v0.35.2)".
+Any other case (the server changed, an install from before 0.35.0, an
+`UPDATE.json` that is missing or doesn't add up) is a full update as above,
+which always works: every release still has the whole tarball.
+
 **Reboot now** on the same page reboots the container straight away. The
 app writes `/var/lib/ledger/update-config/reboot-now`; `ledger-update.path`
 starts the updater, which finishes anything else it was asked to do and then

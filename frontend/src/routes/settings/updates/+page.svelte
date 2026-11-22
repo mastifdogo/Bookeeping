@@ -143,6 +143,9 @@
 <div class="card">
 	<p style="margin-top:0">
 		Installed version: <strong>{info.current_version}</strong>
+		{#if info.server_version !== info.current_version}
+			<span class="muted" title="Releases since {info.server_version} only changed the pages: they were replaced under the running server, with no backup, no restart and no downtime.">(server {info.server_version}, pages {info.current_version})</span>
+		{/if}
 		{#if info.status?.latest_version}
 			<span class="muted">· latest on GitHub: {info.status.latest_version}</span>
 		{/if}

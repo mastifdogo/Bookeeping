@@ -256,6 +256,22 @@ export function installedVersion(programDir: string): string {
 	}
 }
 
+/**
+ * The release the installed server (program, database, scripts) is from
+ * (lib/ledger/SERVER_VERSION). A release that only changes the pages leaves
+ * it as it is and replaces just the pages; without the file it is the
+ * installed version.
+ */
+export function installedServerVersion(programDir: string): string {
+	try {
+		const v = readFileSync(path.join(programDir, "SERVER_VERSION"), "utf8").trim();
+		if (/^[0-9A-Za-z.+_-]{1,64}$/.test(v)) return v;
+	} catch {
+		// an install from before releases said so
+	}
+	return installedVersion(programDir);
+}
+
 // ---------------------------------------------------------------------------
 // Versions
 // ---------------------------------------------------------------------------

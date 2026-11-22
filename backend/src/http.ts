@@ -48,6 +48,8 @@ import {
 } from "./decode.ts";
 import {
 	baseUpdateRepo,
+	installedServerVersion,
+	installedVersion,
 	nextScheduledTime,
 	readSchedule,
 	readUpdateRepo,
@@ -2123,7 +2125,9 @@ async function updateInfo(c: Ctx) {
 	const next = nextScheduledTime(schedule, Date.now());
 	const saved = await readUpdateRepo(c.app.update);
 	return {
-		current_version: c.app.version,
+		// Read each time: new pages are installed under the running server, which then has a newer version than it started with.
+		current_version: c.app.programDir ? installedVersion(c.app.programDir) : c.app.version,
+		server_version: c.app.programDir ? installedServerVersion(c.app.programDir) : c.app.version,
 		updater_installed: await updaterInstalled(c.app.update),
 		repo: { current: saved ?? baseUpdateRepo(), installed: baseUpdateRepo() },
 		schedule,

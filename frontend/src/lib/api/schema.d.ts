@@ -3058,6 +3058,11 @@ export interface components {
         UpdateInfo: {
             /** @example v0.6.0 */
             current_version: string;
+            /**
+             * @description The release the installed server (program, database, scripts) is from. A release that only changes the pages leaves it as it is and replaces just the pages, without a restart, so it can be older than current_version.
+             * @example v0.6.0
+             */
+            server_version: string;
             /** @description Where updates come from; current differs from installed after a rename saved in the app */
             repo: {
                 /** @example mastifdogo/Bookeeping */

@@ -4246,9 +4246,13 @@ components:
         last_scheduled_for: { type: string, format: date-time, nullable: true }
     UpdateInfo:
       type: object
-      required: [current_version, updater_installed, repo, schedule, next_run_at, status]
+      required: [current_version, server_version, updater_installed, repo, schedule, next_run_at, status]
       properties:
         current_version: { type: string, example: v0.6.0 }
+        server_version:
+          type: string
+          example: v0.6.0
+          description: The release the installed server (program, database, scripts) is from. A release that only changes the pages leaves it as it is and replaces just the pages, without a restart, so it can be older than current_version.
         repo:
           type: object
           required: [current, installed]

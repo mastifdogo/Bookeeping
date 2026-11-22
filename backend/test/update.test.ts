@@ -18,7 +18,8 @@ import {
 	writeSchedule,
 	type UpdateSchedule,
 } from "../src/update.ts";
-import { runUpdater, type SystemOps } from "../src/updater.ts";
+import { runUpdater, webOps, type SystemOps } from "../src/updater.ts";
+import { installedServerVersion, installedVersion } from "../src/update.ts";
 import { chooseUpdateRepo } from "../src/updater.ts";
 import { fakeGitHub } from "./fake-github.ts";
 
@@ -109,8 +110,10 @@ interface Fake {
 	apiBase: string;
 	calls: string[];
 	sys: SystemOps;
-	setLatest(tag: string, opts?: { corrupt?: boolean }): Promise<void>;
+	/** `server`: the release also has its pages alone and an UPDATE.json saying they go with that server. */
+	setLatest(tag: string, opts?: { corrupt?: boolean; server?: string; corruptWeb?: boolean }): Promise<void>;
 	healthy: boolean;
+	webHealthy: boolean;
 }
 
 async function fakeWorld(t: import("node:test").TestContext): Promise<Fake> {
@@ -147,7 +150,14 @@ async function fakeWorld(t: import("node:test").TestContext): Promise<Fake> {
 		apiBase: base,
 		calls: [],
 		healthy: true,
+		webHealthy: true,
 		sys: {
+			installWeb: async (dir, version) => {
+				await access(path.join(dir, "web", "200.html"));
+				fake.calls.push(`installWeb ${path.basename(dir)} ${version}`);
+			},
+			webHealthy: async () => (fake.calls.push("webHealth"), fake.webHealthy),
+			rollbackWeb: async (version) => void fake.calls.push(`rollbackWeb ${version}`),
 			backup: async () => void fake.calls.push("backup"),
 			snapshot: async () => void fake.calls.push("snapshot"),
 			install: async (dir) => {
@@ -166,12 +176,26 @@ async function fakeWorld(t: import("node:test").TestContext): Promise<Fake> {
 			for (const f of ["bin/ledger", "lib/ledger/ledger.mjs", "lib/ledger/node", "deploy/install.sh"]) await writeFile(path.join(stage, f), "x");
 			execFileSync("tar", ["-czf", path.join(assets, `${name}.tar.gz`), "-C", path.join(root, "stage"), name]);
 			const sum = createHash("sha256").update(await readFile(path.join(assets, `${name}.tar.gz`))).digest("hex");
-			await writeFile(path.join(assets, "SHA256SUMS"), `${opts.corrupt ? "0".repeat(64) : sum}  ${name}.tar.gz\n`);
+			let sums = `${opts.corrupt ? "0".repeat(64) : sum}  ${name}.tar.gz\n`;
+			const more: { name: string; browser_download_url: string }[] = [];
+			if (opts.server) {
+				const web = `ledger-web-${tag}`;
+				await mkdir(path.join(root, "stage", web, "web", "_app"), { recursive: true });
+				await writeFile(path.join(root, "stage", web, "web", "200.html"), "<html>");
+				await writeFile(path.join(root, "stage", web, "VERSION"), tag + "\n");
+				execFileSync("tar", ["-czf", path.join(assets, `${web}.tar.gz`), "-C", path.join(root, "stage"), web]);
+				const webSum = createHash("sha256").update(await readFile(path.join(assets, `${web}.tar.gz`))).digest("hex");
+				sums += `${opts.corruptWeb ? "0".repeat(64) : webSum}  ${web}.tar.gz\n`;
+				await writeFile(path.join(assets, "UPDATE.json"), JSON.stringify({ version: tag, server: opts.server, web: `${web}.tar.gz` }));
+				more.push({ name: `${web}.tar.gz`, browser_download_url: `${base}/${web}.tar.gz` }, { name: "UPDATE.json", browser_download_url: `${base}/UPDATE.json` });
+			}
+			await writeFile(path.join(assets, "SHA256SUMS"), sums);
 			release = {
 				tag_name: tag,
 				assets: [
 					{ name: `${name}.tar.gz`, browser_download_url: `${base}/${name}.tar.gz` },
 					{ name: "SHA256SUMS", browser_download_url: `${base}/SHA256SUMS` },
+					...more,
 				],
 			};
 		},
@@ -302,6 +326,47 @@ test("updater: Reboot now reboots, after any other request", async (t) => {
 	assert.deepEqual(f.calls, ["reboot"]);
 });
 
+test("updater: a release that only changes the pages replaces just the pages, with no backup, restart or reboot", async (t) => {
+	const f = await fakeWorld(t);
+	await f.setLatest("v0.7.2", { server: "v0.7.0" });
+	await writeSchedule(f.dirs, sched({ days: [0, 1, 2, 3, 4, 5, 6], time: "03:00", timezone: "UTC", reboot: "after_update" }));
+	const now = Date.parse("2026-10-24T03:02:00Z");
+	// Installed: the pages of v0.7.1 on the server of v0.7.0, which is the server v0.7.2 goes with.
+	const out = await runUpdater({ ...opts(f, "v0.7.1", now), serverVersion: "v0.7.0" });
+	assert.deepEqual(out, { ran: true, installed: "v0.7.2", rebooted: false });
+	assert.deepEqual(f.calls, ["installWeb ledger-web-v0.7.2 v0.7.2", "webHealth"]);
+	const st = (await readStatus(f.dirs))!;
+	assert.deepEqual([st.state, st.installed_version], ["ok", "v0.7.2"]);
+	assert.match(st.message, /only the pages changed, so nothing was restarted/);
+
+	// Another server than the one installed, or an install that doesn't say which server it has: the full update.
+	for (const serverVersion of ["v0.6.0", undefined]) {
+		f.calls.length = 0;
+		await rm(path.join(f.dirs.status, "status.json"), { force: true });
+		await writeFile(path.join(f.dirs.config, "run-now"), "");
+		await runUpdater({ ...opts(f, "v0.6.0", now), serverVersion });
+		assert.deepEqual(f.calls, ["backup", "snapshot", "install ledger-v0.7.2-linux-amd64", "restart", "health", "reboot"]);
+	}
+
+	// Pages that can't be served are put back, and nothing else was touched.
+	f.calls.length = 0;
+	f.webHealthy = false;
+	await writeFile(path.join(f.dirs.config, "run-now"), "");
+	const bad = await runUpdater({ ...opts(f, "v0.7.1", now), serverVersion: "v0.7.0" });
+	assert.equal(bad.installed, null);
+	assert.deepEqual(f.calls, ["installWeb ledger-web-v0.7.2 v0.7.2", "webHealth", "rollbackWeb v0.7.1"]);
+	assert.match((await readStatus(f.dirs))!.message, /could not be served; put back v0.7.1/);
+
+	// A bad checksum on the pages installs nothing.
+	f.calls.length = 0;
+	f.webHealthy = true;
+	await f.setLatest("v0.7.2", { server: "v0.7.0", corruptWeb: true });
+	await writeFile(path.join(f.dirs.config, "run-now"), "");
+	await runUpdater({ ...opts(f, "v0.7.1", now), serverVersion: "v0.7.0" });
+	assert.deepEqual(f.calls, []);
+	assert.match((await readStatus(f.dirs))!.message, /checksum mismatch for ledger-web-v0.7.2.tar.gz/);
+});
+
 test("updater: bad checksum installs nothing", async (t) => {
 	const f = await fakeWorld(t);
 	await f.setLatest("v0.7.0", { corrupt: true });
@@ -424,4 +489,32 @@ test("the PostgreSQL upgrade: after a backup, once per Ledger version, recorded 
 	calls.length = 0;
 	assert.equal(await maybeUpgradePostgres(make(10, { code: 0, out: "" })), "none");
 	assert.deepEqual(calls, []);
+});
+
+test("the pages are replaced on disk and can be put back; the server version stays", async (t) => {
+	const root = await mkdtemp(path.join(tmpdir(), "ledger-web-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const lib = path.join(root, "lib");
+	await mkdir(path.join(lib, "web", "_app"), { recursive: true });
+	await writeFile(path.join(lib, "web", "200.html"), "old");
+	await writeFile(path.join(lib, "VERSION"), "v0.7.0\n");
+	// An install from before releases said which server they have: the server is the installed version.
+	assert.equal(installedServerVersion(lib), "v0.7.0");
+	await writeFile(path.join(lib, "SERVER_VERSION"), "v0.7.0\n");
+	const rel = path.join(root, "ledger-web-v0.7.1");
+	await mkdir(path.join(rel, "web", "_app"), { recursive: true });
+	await writeFile(path.join(rel, "web", "200.html"), "new");
+	await writeFile(path.join(rel, "web", "_app", "a.js"), "js");
+
+	const ops = webOps(lib);
+	await ops.installWeb(rel, "v0.7.1");
+	assert.deepEqual([await readFile(path.join(lib, "web", "200.html"), "utf8"), await readFile(path.join(lib, "web.previous", "200.html"), "utf8")], ["new", "old"]);
+	assert.deepEqual([installedVersion(lib), installedServerVersion(lib)], ["v0.7.1", "v0.7.0"]);
+	await access(path.join(lib, "web", "_app", "a.js"));
+
+	await ops.rollbackWeb("v0.7.0");
+	assert.equal(await readFile(path.join(lib, "web", "200.html"), "utf8"), "old");
+	assert.equal(installedVersion(lib), "v0.7.0");
+	// Nothing left to put back a second time.
+	await assert.rejects(ops.rollbackWeb("v0.7.0"));
 });

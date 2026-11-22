@@ -23,7 +23,7 @@ import { connectDB } from "./db.ts";
 import { createHandler } from "./http.ts";
 import { log } from "./log.ts";
 import { runUserCommand } from "./cli.ts";
-import { installedVersion, updateDirs } from "./update.ts";
+import { installedServerVersion, installedVersion, updateDirs } from "./update.ts";
 import { runUpdateCommand } from "./updater.ts";
 
 /** Where the program lives: the bundle's directory (lib/ledger), or src/ in a checkout. */
@@ -44,7 +44,7 @@ async function serve(): Promise<void> {
 		log.warn("CSV directory is not available; exports will fail", { dir: cfg.csvDir, err: (err as Error).message });
 	}
 
-	const app = newApp(db, { ...cfg, version: installedVersion(programDir) });
+	const app = newApp(db, { ...cfg, version: installedVersion(programDir), programDir });
 	await app.modules.loadAll(app);
 	// Files handed between modules before 0.27.0 move into Documents; not awaited, the server starts meanwhile.
 	void fileOldHandoffs(app);
@@ -110,7 +110,7 @@ async function main(): Promise<void> {
 	const [, , command, ...args] = process.argv;
 	if (command === "update") {
 		try {
-			await runUpdateCommand(args, installedVersion(programDir), updateDirs());
+			await runUpdateCommand(args, installedVersion(programDir), updateDirs(), installedServerVersion(programDir));
 		} catch (err) {
 			process.stderr.write(`error: ${(err as Error).message}\n`);
 			process.exitCode = 1;

@@ -10,6 +10,12 @@
 //      the service; if the health check fails it restores the copy
 //   3. reboots the container according to the schedule's policy.
 //
+// A release that only changes the pages (the web UI) says so in its
+// UPDATE.json: which server it goes with, and a small archive of the pages.
+// When the installed server is that one, only the pages are replaced: no
+// database backup, no install script, no restart. Anything else, or any
+// doubt, is a full update.
+//
 // Progress and the outcome go to status.json, which the app shows.
 
 import { createHash } from "node:crypto";
@@ -65,6 +71,15 @@ export interface SystemOps {
 	/** Restores the snapshot taken before install. */
 	rollback(): Promise<void>;
 	reboot(): Promise<void>;
+	/**
+	 * Replaces the installed pages with <dir>/web and records `version` as
+	 * installed, keeping the pages that were there. The server keeps running.
+	 */
+	installWeb(dir: string, version: string): Promise<void>;
+	/** Whether the running server hands out the pages. */
+	webHealthy(): Promise<boolean>;
+	/** Puts back the pages installWeb replaced, and `version` as installed. */
+	rollbackWeb(version: string): Promise<void>;
 }
 
 export interface UpdaterOptions {
@@ -75,6 +90,8 @@ export interface UpdaterOptions {
 	apiBase: string;
 	arch: string;
 	currentVersion: string;
+	/** The release the installed server is from (update.ts installedServerVersion); left out, pages-only updates aren't used. */
+	serverVersion?: string;
 	now?: () => number;
 	sys: SystemOps;
 	/** Module syncing (omitted: modules are left alone). */
@@ -105,6 +122,9 @@ interface Release {
 	tag: string;
 	tarball: string;
 	sums: string;
+	/** From UPDATE.json, when the release has one: the server it goes with, and the archive of its pages. */
+	server: string | null;
+	web: { name: string; url: string } | null;
 }
 
 async function latestRelease(o: UpdaterOptions): Promise<Release> {
@@ -122,7 +142,20 @@ async function latestRelease(o: UpdaterOptions): Promise<Release> {
 		if (!/^https?:\/\//.test(url)) throw new Error(`release ${tag} has no ${name}`);
 		return url;
 	};
-	return { tag, tarball: asset(`ledger-${tag}-linux-${o.arch}.tar.gz`), sums: asset("SHA256SUMS") };
+	const rel: Release = { tag, tarball: asset(`ledger-${tag}-linux-${o.arch}.tar.gz`), sums: asset("SHA256SUMS"), server: null, web: null };
+	// What kind of release it is. Anything missing or odd here means a full update, never an error.
+	try {
+		const name = `ledger-web-${tag}.tar.gz`;
+		const res2 = await fetch(asset("UPDATE.json"), { headers: { "User-Agent": "ledger-updater" }, redirect: "follow", signal: AbortSignal.timeout(30_000) });
+		const m = (res2.ok ? await res2.json() : {}) as { version?: unknown; server?: unknown; web?: unknown };
+		if (m.version === tag && typeof m.server === "string" && TAG_RE.test(m.server) && m.web === name) {
+			rel.server = m.server;
+			rel.web = { name, url: asset(name) };
+		}
+	} catch {
+		// no UPDATE.json: a release from before there were pages-only updates
+	}
+	return rel;
 }
 
 async function download(url: string, file: string): Promise<void> {
@@ -177,6 +210,29 @@ async function fetchRelease(o: UpdaterOptions, rel: Release): Promise<string> {
 	return dir;
 }
 
+/** Downloads, verifies and unpacks a release's pages; returns the unpacked directory (web/, VERSION). */
+async function fetchWeb(o: UpdaterOptions, rel: Release): Promise<string> {
+	const work = path.join(o.cacheDir, rel.tag);
+	await fsp.rm(work, { recursive: true, force: true });
+	await fsp.mkdir(work, { recursive: true, mode: 0o700 });
+	const { name, url } = rel.web!;
+	const tarball = path.join(work, name);
+	const sumsFile = path.join(work, "SHA256SUMS");
+	await download(rel.sums, sumsFile);
+	await download(url, tarball);
+	const sums = await fsp.readFile(sumsFile, "utf8");
+	const want = sums.split("\n").map((l) => l.trim().split(/\s+/)).find((f) => f[1] === name)?.[0];
+	if (!want || want !== (await sha256(tarball))) throw new Error(`checksum mismatch for ${name}`);
+	await run("tar", ["-xzf", tarball, "-C", work, "--no-same-owner"]);
+	const dir = path.join(work, `ledger-web-${rel.tag}`);
+	for (const f of ["web/200.html", "web/_app"]) {
+		await fsp.access(path.join(dir, f)).catch(() => {
+			throw new Error(`the release's pages are missing ${f}`);
+		});
+	}
+	return dir;
+}
+
 /** The core update: check, download, install, verify. */
 async function runCore(
 	o: UpdaterOptions,
@@ -184,7 +240,7 @@ async function runCore(
 	now: number,
 	slot: number | null,
 	prev: UpdateStatus,
-): Promise<{ ok: boolean; installed: string | null; save: (patch: Partial<UpdateStatus>) => Promise<void>; status: UpdateStatus }> {
+): Promise<{ ok: boolean; installed: string | null; pagesOnly?: boolean; save: (patch: Partial<UpdateStatus>) => Promise<void>; status: UpdateStatus }> {
 	const status: UpdateStatus = {
 		...prev,
 		state: "running",
@@ -208,6 +264,20 @@ async function runCore(
 		if (!isNewer(rel.tag, o.currentVersion)) {
 			await save({ message: `Up to date (${o.currentVersion}).` });
 			return { ok: true, installed: null, save, status };
+		}
+		// Only the pages changed and the server is the one they go with: they are replaced under the running server.
+		if (rel.web && rel.server && o.serverVersion && rel.server === o.serverVersion) {
+			await save({ message: `Downloading the pages of ${rel.tag}…` });
+			const web = await fetchWeb(o, rel);
+			await save({ message: `Installing ${rel.tag} (the pages only; nothing restarts)…` });
+			await o.sys.installWeb(web, rel.tag);
+			if (!(await o.sys.webHealthy())) {
+				await o.sys.rollbackWeb(o.currentVersion);
+				throw new Error(`the pages of ${rel.tag} could not be served; put back ${o.currentVersion}`);
+			}
+			await fsp.rm(path.join(o.cacheDir, rel.tag), { recursive: true, force: true });
+			await save({ installed_version: rel.tag, message: `Installed ${rel.tag} (was ${o.currentVersion}): only the pages changed, so nothing was restarted. Reload the page to see it.` });
+			return { ok: true, installed: rel.tag, pagesOnly: true, save, status };
 		}
 		await save({ message: `Downloading ${rel.tag}…` });
 		const dir = await fetchRelease(o, rel);
@@ -294,9 +364,11 @@ export async function runUpdater(o: UpdaterOptions): Promise<UpdateOutcome> {
 	}
 	if (installed) await notify({ title: `Ledger updated to ${installed}`, body: result.status.message, level: "success" });
 	// Manual and startup checks reboot only to finish an install; scheduled runs follow the policy.
+	// New pages alone need no reboot.
+	const needsReboot = installed !== null && !result.pagesOnly;
 	const reboot =
 		rebootRequested ||
-		(schedule.reboot === "always" ? trigger === "scheduled" || installed !== null : schedule.reboot === "after_update" && installed !== null);
+		(schedule.reboot === "always" ? trigger === "scheduled" || needsReboot : schedule.reboot === "after_update" && needsReboot);
 	await result.save({
 		state: "ok",
 		finished_at: new Date().toISOString(),
@@ -324,6 +396,40 @@ async function markBooted(file: string): Promise<boolean> {
 
 const LIB = "/usr/local/lib/ledger";
 const BIN = "/usr/local/bin/ledger";
+
+/**
+ * Replacing the installed pages (<lib>/web) under the running server, which
+ * reads them from disk for each request. The pages replaced are kept in
+ * <lib>/web.previous until the next update.
+ */
+export function webOps(lib: string): Pick<SystemOps, "installWeb" | "rollbackWeb"> {
+	const live = path.join(lib, "web");
+	const fresh = path.join(lib, "web.new");
+	const kept = path.join(lib, "web.previous");
+	const stamp = (version: string) => writeFileAtomic(path.join(lib, "VERSION"), version + "\n", 0o644);
+	return {
+		async installWeb(dir, version) {
+			await fsp.rm(fresh, { recursive: true, force: true });
+			await fsp.cp(path.join(dir, "web"), fresh, { recursive: true });
+			// Readable by the server's user, owned by whoever runs this (root).
+			await run("chmod", ["-R", "u=rwX,go=rX", fresh]);
+			await fsp.rm(kept, { recursive: true, force: true });
+			// Two renames, one right after the other.
+			await fsp.rename(live, kept);
+			await fsp.rename(fresh, live);
+			await stamp(version);
+		},
+		async rollbackWeb(version) {
+			await fsp.access(kept);
+			const failed = path.join(lib, "web.failed");
+			await fsp.rm(failed, { recursive: true, force: true });
+			await fsp.rename(live, failed);
+			await fsp.rename(kept, live);
+			await fsp.rm(failed, { recursive: true, force: true });
+			await stamp(version);
+		},
+	};
+}
 
 export function systemOps(cacheDir: string, httpAddr: string): SystemOps {
 	const prevLib = path.join(cacheDir, "previous-lib");
@@ -374,6 +480,17 @@ export function systemOps(cacheDir: string, httpAddr: string): SystemOps {
 			await fsp.rm(`${LIB}.failed`, { recursive: true, force: true });
 		},
 		reboot: () => run("systemctl", ["reboot"]),
+		...webOps(LIB),
+		async webHealthy() {
+			for (let i = 0; i < 5; i++) {
+				const ok = await fetch(`http://${healthHost}:${port}/`, { signal: AbortSignal.timeout(3000) })
+					.then(async (r) => r.ok && /<html/i.test(await r.text()))
+					.catch(() => false);
+				if (ok) return true;
+				await new Promise((r) => setTimeout(r, 1000));
+			}
+			return false;
+		},
 	};
 }
 
@@ -490,7 +607,7 @@ export const UPDATE_USAGE = `usage:
                              (run by ledger-update.service as root)
   ledger update pg-upgrade   move the database to PostgreSQL 18 now (as root)`;
 
-export async function runUpdateCommand(args: string[], currentVersion: string, dirs: UpdateDirs): Promise<void> {
+export async function runUpdateCommand(args: string[], currentVersion: string, dirs: UpdateDirs, serverVersion?: string): Promise<void> {
 	if (args.length !== 1 || (args[0] !== "run" && args[0] !== "pg-upgrade")) throw new Error(UPDATE_USAGE);
 	if (process.getuid?.() !== 0) throw new Error("ledger update must run as root (it is started by ledger-update.service)");
 	const pgUpgrade = (force: boolean, backup: () => Promise<void>) =>
@@ -552,6 +669,7 @@ export async function runUpdateCommand(args: string[], currentVersion: string, d
 		apiBase,
 		arch,
 		currentVersion,
+		serverVersion,
 		sys,
 		modules,
 		notify: databaseUrl ? (n) => postUpdateNotice(databaseUrl, n) : undefined,

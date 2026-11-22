@@ -27,8 +27,10 @@ export interface App {
 	ipLogins: LoginLimiter;
 	/** Password checks running right now. */
 	loginsRunning: number;
-	/** Installed release version ("dev" for a checkout). */
+	/** Installed release version ("dev" for a checkout), as it was when the server started. */
 	version: string;
+	/** Where the program is installed (VERSION and SERVER_VERSION are read from it); null in tests. */
+	programDir: string | null;
 	update: UpdateDirs;
 	/** Installed modules running in this process. */
 	modules: ModuleHost;
@@ -45,6 +47,7 @@ export function newApp(
 		cookieSecure: CookieSecure;
 		webDir: string;
 		version?: string;
+		programDir?: string;
 		update?: UpdateDirs;
 		modulesDir?: string;
 		databaseUrl?: string;
@@ -69,6 +72,7 @@ export function newApp(
 		ipLogins: new LoginLimiter(LOGIN_MAX_FAILURES_PER_IP),
 		loginsRunning: 0,
 		version: cfg.version ?? "dev",
+		programDir: cfg.programDir ?? null,
 		update: cfg.update ?? updateDirs(),
 		modules: new ModuleHost(cfg.modulesDir ?? modulesDir()),
 		integrations: { dir: cfg.integrationsDir ?? integrationsDir(), gmail: cfg.gmail ?? gmailEndpoints(), pendingGmail: null },
