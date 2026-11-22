@@ -17,7 +17,7 @@
 		style = 'width:100%'
 	}: {
 		value?: string;
-		accounts: Pick<Account, 'code' | 'name' | 'currency'>[];
+		accounts: (Pick<Account, 'code' | 'name' | 'currency'> & { kind?: Account['kind'] })[];
 		placeholder?: string;
 		label: string;
 		required?: boolean;
@@ -27,6 +27,9 @@
 	} = $props();
 
 	const NEW = '\u0000new';
+	// Bank and credit card accounts come first in every list, then the rest in the order given.
+	const isBank = (a: { kind?: Account['kind'] }) => a.kind === 'chequing' || a.kind === 'savings' || a.kind === 'credit_card';
+	let listed = $derived([...accounts.filter(isBank), ...accounts.filter((a) => !isBank(a))]);
 	// Viewers can't create accounts.
 	let canCreate = $derived(page.data.user != null && page.data.user.role !== 'viewer');
 
@@ -46,6 +49,6 @@
 
 <select {value} onchange={change} aria-label={label} {required} {style} aria-invalid={invalid ? 'true' : undefined}>
 	<option value="" disabled={required}>{placeholder}</option>
-	{#each accounts as a (a.code)}<option value={a.code}>{a.code} — {a.name} ({a.currency})</option>{/each}
+	{#each listed as a (a.code)}<option value={a.code}>{a.code} — {a.name} ({a.currency})</option>{/each}
 	{#if canCreate}<option value={NEW}>+ New account…</option>{/if}
 </select>
