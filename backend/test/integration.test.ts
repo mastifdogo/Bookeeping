@@ -4995,3 +4995,51 @@ test("migration 034: customers' and vendors' tagged entries move to their own ac
 	// Every move is logged on its entry.
 	assert.equal(Number((await db.query(`SELECT count(*) AS n FROM transaction_moves WHERE reason LIKE 'Moved to the customer%' AND changed_by IS NULL`)).rows[0].n), 4);
 });
+
+test("linked payments: an entry shows its payments, what is left, and is tagged unpaid, partially paid or paid", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	await createAccount(ta, "1000", "Bank", "asset", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	expectStatus(await call("POST", "/accounts", { code: "2000", name: "Accounts payable", type: "liability", currency: "CAD", description: "", kind: "payable" }), 201);
+	const hydro = (await call("POST", "/entities", { name: "Hydro", is_vendor: true })).json();
+	const bill = (await call("POST", "/journal-entries", { ...entry("2026-05-01", "Hydro bill", dr("6100", 10000), cr("2000", 10000)), entity_id: hydro.id })).json();
+	const pay = async (cents: number) => (await call("POST", `/entities/${hydro.id}/payments`, { role: "vendor", account_code: "1000", entry_date: "2026-05-10", amount_cents: cents })).json();
+	const tagsOf = (e: any) => e.tags.map((x: any) => x.tag).filter((x: string) => x !== "vendor");
+	assert.equal(bill.payments, null);
+
+	// A first payment for part of it: neither entry changes, the bill reads partially paid.
+	const p1 = await pay(4000);
+	let r = await call("POST", `/journal-entries/${bill.id}/related`, { entry_id: p1.id, payment: true, note: "cheque 1" });
+	expectStatus(r, 200);
+	assert.deepEqual(r.json().lines.map((l: any) => l.account_code), bill.lines.map((l: any) => l.account_code));
+	assert.deepEqual([r.json().payments.due_cents, r.json().payments.paid_cents, r.json().payments.left_cents, r.json().payments.status], [10000, 4000, 6000, "partially_paid"]);
+	assert.deepEqual(tagsOf(r.json()), ["partially_paid"]);
+	assert.deepEqual(r.json().related.map((x: any) => [x.id, x.why[0].kind, x.why[0].amount_cents, x.why[0].note]), [[p1.id, "payment", 4000, "cheque 1"]]);
+	r = await call("GET", `/journal-entries/${p1.id}`);
+	assert.deepEqual([r.json().related[0].why[0].kind, r.json().payments, r.json().lines[0].account_code], ["pays", null, `2000-${hydro.id}`]);
+
+	// A payment of 9000 of which 6000 goes to this bill: paid, and paid takes the other two off.
+	const p2 = await pay(9000);
+	r = await call("POST", `/journal-entries/${bill.id}/related`, { entry_id: p2.id, payment: true, amount_cents: 6000 });
+	assert.deepEqual([r.json().payments.paid_cents, r.json().payments.left_cents, tagsOf(r.json())], [10000, 0, ["paid"]]);
+	// The same pair with only a note keeps it a payment; a plain link takes the payment off.
+	r = await call("POST", `/journal-entries/${bill.id}/related`, { entry_id: p2.id, note: "second" });
+	assert.equal(r.json().payments.paid_cents, 10000);
+	r = await call("POST", `/journal-entries/${bill.id}/related`, { entry_id: p2.id, payment: false });
+	assert.deepEqual([r.json().payments.paid_cents, tagsOf(r.json()), r.json().related.length], [4000, ["partially_paid"], 2]);
+	// A reversed payment isn't counted; unlinking the last one leaves the bill unpaid.
+	expectStatus(await call("POST", `/journal-entries/${p1.id}/reverse`, { entry_date: "2026-05-11" }), 201);
+	r = await call("GET", `/journal-entries/${bill.id}`);
+	assert.deepEqual([r.json().payments.paid_cents, r.json().payments.payments[0].counted, tagsOf(r.json())], [0, false, ["unpaid"]]);
+	r = await call("DELETE", `/journal-entries/${bill.id}/related/${p1.id}`);
+	assert.deepEqual([r.json().payments, tagsOf(r.json())], [null, ["unpaid"]]);
+	// Tags: each of the three takes the other two off.
+	r = await call("POST", `/journal-entries/${bill.id}/tags`, { tag: "paid" });
+	assert.deepEqual(tagsOf(r.json()), ["paid"]);
+	r = await call("POST", `/journal-entries/${bill.id}/tags`, { tag: "unpaid" });
+	assert.deepEqual(tagsOf(r.json()), ["unpaid"]);
+	expectStatus(await call("POST", `/journal-entries/${bill.id}/related`, { entry_id: p2.id, amount_cents: 5 }), 422);
+	expectStatus(await call("POST", `/journal-entries/${bill.id}/related`, { entry_id: p2.id, payment: true, amount_cents: 0 }), 422);
+});

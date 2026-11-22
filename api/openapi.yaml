@@ -844,7 +844,8 @@ paths:
       description: |
         Links two journal entries to each other (a payment and the invoice it
         settled, a transfer's two halves). Each then shows on the other's
-        page, under `related`. The same pair again changes the note.
+        page, under `related`. The same pair again changes the link. Neither
+        entry changes: nothing is posted and no line moves.
       requestBody:
         required: true
         content:
@@ -856,6 +857,15 @@ paths:
               properties:
                 entry_id: { type: integer, format: int64, description: The other entry }
                 note: { type: string, maxLength: 200, description: What the link is }
+                payment:
+                  type: boolean
+                  description: |
+                    true: the other entry is a payment of this one. This entry
+                    then shows the payment, what is paid and what is left
+                    (`payments`), and Ledger keeps one of the tags unpaid,
+                    partially_paid or paid on it. false: a plain link. Left
+                    out, the link stays the kind it was.
+                amount_cents: { type: integer, format: int64, minimum: 1, description: 'With payment true: how much of the payment goes to this entry, when it pays several; left out, all of it' }
       responses:
         '200':
           description: The entry
@@ -3436,27 +3446,51 @@ components:
           description: Each reason it is shown
           items:
             type: object
-            required: [kind, note, module_id, set_by, label, href, through]
+            required: [kind, note, amount_cents, module_id, set_by, label, href, through]
             properties:
               kind:
                 type: string
-                enum: [linked, chain, record, reverses, reversed_by]
+                enum: [linked, payment, pays, chain, record, reverses, reversed_by]
                 description: |
-                  linked: the two entries are linked. chain: linked to an entry
+                  linked: the two entries are linked. payment: it is a payment
+                  of this entry. pays: this entry is a payment of it. chain: linked to an entry
                   linked to this one. record: both are linked to the same record
                   of a module. reverses / reversed_by: the entry and its reversal.
-              note: { type: string, description: 'linked: what the link is' }
+              note: { type: string, description: 'linked, payment, pays: what the link is' }
+              amount_cents: { type: integer, format: int64, nullable: true, description: 'payment, pays: how much of the payment goes to the entry paid' }
               module_id: { type: string, nullable: true, description: 'linked: the module that made it (null: a person). record: whose record it is' }
               set_by: { type: string, nullable: true, description: 'linked: who made it' }
               label: { type: string, description: 'record: its name' }
               href: { type: string, description: 'record: where it opens' }
               through: { type: integer, format: int64, nullable: true, description: 'chain: the linked entry it was reached through' }
+    EntryPayments:
+      type: object
+      description: What an entry is for, and what the payments linked to it come to
+      required: [currency, due_cents, paid_cents, left_cents, status, payments]
+      properties:
+        currency: { $ref: '#/components/schemas/Currency' }
+        due_cents: { type: integer, format: int64, description: 'What the entry is for: its line in the customer''s or vendor''s own account, else in accounts receivable or payable, else its total' }
+        paid_cents: { type: integer, format: int64 }
+        left_cents: { type: integer, format: int64, description: Never below zero }
+        status: { type: string, enum: [unpaid, partially_paid, paid], description: Also the tag Ledger keeps on the entry }
+        payments:
+          type: array
+          items:
+            type: object
+            required: [entry_id, entry_date, description, amount_cents, counted, note]
+            properties:
+              entry_id: { type: integer, format: int64 }
+              entry_date: { type: string, format: date }
+              description: { type: string }
+              amount_cents: { type: integer, format: int64 }
+              counted: { type: boolean, description: false for a payment that was reversed }
+              note: { type: string }
     EntryTag:
       type: object
       required: [id, tag, entity, note, module_id, set_by, set_at]
       properties:
         id: { type: integer, description: 'The tag''s own number; tells an entry''s rate items apart' }
-        tag: { type: string, description: 'paid, billed, overdue, customer, vendor, rate, or another lowercase word' }
+        tag: { type: string, description: 'paid, partially_paid, unpaid, billed, overdue, customer, vendor, rate, or another lowercase word' }
         entity:
           type: object
           nullable: true
@@ -3839,6 +3873,10 @@ components:
           type: array
           description: Tags shared by Ledger and every module (paid, billed, overdue, customer, vendor, and others)
           items: { $ref: '#/components/schemas/EntryTag' }
+        payments:
+          allOf: [{ $ref: '#/components/schemas/EntryPayments' }]
+          nullable: true
+          description: Its linked payments and what is left; null when none is linked (only when one entry is fetched)
         amended: { type: boolean, description: Whether any of its amounts were changed after it was posted }
         related:
           type: array

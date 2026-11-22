@@ -23,7 +23,7 @@ import { builtFor, compatible, scanInstalled, type InstalledModule, type ModuleM
 import { createAccount, ensureClearingAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listClearingAccounts } from "./accounts.ts";
 import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry, editJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
-import { relateEntries, relatedEntries, unrelateEntries } from "./related.ts";
+import { paymentsOf, relateEntries, relatedEntries, unrelateEntries } from "./related.ts";
 import { createEntity, ensureEntity, findEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
 import { entityAccount, postEntityPayment } from "./entity-accounts.ts";
 import { moduleValues, saveSettings, type SettingValue } from "./module-settings.ts";
@@ -515,7 +515,27 @@ function makeContext(app: App, m: LoadedModule) {
 				return relatedEntries(app, entryIdOf(entryId));
 			},
 			/** Takes off the link between two entries (whoever made it); false if there was none. */
-			unrelateEntries: (entryId: number | bigint | string, otherId: number | bigint | string) => unrelateEntries(app, entryIdOf(entryId), entryIdOf(otherId)),
+			unrelateEntries: (entryId: number | bigint | string, otherId: number | bigint | string) => unrelateEntries(app, entryIdOf(entryId), entryIdOf(otherId), { moduleId: id, userId: null }),
+			/**
+			 * Says that entry `paymentId` is a payment of entry `entryId` (Ledger
+			 * 0.33.0): linkPayment(billEntry, paymentEntry, { amount_cents?, note? },
+			 * user). amount_cents is how much of the payment goes to this entry when
+			 * it pays several (left out: all of it); the same pair again changes it.
+			 * Neither entry changes. The payment shows on the entry's page with what
+			 * is paid and what is left, and Ledger keeps one of the tags unpaid,
+			 * partially_paid or paid on the entry paid (ctx.tags.onChange tells you).
+			 * Returns { currency, due_cents, paid_cents, left_cents, status, payments }.
+			 */
+			linkPayment: async (entryId: number | bigint | string, paymentId: number | bigint | string, opts: { amount_cents?: number | bigint | string | null; note?: string } = {}, user?: { username: string }) => {
+				const cents = opts?.amount_cents === undefined || opts.amount_cents === null ? null : toCents(opts.amount_cents, "amount_cents");
+				await relateEntries(app, entryIdOf(entryId), entryIdOf(paymentId), opts?.note, { moduleId: id, userId: actorOf(user) }, { amount_cents: cents });
+				return paymentsOf(app, entryIdOf(entryId));
+			},
+			/** Takes a payment off an entry (the link goes; the entry is partially paid or unpaid again). false if there was no link. */
+			unlinkPayment: (entryId: number | bigint | string, paymentId: number | bigint | string, user?: { username: string }) =>
+				unrelateEntries(app, entryIdOf(entryId), entryIdOf(paymentId), { moduleId: id, userId: actorOf(user) }),
+			/** An entry's linked payments and what is left: { currency, due_cents, paid_cents, left_cents, status, payments: [{ entry_id, entry_date, description, amount_cents, counted, note }] }, or null when none is linked. */
+			payments: (entryId: number | bigint | string) => paymentsOf(app, entryIdOf(entryId)),
 			/** Every entry linked to this one, oldest first: [{ id, entry_date, description, reference, totals, tags, reversed, direct, why }]. */
 			relatedEntries: (entryId: number | bigint | string) => relatedEntries(app, entryIdOf(entryId)),
 			reverseJournalEntry: (entryId: number | bigint, opts: { entry_date?: string; description?: string } = {}, user?: { username: string }) =>

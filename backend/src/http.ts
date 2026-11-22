@@ -1187,20 +1187,24 @@ async function handleRemoveTag(c: Ctx): Promise<void> {
 /** Links this entry to another one (or changes that link's note). */
 async function handleRelateEntry(c: Ctx): Promise<void> {
 	const id = pathId(c, "entryId");
-	const b = await decodeBody(c, true, objectBody(["entry_id", "note"]));
+	const b = await decodeBody(c, true, objectBody(["entry_id", "note", "payment", "amount_cents"]));
 	const other = tagNum(b.entry_id);
-	if (other === null || !Number.isSafeInteger(other) || other < 1) {
-		const v = new ValidationError();
-		v.add("entry_id", "must be the number of a journal entry");
-		throw v;
-	}
-	await relateEntries(c.app, id, BigInt(other), b.note, { moduleId: null, userId: c.user!.id });
+	const v = new ValidationError();
+	if (other === null || !Number.isSafeInteger(other) || other < 1) v.add("entry_id", "must be the number of a journal entry");
+	if (b.payment !== undefined && b.payment !== null && typeof b.payment !== "boolean") v.add("payment", "must be true or false");
+	const cents = b.amount_cents === undefined || b.amount_cents === null ? null : tagNum(b.amount_cents);
+	if (cents !== null && (!Number.isSafeInteger(cents) || cents < 1)) v.add("amount_cents", "must be a whole number of cents, more than zero");
+	if (cents !== null && b.payment !== true) v.add("amount_cents", "only goes with payment: true");
+	v.throwIfAny();
+	// payment true: the other entry is a payment of this one; false: a plain link; left out: as it was.
+	const payment = b.payment === true ? { amount_cents: cents === null ? null : BigInt(cents) } : b.payment === false ? null : undefined;
+	await relateEntries(c.app, id, BigInt(other!), b.note, { moduleId: null, userId: c.user!.id }, payment);
 	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
 }
 
 async function handleUnrelateEntry(c: Ctx): Promise<void> {
 	const id = pathId(c, "entryId");
-	if (!(await unrelateEntries(c.app, id, pathId(c, "otherId")))) throw new NotFoundError();
+	if (!(await unrelateEntries(c.app, id, pathId(c, "otherId"), { moduleId: null, userId: c.user!.id }))) throw new NotFoundError();
 	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
 }
 

@@ -406,6 +406,9 @@ html.in-pane:not(.root) body {
 	background: var(--ok-bg);
 	color: var(--ok);
 }
+.badge.tag.partially_paid {
+	background: var(--warn-bg);
+}
 .badge.tag.overdue {
 	background: var(--danger-bg);
 	color: var(--danger);

@@ -153,6 +153,8 @@ export interface JournalEntry {
 	edits?: EntryFieldEdit[];
 	/** Every entry linked to this one, oldest first (only when one entry is fetched; related.ts). */
 	related?: import("./related.ts").RelatedEntry[];
+	/** Its linked payments, what they come to and what is left; null when no payment is linked (only when one entry is fetched). */
+	payments?: import("./related.ts").EntryPayments | null;
 }
 
 /** One change to the date of a posted entry. */

@@ -189,6 +189,26 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
     amount_cents, description?, reference? }, user)` posts Dr vendor's
     account / Cr bank (`role: "vendor"`) or Dr bank / Cr customer's account
     (`role: "customer"`) and returns the entry.
+  - **Linked payments** (Ledger ≥ 0.33.0): when a payment is matched to a
+    bill's or an invoice's entry, don't change either entry: link them with
+    `await ctx.ledger.linkPayment(billEntryId, paymentEntryId, {
+    amount_cents?, note? }, user)` (`amount_cents`: how much of the payment
+    goes to this entry when it pays several; left out, all of it; the same
+    pair again changes it). It returns `{ currency, due_cents, paid_cents,
+    left_cents, status, payments: [{ entry_id, entry_date, description,
+    amount_cents, counted, note }] }`; `ctx.ledger.payments(entryId)` reads
+    it (null when no payment is linked) and
+    `ctx.ledger.unlinkPayment(billEntryId, paymentEntryId, user)` takes one
+    off. `due_cents` is the entry's line in the customer's or vendor's own
+    account (else in accounts receivable or payable, else its total); a
+    reversed payment has `counted: false`. Ledger shows the payments on
+    the entry's page with what is paid and what is left, and keeps exactly
+    one of the tags `unpaid`, `partially_paid`, `paid` on the entry paid as
+    payments are linked, taken off or reversed (each of the three takes the
+    other two off; `ctx.tags.onChange` tells you). Tag a new bill or
+    invoice `unpaid` yourself when it is posted; don't work out or set
+    `partially_paid` / `paid` from payments yourself. `paid` set by hand
+    with no payment linked (a person marking it paid) stays as set.
   - `ctx.ledger.moveLine(entryId, lineNumber, accountCode, { reason },
     user)` (Ledger ≥ 0.32.0) moves one line of a posted entry to another
     account of the same currency and returns the entry; the move is logged

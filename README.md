@@ -439,6 +439,15 @@ vendor's bill) keeps the tag as before.
 Both show what is owed right now and can fill in that amount. The same
 buttons are next to each name on the Entities page.
 
+**Linked payments.** Under **Linked entries** on an entry's page, tick
+**It pays this entry** when linking another entry (and give an amount when
+only part of that payment is for this one). Neither entry changes: the
+entry paid lists its payments, shows what is paid and what is left, and
+carries one of the tags **unpaid**, **partially paid** or **paid**, which
+Ledger keeps true as payments are linked, taken off or reversed. Modules
+use the same links (Auto sort for a bill's payments), so a bill's page in
+Ledger shows the same payments the module does.
+
 **Updating from an earlier version** converts the books by itself: every
 line in accounts receivable of an entry tagged with (or posted with) a
 customer, and every line in accounts payable of a vendor's entry, moves to

@@ -853,6 +853,15 @@ entry_date, amount_cents, description?, reference? }, user)` posts a bill
 payment (`"vendor"`) or a customer's payment (`"customer"`) between a bank
 or card account and their own account.
 
+Since Ledger 0.33.0 a link between two entries can say that one is a
+payment of the other: `await ctx.ledger.linkPayment(billEntryId,
+paymentEntryId, { amount_cents?, note? }, user)` (and `unlinkPayment`,
+`payments`). Neither entry changes. The entry paid shows its payments on
+its page with what is paid and what is left, and Ledger keeps one of the
+tags `unpaid`, `partially_paid` or `paid` on it, so modules don't work
+that out themselves: tag a new bill or invoice `unpaid`, link each payment
+as it is matched, and listen with `ctx.tags.onChange`.
+
 ## Files the module kept (`ctx.storage`)
 
 From Ledger 0.13.2 to 0.26 a module could keep files that weren't PDFs in a

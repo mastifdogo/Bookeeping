@@ -4,7 +4,7 @@
 
 import { formatCents, parseAmount } from './money.ts';
 
-export const STANDARD_TAGS = ['paid', 'billed', 'overdue', 'customer', 'vendor', 'rate'] as const;
+export const STANDARD_TAGS = ['paid', 'partially_paid', 'unpaid', 'billed', 'overdue', 'customer', 'vendor', 'rate'] as const;
 
 export interface TagLike {
 	id?: number;
@@ -24,7 +24,7 @@ export const tagKey = (t: TagLike): string => `${t.id ?? 0}:${t.tag}:${t.entity?
 /** "paid", "customer: Acme", "rate: Labour, 7.5 hours, 80.00 = 600.00" (description, quantity, rate). */
 export function tagLabel(t: TagLike): string {
 	if (t.entity) return `${t.tag}: ${t.entity.name}`;
-	if (t.tag !== 'rate') return t.tag;
+	if (t.tag !== 'rate') return t.tag.replaceAll('_', ' ');
 	const q = t.quantity != null ? `${t.quantity}${t.unit ? ' ' + t.unit : ''}` : '';
 	const r = t.rate_cents != null ? `${formatCents(t.rate_cents)}${t.unit && t.quantity == null ? ' / ' + t.unit : ''}` : '';
 	const total = t.quantity != null && t.rate_cents != null ? ` = ${formatCents(Math.round(t.quantity * t.rate_cents))}` : '';

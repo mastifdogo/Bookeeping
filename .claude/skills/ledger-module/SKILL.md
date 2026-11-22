@@ -339,7 +339,13 @@ Decide, and state briefly to the user:
   account's balance (`entity.accounts[].owed_cents`). Don't tag such
   entries `customer` or `vendor`: the account says whose they are, and
   `ctx.tags.of` still returns them as tagged. Leave these accounts out of
-  pickers for a sale's or a cost's account and for bank accounts. Accounts can be
+  pickers for a sale's or a cost's account and for bank accounts. When a
+  payment is matched to a bill or an invoice (Ledger ≥ 0.33.0), change
+  neither entry: `await ctx.ledger.linkPayment(billEntryId, paymentEntryId,
+  { amount_cents?, note? }, req.user)`. Ledger shows the payment on the
+  entry's page with what is paid and what is left, and keeps one of the
+  tags `unpaid`, `partially_paid` or `paid` on the entry paid; tag a new
+  bill or invoice `unpaid` and leave the other two to Ledger. Accounts can be
   **sub-accounts** (Ledger 0.15.0): `parent_code` is the parent,
   `balance_cents` the account's own postings, `total_balance_cents` adds
   everything below it. Show account pickers and lists as a tree (indent

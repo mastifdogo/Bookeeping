@@ -11,11 +11,11 @@ import { log } from "./log.ts";
 import { claimLines, releaseLines, type EntityRole } from "./entity-accounts.ts";
 
 /** The tags every module understands the same way. Others are allowed: lowercase words. */
-export const STANDARD_TAGS = ["paid", "billed", "overdue", "customer", "vendor", "rate"] as const;
+export const STANDARD_TAGS = ["paid", "partially_paid", "unpaid", "billed", "overdue", "customer", "vendor", "rate"] as const;
 const ENTITY_TAGS = new Set(["customer", "vendor"]);
 const TAG_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 /** Setting the first takes the others off: an entry that is paid is no longer overdue. */
-const CLEARS: Record<string, string[]> = { paid: ["overdue"] };
+const CLEARS: Record<string, string[]> = { paid: ["overdue", "partially_paid", "unpaid"], partially_paid: ["paid", "unpaid"], unpaid: ["paid", "partially_paid"] };
 
 export interface EntryTag {
 	/** This tag's own number: tells an entry's rate items apart. */
@@ -182,7 +182,7 @@ interface Checked {
 
 function check(v: ValidationError, input: TagInput): Checked {
 	const tag = typeof input?.tag === "string" ? input.tag.trim().toLowerCase() : "";
-	if (!TAG_RE.test(tag)) v.add("tag", "must be a lowercase word of up to 40 letters, digits, - or _ (paid, billed, overdue, customer, vendor, or your own)");
+	if (!TAG_RE.test(tag)) v.add("tag", "must be a lowercase word of up to 40 letters, digits, - or _ (paid, partially_paid, unpaid, billed, overdue, customer, vendor, or your own)");
 	const entityId = input?.entity_id === undefined || input.entity_id === null ? null : Number(input.entity_id);
 	if (ENTITY_TAGS.has(tag) && (entityId === null || !Number.isSafeInteger(entityId) || entityId < 1)) v.add("entity_id", `is required for the tag "${tag}": which ${tag}`);
 	if (!ENTITY_TAGS.has(tag) && entityId !== null) v.add("entity_id", `only goes with the tags "customer" and "vendor"`);

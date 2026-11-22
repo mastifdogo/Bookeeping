@@ -268,9 +268,15 @@
 	let related = $derived(e.related ?? []);
 	let linkTo = $state('');
 	let linkNote = $state('');
+	// The link says the other entry is a payment of this one, and how much of it (empty: all of it).
+	let linkPays = $state(false);
+	let linkAmount = $state('');
+	let pay = $derived(e.payments ?? null);
 	const whyText = (w: (typeof related)[number]['why'][number]) =>
 		w.kind === 'linked'
 			? `Linked${w.note ? `: ${w.note}` : ''}${w.module_id ? ` (by ${moduleName(w.module_id)})` : w.set_by ? ` (by ${w.set_by})` : ''}`
+			: w.kind === 'payment' || w.kind === 'pays'
+				? `${w.kind === 'payment' ? 'Payment of this entry' : 'This entry pays it'}${w.amount_cents != null ? `: ${formatCents(w.amount_cents)}` : ''}${w.note ? ` (${w.note})` : ''}${w.module_id ? ` (by ${moduleName(w.module_id)})` : w.set_by ? ` (by ${w.set_by})` : ''}`
 			: w.kind === 'chain'
 				? `Through #${w.through}`
 				: w.kind === 'record'
@@ -285,6 +291,8 @@
 			await fn();
 			linkTo = '';
 			linkNote = '';
+			linkPays = false;
+			linkAmount = '';
 			await invalidateAll();
 		} catch (err) {
 			error = err;
@@ -299,7 +307,19 @@
 			error = new Error('Type the number of the entry to link, e.g. 412.');
 			return;
 		}
-		return linkAct(async () => unwrap(await api().POST('/journal-entries/{entryId}/related', { params: { path: { entryId: e.id } }, body: { entry_id: other, note: linkNote.trim() } })));
+		const cents = linkPays && linkAmount.trim() ? parseAmount(linkAmount.trim()) : null;
+		if (linkPays && linkAmount.trim() && (cents === null || cents <= 0)) {
+			error = new Error('The amount must be more than zero, e.g. 250.00; leave it empty for the whole payment.');
+			return;
+		}
+		return linkAct(async () =>
+			unwrap(
+				await api().POST('/journal-entries/{entryId}/related', {
+					params: { path: { entryId: e.id } },
+					body: { entry_id: other, note: linkNote.trim(), ...(linkPays ? { payment: true, ...(cents ? { amount_cents: cents } : {}) } : {}) }
+				})
+			)
+		);
 	};
 	const dropLink = (other: number) => linkAct(async () => unwrap(await api().DELETE('/journal-entries/{entryId}/related/{otherId}', { params: { path: { entryId: e.id, otherId: other } } })));
 
@@ -520,6 +540,15 @@
 {#if related.length > 0 || canEdit}
 	<div class="card related">
 		<div class="muted small">Linked entries <span title="Entries linked to this one here or by a module, entries of the same module record, and reversals.">({related.length})</span></div>
+		{#if pay}
+			<p style="margin:0.35rem 0 0">
+				<span class="badge tag {pay.status}">{pay.status.replaceAll('_', ' ')}</span>
+				Paid <strong>{formatCents(pay.paid_cents)}</strong> of {formatCents(pay.due_cents)} {pay.currency}{#if pay.left_cents > 0}, <strong>{formatCents(pay.left_cents)}</strong> left{/if}
+				<span class="muted small">
+					by {pay.payments.filter((x) => x.counted).length} linked payment{pay.payments.filter((x) => x.counted).length === 1 ? '' : 's'}{#if pay.payments.some((x) => !x.counted)} (a reversed one isn't counted){/if}
+				</span>
+			</p>
+		{/if}
 		{#if related.length > 0}
 			<div class="table-wrap" style="margin-top:0.35rem">
 				<table>
@@ -553,7 +582,13 @@
 			<form class="toolbar" style="margin:0.5rem 0 0" onsubmit={addLink}>
 				<label>Entry # <input bind:value={linkTo} inputmode="numeric" size="8" placeholder="412" required /></label>
 				<label style="flex:1">Note <input bind:value={linkNote} maxlength="200" placeholder="e.g. payment of this invoice" /></label>
-				<button disabled={busy}>Link entry</button>
+				<label class="inline" title="The other entry is a payment of this one: this entry then shows what is paid and what is left, and is tagged unpaid, partially paid or paid. Neither entry changes.">
+					<input type="checkbox" bind:checked={linkPays} /> It pays this entry
+				</label>
+				{#if linkPays}
+					<label>Amount <input class="amount" bind:value={linkAmount} inputmode="decimal" size="10" placeholder="all of it" /></label>
+				{/if}
+				<button disabled={busy}>{linkPays ? 'Link payment' : 'Link entry'}</button>
 			</form>
 		{/if}
 	</div>

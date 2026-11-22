@@ -1,5 +1,5 @@
 import type { App } from "./app.ts";
-import { relatedEntries } from "./related.ts";
+import { paymentsOf, relatedEntries, syncEntriesPaidBy } from "./related.ts";
 import { tagsOfEntries } from "./tags.ts";
 import { retrackEntry, routeEntryLines } from "./entity-accounts.ts";
 import { entryMoves, syncUnreconciledLater, UNRECONCILED_WHERE } from "./unreconciled.ts";
@@ -438,6 +438,8 @@ export async function reverseJournalEntry(app: App, id: bigint, req: ReverseRequ
 		v.throwIfAny();
 		return insertJournalEntry(tx, e, accounts, id, null, actorId);
 	});
+	// A reversed payment no longer counts for the entries it paid.
+	await syncEntriesPaidBy(app, id, actorId);
 	return getJournalEntry(app, newId);
 }
 
@@ -800,6 +802,7 @@ export async function getJournalEntry(app: App, id: bigint): Promise<JournalEntr
 	e.date_changes = await entryDateChanges(app.db, id);
 	e.edits = await entryFieldEdits(app.db, id);
 	e.related = await relatedEntries(app, id);
+	e.payments = await paymentsOf(app, id);
 	return e;
 }
 

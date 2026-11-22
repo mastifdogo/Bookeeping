@@ -508,7 +508,8 @@ export interface paths {
          * Link this entry to another one
          * @description Links two journal entries to each other (a payment and the invoice it
          *     settled, a transfer's two halves). Each then shows on the other's
-         *     page, under `related`. The same pair again changes the note.
+         *     page, under `related`. The same pair again changes the link. Neither
+         *     entry changes: nothing is posted and no line moves.
          */
         post: operations["relateEntry"];
         delete?: never;
@@ -2300,14 +2301,20 @@ export interface components {
             /** @description Each reason it is shown */
             why: {
                 /**
-                 * @description linked: the two entries are linked. chain: linked to an entry
+                 * @description linked: the two entries are linked. payment: it is a payment
+                 *     of this entry. pays: this entry is a payment of it. chain: linked to an entry
                  *     linked to this one. record: both are linked to the same record
                  *     of a module. reverses / reversed_by: the entry and its reversal.
                  * @enum {string}
                  */
-                kind: "linked" | "chain" | "record" | "reverses" | "reversed_by";
-                /** @description linked: what the link is */
+                kind: "linked" | "payment" | "pays" | "chain" | "record" | "reverses" | "reversed_by";
+                /** @description linked, payment, pays: what the link is */
                 note: string;
+                /**
+                 * Format: int64
+                 * @description payment, pays: how much of the payment goes to the entry paid
+                 */
+                amount_cents: number | null;
                 /** @description linked: the module that made it (null: a person). record: whose record it is */
                 module_id: string | null;
                 /** @description linked: who made it */
@@ -2323,10 +2330,43 @@ export interface components {
                 through: number | null;
             }[];
         };
+        /** @description What an entry is for, and what the payments linked to it come to */
+        EntryPayments: {
+            currency: components["schemas"]["Currency"];
+            /**
+             * Format: int64
+             * @description What the entry is for: its line in the customer's or vendor's own account, else in accounts receivable or payable, else its total
+             */
+            due_cents: number;
+            /** Format: int64 */
+            paid_cents: number;
+            /**
+             * Format: int64
+             * @description Never below zero
+             */
+            left_cents: number;
+            /**
+             * @description Also the tag Ledger keeps on the entry
+             * @enum {string}
+             */
+            status: "unpaid" | "partially_paid" | "paid";
+            payments: {
+                /** Format: int64 */
+                entry_id: number;
+                /** Format: date */
+                entry_date: string;
+                description: string;
+                /** Format: int64 */
+                amount_cents: number;
+                /** @description false for a payment that was reversed */
+                counted: boolean;
+                note: string;
+            }[];
+        };
         EntryTag: {
             /** @description The tag's own number; tells an entry's rate items apart */
             id: number;
-            /** @description paid, billed, overdue, customer, vendor, rate, or another lowercase word */
+            /** @description paid, partially_paid, unpaid, billed, overdue, customer, vendor, rate, or another lowercase word */
             tag: string;
             /** @description Who, for the tags customer and vendor */
             entity: {
@@ -2669,6 +2709,8 @@ export interface components {
         JournalEntry: {
             /** @description Tags shared by Ledger and every module (paid, billed, overdue, customer, vendor, and others) */
             tags: components["schemas"]["EntryTag"][];
+            /** @description Its linked payments and what is left; null when none is linked (only when one entry is fetched) */
+            payments?: components["schemas"]["EntryPayments"] | null;
             /** @description Whether any of its amounts were changed after it was posted */
             amended: boolean;
             /** @description Every entry linked to this one, oldest first (only when one entry is fetched) */
@@ -4746,6 +4788,19 @@ export interface operations {
                     entry_id: number;
                     /** @description What the link is */
                     note?: string;
+                    /**
+                     * @description true: the other entry is a payment of this one. This entry
+                     *     then shows the payment, what is paid and what is left
+                     *     (`payments`), and Ledger keeps one of the tags unpaid,
+                     *     partially_paid or paid on it. false: a plain link. Left
+                     *     out, the link stays the kind it was.
+                     */
+                    payment?: boolean;
+                    /**
+                     * Format: int64
+                     * @description With payment true: how much of the payment goes to this entry, when it pays several; left out, all of it
+                     */
+                    amount_cents?: number;
                 };
             };
         };
