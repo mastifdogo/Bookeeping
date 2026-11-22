@@ -207,6 +207,11 @@ async function relocate(tx: Queryable, entryId: bigint, pick: (l: TrackedLine) =
 	return moved;
 }
 
+/** Whether the entry has a line in some customer's (vendor's) own account. */
+async function hasOwnLine(tx: Queryable, entryId: bigint, role: EntityRole): Promise<boolean> {
+	return !!(await queryRow(tx, `SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.journal_entry_id = $1 AND a.entity_role = $2 LIMIT 1`, [entryId, role]));
+}
+
 const has = (who: { is_customer: boolean; is_vendor: boolean } | null | undefined, role: EntityRole) => !!who && (role === "customer" ? who.is_customer : who.is_vendor);
 
 /**
@@ -215,7 +220,11 @@ const has = (who: { is_customer: boolean; is_vendor: boolean } | null | undefine
  * then has a line there, which is what says whose it is.
  */
 export async function claimLines(tx: Queryable, entryId: bigint, role: EntityRole, entityId: number, actorId: number | null): Promise<{ moved: number; tracked: boolean }> {
-	const moved = await relocate(tx, entryId, async (l) => (l.entity_id === null && l.kind === CONTROL[role].kind ? (await ensureEntityAccount(tx, entityId, role, l.currency, l.account_id)).id : null), actorId, MOVE_REASON[role]);
+	// An entry that already has a line in a customer's (vendor's) own account says whose it is: a line it also
+	// has in accounts receivable (payable) is there on purpose (a stand-in for the bank side) and stays.
+	const moved = (await hasOwnLine(tx, entryId, role))
+		? 0
+		: await relocate(tx, entryId, async (l) => (l.entity_id === null && l.kind === CONTROL[role].kind ? (await ensureEntityAccount(tx, entityId, role, l.currency, l.account_id)).id : null), actorId, MOVE_REASON[role]);
 	const tracked = await queryRow(tx, `SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.journal_entry_id = $1 AND a.entity_id = $2 AND a.entity_role = $3 LIMIT 1`, [entryId, entityId, role]);
 	return { moved, tracked: !!tracked };
 }
@@ -248,13 +257,14 @@ export async function releaseLines(tx: Queryable, entryId: bigint, role: EntityR
  */
 export async function retrackEntry(tx: Queryable, entryId: bigint, oldEntityId: number | null, newEntityId: number | null, actorId: number | null): Promise<void> {
 	const who = newEntityId === null ? null : await queryRow<{ is_customer: boolean; is_vendor: boolean }>(tx, `SELECT is_customer, is_vendor FROM entities WHERE id = $1`, [newEntityId]);
+	const own = { customer: await hasOwnLine(tx, entryId, "customer"), vendor: await hasOwnLine(tx, entryId, "vendor") };
 	await relocate(
 		tx,
 		entryId,
 		async (l) => {
 			if (l.entity_id === null) {
 				const role = ROLE_OF_KIND[l.kind ?? ""];
-				return role && has(who, role) ? (await ensureEntityAccount(tx, newEntityId!, role, l.currency, l.account_id)).id : null;
+				return role && !own[role] && has(who, role) ? (await ensureEntityAccount(tx, newEntityId!, role, l.currency, l.account_id)).id : null;
 			}
 			if (oldEntityId === null || Number(l.entity_id) !== oldEntityId || l.entity_role === null) return null;
 			if (has(who, l.entity_role)) return (await ensureEntityAccount(tx, newEntityId!, l.entity_role, l.currency, l.parent_kind === CONTROL[l.entity_role].kind ? l.parent_id! : undefined)).id;
