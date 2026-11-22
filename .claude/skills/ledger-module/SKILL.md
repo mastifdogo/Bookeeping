@@ -345,11 +345,29 @@ Decide, and state briefly to the user:
   { amount_cents?, note? }, req.user)`. Ledger shows the payment on the
   entry's page with what is paid and what is left, and keeps one of the
   tags `unpaid`, `partially_paid` or `paid` on the entry paid; tag a new
-  bill or invoice `unpaid` and leave the other two to Ledger. A vendor's
-  statement of account is not a bill (Ledger ≥ 0.34.0): post nothing, open
-  a reconciliation of the vendor's own account with
-  `ctx.reconcile.start({ account_code, document_id, lines? }, req.user)`
-  and send the user to its `href`. Accounts can be
+  bill or invoice `unpaid` and leave the other two to Ledger: never work
+  them out from payments yourself, follow them with `ctx.tags.onChange`
+  without setting them back, and show the module's own status from
+  `ctx.ledger.payments(entryId)` so it can't disagree. Set `paid` yourself
+  only where there is no payment entry to link (a person marks it paid).
+  When the bank or card side of an entry isn't known yet, don't make a
+  clearing account: post that side to the tagged accounts payable or
+  receivable as a stand-in, and when the bank or card transaction turns
+  up, post it as its own entry against the stand-in (part amounts work)
+  and link the two with `ctx.ledger.relateEntries`. Don't move the line:
+  `ctx.ledger.moveLine(entryId, lineNumber, accountCode, { reason },
+  req.user)` (Ledger ≥ 0.32.0) is for correcting a line's account, not for
+  linking payments. A vendor's statement of account is not a bill (Ledger
+  ≥ 0.34.0): post nothing, open a reconciliation of the vendor's own
+  account with `ctx.reconcile.start({ account_code, document_id,
+  statement_date, statement_balance_cents, lines? }, req.user)` (lines in
+  the account's natural sign: invoices positive, payments negative) and
+  send the user to its `href`, a page of Ledger. An account has one
+  reconciliation in progress, which `start` returns: say so instead of
+  failing. `ctx.reconcile.open`, `list` and `get` read its state, so keep
+  only its id. Put the option where statements already are in the
+  module's UI, not in a tab of its own. In every account list, accounts
+  tagged chequing, savings or credit_card come first. Accounts can be
   **sub-accounts** (Ledger 0.15.0): `parent_code` is the parent,
   `balance_cents` the account's own postings, `total_balance_cents` adds
   everything below it. Show account pickers and lists as a tree (indent
