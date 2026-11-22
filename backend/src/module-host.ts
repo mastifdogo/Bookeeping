@@ -21,7 +21,7 @@ import { HttpError } from "./errors.ts";
 import { log } from "./log.ts";
 import { builtFor, compatible, scanInstalled, type InstalledModule, type ModuleManifest } from "./modules.ts";
 import { createAccount, ensureClearingAccount, getAccount, getAccountLedger, getTrialBalance, listAccounts, listClearingAccounts } from "./accounts.ts";
-import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry } from "./ledger.ts";
+import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, listJournalEntries, reverseJournalEntry, unlinkJournalEntry, editJournalEntry } from "./ledger.ts";
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { relateEntries, relatedEntries, unrelateEntries } from "./related.ts";
 import { createEntity, ensureEntity, findEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
@@ -487,6 +487,17 @@ function makeContext(app: App, m: LoadedModule) {
 				if (links !== undefined && (!Array.isArray(links) || links.length > 50)) throw new HttpError(422, "links must be a list of at most 50 { ref, label, href? }");
 				return createJournalEntry(app, toEntry(entry), actorOf(user), links ? { moduleId: id, links: links as EntryLinkInput[] } : undefined);
 			},
+			/**
+			 * Moves one line of a posted entry to another account of the same
+			 * currency (Ledger 0.32.0): moveLine(entryId, lineNumber, accountCode,
+			 * { reason }, user) → the entry. For a line posted to a stand-in
+			 * (accounts payable or receivable) until the bank or card transaction
+			 * it belongs to is known. Refused (409) for a line ticked on a
+			 * reconciliation and for an entry that was reversed or is a reversal;
+			 * the move is logged on the entry.
+			 */
+			moveLine: (entryId: number | bigint | string, lineNumber: number, accountCode: string, opts: { reason?: string } = {}, user?: { username: string }) =>
+				editJournalEntry(app, entryIdOf(entryId), { lines: [{ line_number: Number(lineNumber), account_code: String(accountCode) }], reason: opts?.reason }, actorOf(user)),
 			/** Links an existing entry to one of this module's records ({ ref, label, href? }); the same ref again updates it. */
 			linkJournalEntry: (entryId: number | bigint | string, link: EntryLinkInput, user?: { username: string }) =>
 				linkJournalEntry(app, entryIdOf(entryId), id, link, actorOf(user)),

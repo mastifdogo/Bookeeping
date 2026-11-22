@@ -189,6 +189,14 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
     amount_cents, description?, reference? }, user)` posts Dr vendor's
     account / Cr bank (`role: "vendor"`) or Dr bank / Cr customer's account
     (`role: "customer"`) and returns the entry.
+  - `ctx.ledger.moveLine(entryId, lineNumber, accountCode, { reason },
+    user)` (Ledger ≥ 0.32.0) moves one line of a posted entry to another
+    account of the same currency and returns the entry; the move is logged
+    on it. Use it when the bank or card side of an entry isn't known yet:
+    post that side to accounts receivable or payable (the tagged account,
+    without `entity_id` so it isn't routed) and move the line to the bank
+    or card account when its transaction is linked. 409 for a line ticked
+    on a reconciliation and for a reversed entry or a reversal.
   - On an older Ledger `ctx.entities.account` is undefined: post to the
     receivable/payable account and tag as before.
   - Never offer an account with `entity` in a picker for a sale's or a
