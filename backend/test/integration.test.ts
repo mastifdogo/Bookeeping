@@ -4822,3 +4822,171 @@ test("editing an entry: every field in one go, each change logged", async (t) =>
 	assert.equal((await call("GET", `/journal-entries/${id}`)).json().edits.length, 8);
 	expectStatus(await call("POST", "/auth/root", { on: false }), 200);
 });
+
+test("customers' and vendors' own accounts: posted to, paid, read as tags, renamed and moved with the entry", async (t) => {
+	const ta = await setupTestApp(t);
+	if (!ta) return;
+	const { call } = ta;
+	await createAccount(ta, "1000", "Bank", "asset", "CAD");
+	await createAccount(ta, "1010", "Bank USD", "asset", "USD");
+	await createAccount(ta, "4000", "Sales", "revenue", "CAD");
+	await createAccount(ta, "6100", "Supplies", "expense", "CAD");
+	expectStatus(await call("POST", "/accounts", { code: "1200", name: "Accounts receivable", type: "asset", currency: "CAD", description: "", kind: "receivable" }), 201);
+	expectStatus(await call("POST", "/accounts", { code: "2000", name: "Accounts payable", type: "liability", currency: "CAD", description: "", kind: "payable" }), 201);
+	const acme = (await call("POST", "/entities", { name: "Acme", is_customer: true })).json();
+	const hydro = (await call("POST", "/entities", { name: "Hydro", is_vendor: true })).json();
+	assert.deepEqual(acme.accounts, []);
+
+	// An invoice posted with its customer to accounts receivable lands in the customer's own account.
+	let r = await call("POST", "/journal-entries", { ...entry("2026-04-01", "Invoice 1", dr("1200", 50000), cr("4000", 50000)), entity_id: acme.id });
+	expectStatus(r, 201);
+	const invoice = r.json();
+	const acmeCode = `1200-${acme.id}`;
+	assert.equal(invoice.lines[0].account_code, acmeCode);
+	assert.deepEqual(invoice.tags.map((x: any) => [x.tag, x.entity.name, x.account_code]), [["customer", "Acme", acmeCode]]);
+	r = await call("GET", `/accounts/${acmeCode}`);
+	assert.deepEqual([r.json().name, r.json().parent_code, r.json().kind, r.json().entity, r.json().balance_cents], ["Acme", "1200", null, { id: acme.id, name: "Acme", role: "customer" }, 50000]);
+	assert.equal((await call("GET", "/accounts/1200")).json().total_balance_cents, 50000);
+	expectStatus(await call("PATCH", `/accounts/${acmeCode}`, { kind: "receivable" }), 422);
+
+	// A vendor's entry isn't routed into receivables, and a customer's not into payables.
+	r = await call("POST", "/journal-entries", { ...entry("2026-04-01", "Odd", dr("1200", 100), cr("4000", 100)), entity_id: hydro.id });
+	assert.equal(r.json().lines[0].account_code, "1200");
+
+	// Receive payment: the bank is debited, the customer's account credited.
+	r = await call("POST", `/entities/${acme.id}/payments`, { role: "customer", account_code: "1000", entry_date: "2026-04-10", amount_cents: 20000, reference: "chq 12" });
+	expectStatus(r, 201);
+	assert.deepEqual(r.json().lines.map((l: any) => [l.account_code, l.debit_cents, l.credit_cents]), [["1000", 20000, 0], [acmeCode, 0, 20000]]);
+	assert.deepEqual([r.json().description, r.json().reference, r.json().entity.name], ["Payment received - Acme", "chq 12", "Acme"]);
+	r = await call("GET", `/entities/${acme.id}`);
+	assert.deepEqual(r.json().accounts, [{ role: "customer", code: acmeCode, currency: "CAD", owed_cents: 30000 }]);
+
+	// Pay bill: a bill waits in the vendor's account, the payment clears it. A payment in USD makes the USD accounts.
+	expectStatus(await call("POST", "/journal-entries", { ...entry("2026-04-02", "Hydro bill", dr("6100", 8000), cr("2000", 8000)), entity_id: hydro.id }), 201);
+	r = await call("POST", `/entities/${hydro.id}/payments`, { role: "vendor", account_code: "1000", entry_date: "2026-04-12", amount_cents: 8000 });
+	expectStatus(r, 201);
+	assert.deepEqual(r.json().lines.map((l: any) => [l.account_code, l.debit_cents, l.credit_cents]), [[`2000-${hydro.id}`, 8000, 0], ["1000", 0, 8000]]);
+	r = await call("POST", `/entities/${hydro.id}/payments`, { role: "vendor", account_code: "1010", entry_date: "2026-04-12", amount_cents: 500 });
+	expectStatus(r, 201);
+	r = await call("GET", "/entities?role=vendor");
+	const usd = r.json().data[0].accounts.find((a: any) => a.currency === "USD");
+	assert.deepEqual(r.json().data[0].accounts.map((a: any) => [a.currency, a.owed_cents]), [["CAD", 0], ["USD", -500]]);
+	r = await call("GET", `/accounts/${usd.code}`);
+	assert.equal((await call("GET", `/accounts/${r.json().parent_code}`)).json().kind, "payable");
+	// Refused: a customer isn't paid as a vendor, an amount of zero, an account that isn't a bank.
+	expectStatus(await call("POST", `/entities/${acme.id}/payments`, { role: "vendor", account_code: "1000", entry_date: "2026-04-12", amount_cents: 100 }), 422);
+	expectStatus(await call("POST", `/entities/${hydro.id}/payments`, { role: "vendor", account_code: "1000", entry_date: "2026-04-12", amount_cents: 0 }), 422);
+	expectStatus(await call("POST", `/entities/${hydro.id}/payments`, { role: "vendor", account_code: "6100", entry_date: "2026-04-12", amount_cents: 100 }), 422);
+	expectStatus(await call("POST", `/entities/999999/payments`, { role: "vendor", account_code: "1000", entry_date: "2026-04-12", amount_cents: 100 }), 404);
+
+	// Tagging an entry "customer" moves its receivable line; no tag is kept apart. Taking it off moves it back.
+	r = await call("POST", "/journal-entries", entry("2026-04-03", "Invoice 2", dr("1200", 7000), cr("4000", 7000)));
+	const inv2 = r.json();
+	r = await call("POST", `/journal-entries/${inv2.id}/tags`, { tag: "customer", entity_id: acme.id });
+	expectStatus(r, 200);
+	assert.equal(r.json().lines[0].account_code, acmeCode);
+	assert.deepEqual(r.json().tags.map((x: any) => [x.id, x.tag, x.account_code]), [[0, "customer", acmeCode]]);
+	assert.equal(r.json().moves.length, 1);
+	assert.equal(await ta.countRows("journal_entry_tags"), 0);
+	r = await call("GET", `/journal-entries?entity_id=${acme.id}`);
+	assert.deepEqual(r.json().data.map((e: any) => e.description).sort(), ["Invoice 1", "Invoice 2", "Payment received - Acme"]);
+	r = await call("GET", `/journal-entries?tag=customer`);
+	assert.equal(r.json().data.length, 3);
+	assert.equal((await call("GET", "/tags")).json().data.find((x: any) => x.tag === "customer").entries, 3);
+	r = await call("DELETE", `/journal-entries/${inv2.id}/tags/customer?entity_id=${acme.id}`);
+	expectStatus(r, 200);
+	assert.deepEqual([r.json().lines[0].account_code, r.json().tags], ["1200", []]);
+	// An entry with no receivable line keeps the tag itself.
+	r = await call("POST", "/journal-entries", entry("2026-04-04", "Cash sale", dr("1000", 900), cr("4000", 900)));
+	r = await call("POST", `/journal-entries/${r.json().id}/tags`, { tag: "customer", entity_id: acme.id });
+	assert.deepEqual(r.json().tags.map((x: any) => [x.tag, x.account_code]), [["customer", null]]);
+
+	// Changing an entry's customer moves its line to the other customer's account; reversing mirrors it.
+	const zed = (await call("POST", "/entities", { name: "Zed", is_customer: true })).json();
+	r = await call("PATCH", `/journal-entries/${invoice.id}`, { entity_id: zed.id });
+	expectStatus(r, 200);
+	assert.equal(r.json().lines[0].account_code, `1200-${zed.id}`);
+	r = await call("POST", `/journal-entries/${invoice.id}/reverse`, { entry_date: "2026-04-20" });
+	assert.equal(r.json().lines[0].account_code, `1200-${zed.id}`);
+	assert.equal((await call("GET", `/entities/${zed.id}`)).json().accounts[0].owed_cents, 0);
+	// Tagged another customer afterwards, a reversed entry and its reversal move together.
+	r = await call("POST", `/journal-entries/${invoice.id}/tags`, { tag: "customer", entity_id: acme.id });
+	assert.equal(r.json().lines[0].account_code, `1200-${zed.id}`); // already Zed's: Acme is kept as a tag
+	expectStatus(await call("PATCH", `/journal-entries/${invoice.id}`, { entity_id: null }), 200);
+	r = await call("GET", `/journal-entries/${invoice.id}`);
+	assert.equal(r.json().lines[0].account_code, "1200");
+	assert.equal((await call("GET", `/journal-entries/${r.json().reversed_by_id}`)).json().lines[0].account_code, "1200");
+
+	// The account follows the customer's name; the account is found again whatever its code.
+	expectStatus(await call("PATCH", `/entities/${acme.id}`, { name: "Acme Ltd" }), 200);
+	assert.equal((await call("GET", `/accounts/${acmeCode}`)).json().name, "Acme Ltd");
+	expectStatus(await call("PATCH", `/accounts/${acmeCode}`, { code: "1205" }), 200);
+	r = await call("POST", `/entities/${acme.id}/account`, { role: "customer", currency: "CAD" });
+	expectStatus(r, 200);
+	assert.equal(r.json().code, "1205");
+	expectStatus(await call("POST", `/entities/${acme.id}/account`, { role: "vendor", currency: "CAD" }), 422);
+});
+
+test("migration 034: customers' and vendors' tagged entries move to their own accounts", async (t) => {
+	const adminURL = process.env.TEST_DATABASE_URL;
+	if (!adminURL) return t.skip("TEST_DATABASE_URL not set");
+	const pg = (await import("pg")).default;
+	const admin = new pg.Client({ connectionString: adminURL });
+	await admin.connect();
+	const dbName = `ledger_test_m34_${process.hrtime.bigint()}`;
+	await admin.query(`CREATE DATABASE ${dbName}`);
+	const url = new URL(adminURL);
+	url.pathname = "/" + dbName;
+	const db = new pg.Client({ connectionString: url.toString() });
+	await db.connect();
+	t.after(async () => {
+		await db.end();
+		await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`).catch(() => {});
+		await admin.end();
+	});
+	const repo = path.resolve(import.meta.dirname, "..", "..");
+	await db.query(await readFile(path.join(repo, "db", "schema.sql"), "utf8"));
+	const files = (await readdir(path.join(repo, "db", "migrations"))).filter((n) => /^\d+.*\.sql$/.test(n)).sort();
+	for (const f of files.filter((n) => n < "034")) await db.query(await readFile(path.join(repo, "db", "migrations", f), "utf8"));
+
+	// Books as they were: lines in receivables and payables, and tags (or the entry's own customer or vendor) saying whose.
+	await db.query(`
+		INSERT INTO accounts (code, name, type, currency, kind) VALUES
+			('1000', 'Bank', 'asset', 'CAD', NULL), ('1200', 'Accounts receivable', 'asset', 'CAD', 'receivable'),
+			('2000', 'Accounts payable', 'liability', 'CAD', 'payable'), ('4000', 'Sales', 'revenue', 'CAD', NULL), ('6100', 'Supplies', 'expense', 'CAD', NULL);
+		INSERT INTO entities (name, is_customer, is_vendor) VALUES ('Acme', true, false), ('Hydro', false, true), ('Both', true, true);`);
+	const ids = Object.fromEntries((await db.query(`SELECT code, id FROM accounts`)).rows.map((r) => [r.code, r.id]));
+	const ent = Object.fromEntries((await db.query(`SELECT name, id FROM entities`)).rows.map((r) => [r.name, r.id]));
+	const post = async (description: string, lines: [string, number][], o: { entity?: string; reverses?: string; tags?: [string, string][] } = {}) => {
+		await db.query("BEGIN");
+		const id = (await db.query(`INSERT INTO journal_entries (entry_date, description, entity_id, reverses_id) VALUES ('2026-01-05', $1, $2, $3) RETURNING id`, [description, o.entity ? ent[o.entity] : null, o.reverses ?? null])).rows[0].id;
+		for (const [i, [code, amount]] of lines.entries()) await db.query(`INSERT INTO transactions (journal_entry_id, account_id, currency, line_number, amount) VALUES ($1, $2, 'CAD', $3, $4)`, [id, ids[code], i + 1, amount]);
+		for (const [tag, who] of o.tags ?? []) await db.query(`INSERT INTO journal_entry_tags (entry_id, tag, entity_id) VALUES ($1, $2, $3)`, [id, tag, ent[who]]);
+		await db.query("COMMIT");
+		return id as string;
+	};
+	const tagged = await post("Invoice, tagged", [["1200", 5000], ["4000", -5000]], { tags: [["customer", "Acme"]] });
+	const payment = await post("Payment, tagged", [["1000", 5000], ["1200", -5000]], { tags: [["customer", "Acme"]] });
+	const bill = await post("Bill, posted with its vendor", [["6100", 900], ["2000", -900]], { entity: "Hydro" });
+	const reversal = await post("Reversal of the bill", [["6100", -900], ["2000", 900]], { reverses: bill });
+	const two = await post("Two customers", [["1200", 300], ["4000", -300]], { tags: [["customer", "Acme"], ["customer", "Both"]] });
+	const cash = await post("Cash sale, tagged", [["1000", 700], ["4000", -700]], { tags: [["customer", "Acme"], ["paid", ""]].filter((x) => x[1]) as [string, string][] });
+	const wrong = await post("A vendor in receivables", [["1200", 100], ["4000", -100]], { entity: "Hydro" });
+	const plain = await post("No one's", [["1200", 40], ["4000", -40]]);
+
+	await db.query(await readFile(path.join(repo, "db", "migrations", files.find((n) => n.startsWith("034"))!), "utf8"));
+
+	const line = async (entry: string, n: number) => (await db.query(`SELECT a.code, a.entity_id, a.entity_role, a.name, p.code AS parent FROM transactions t JOIN accounts a ON a.id = t.account_id LEFT JOIN accounts p ON p.id = a.parent_id WHERE t.journal_entry_id = $1 AND t.line_number = $2`, [entry, n])).rows[0];
+	assert.deepEqual(await line(tagged, 1), { code: `1200-${ent.Acme}`, entity_id: ent.Acme, entity_role: "customer", name: "Acme", parent: "1200" });
+	assert.equal((await line(payment, 2)).code, `1200-${ent.Acme}`);
+	assert.deepEqual([(await line(bill, 2)).code, (await line(bill, 2)).entity_role, (await line(reversal, 2)).code], [`2000-${ent.Hydro}`, "vendor", `2000-${ent.Hydro}`]);
+	assert.deepEqual([(await line(two, 1)).code, (await line(wrong, 1)).code, (await line(plain, 1)).code], ["1200", "1200", "1200"]);
+	// Balances: Acme owes nothing (invoice paid), Hydro is owed nothing (bill reversed), the rest stays in 1200.
+	const bal = Object.fromEntries((await db.query(`SELECT a.code, COALESCE(sum(t.amount), 0)::int AS b FROM accounts a LEFT JOIN transactions t ON t.account_id = a.id GROUP BY a.code`)).rows.map((r) => [r.code, r.b]));
+	assert.deepEqual([bal[`1200-${ent.Acme}`], bal[`2000-${ent.Hydro}`], bal["1200"], bal["2000"]], [0, 0, 440, 0]);
+	// The tags the accounts now express are gone; the others stay.
+	const tags = (await db.query(`SELECT entry_id, tag FROM journal_entry_tags ORDER BY entry_id, tag, entity_id`)).rows.map((r) => `${r.entry_id}:${r.tag}`);
+	assert.deepEqual(tags, [`${two}:customer`, `${two}:customer`, `${cash}:customer`]);
+	// Every move is logged on its entry.
+	assert.equal(Number((await db.query(`SELECT count(*) AS n FROM transaction_moves WHERE reason LIKE 'Moved to the customer%' AND changed_by IS NULL`)).rows[0].n), 4);
+});

@@ -25,6 +25,7 @@ import { createJournalEntry, getJournalEntry, linkedEntries, linkJournalEntry, l
 import { getBalanceSheet, getIncomeStatement } from "./reports.ts";
 import { relateEntries, relatedEntries, unrelateEntries } from "./related.ts";
 import { createEntity, ensureEntity, findEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
+import { entityAccount, postEntityPayment } from "./entity-accounts.ts";
 import { moduleValues, saveSettings, type SettingValue } from "./module-settings.ts";
 import type { SearchProvider } from "./search.ts";
 import { connectionReady, llmComplete, pickConnection, PROVIDER_INFO, readLlmConfig, type LlmRequest } from "./llm.ts";
@@ -424,6 +425,23 @@ function makeContext(app: App, m: LoadedModule) {
 			update: (entityId: number, e: EntityInput) => updateEntity(app, Number(entityId), e),
 			/** The entity with that name in that role ("customer" | "vendor"), created or given the role if needed. */
 			ensure: (name: string, role: EntityRole, details?: EntityInput) => ensureEntity(app, name, role, details),
+			/**
+			 * The customer's or vendor's own account in a currency (Ledger 0.31.0): a
+			 * sub-account of accounts receivable (role "customer") or payable (role
+			 * "vendor"), made the first time it is asked for. Post an invoice or a
+			 * bill to it, and the payment that settles it: its balance is what the
+			 * customer owes or the vendor is owed (entity.accounts[].owed_cents).
+			 * Always look it up with this, never by a saved code.
+			 */
+			account: (entityId: number, role: EntityRole, currency: string) => entityAccount(app, Number(entityId), role, currency),
+			/**
+			 * Posts a payment between a bank or card account and the vendor's
+			 * (role "vendor": a bill is paid) or customer's (role "customer": a
+			 * payment is received) own account: { role, account_code, entry_date,
+			 * amount_cents, description?, reference? } → the entry.
+			 */
+			payment: (entityId: number, p: { role: EntityRole; account_code: string; entry_date: string; amount_cents: number | bigint | string; description?: string; reference?: string }, user?: { username: string }) =>
+				postEntityPayment(app, Number(entityId), { ...p, amount_cents: toCents(p?.amount_cents, "amount_cents") }, actorOf(user)),
 		},
 		ledger: {
 			listAccounts: (opts: { includeInactive?: boolean } = {}) => listAccounts(app, opts.includeInactive ?? false),

@@ -162,6 +162,7 @@ backend/src/types.ts      Models matching the spec
 backend/src/ledger.ts     Journal entry validation, transactional posting, reversal
 backend/src/accounts.ts   Chart of accounts (sub-accounts, bank and card tags), account ledger, trial balance
 backend/src/entities.ts   Customers and vendors: one list shared with modules (ctx.entities)
+backend/src/entity-accounts.ts  Each customer's and vendor's own account under receivables and payables; Pay bill, Receive payment
 backend/src/files.ts      General Ledger CSV export, file listing/download, uploads
 backend/src/import.ts     All-or-nothing CSV import of journal entries
 backend/src/auth.ts       Users, bcrypt passwords, sessions
@@ -398,6 +399,49 @@ Accounts payable in that currency, the expense is posted in one entry
 straight from the account it was paid from, as before. When **Edit…** on
 an entry has a customer or vendor and none of its lines is in accounts
 receivable or payable, it says so and names the account.
+
+### Each customer and vendor has an account of their own
+
+Under accounts receivable every customer has their own account, and under
+accounts payable every vendor has theirs (one per currency, named after
+them, made the first time something is posted for them). What a customer
+owes you, or what you owe a vendor, is that account's balance: the
+**Entities** page shows it next to each name, and the account's own page
+lists every invoice, bill and payment behind it. Accounts receivable and
+payable show the total of all of them.
+
+You don't pick these accounts yourself. Post an entry with a customer or
+vendor and a line to accounts receivable or payable, and that line goes to
+their own account; so do the invoices Sales posts and the bills and
+receipts Auto sort and the Expense form post. Tagging an entry
+**customer** or **vendor** does the same to an entry already posted, and
+changing an entry's customer or vendor under **Edit…** moves the line
+along. Each such move is logged on the entry. The account then says whose
+the entry is, so no separate tag is kept: the entry still reads
+"customer: Acme" wherever tags are shown, and taking that off moves the
+line back to accounts receivable or payable. An entry with no line in
+receivables or payables (a cash sale, a receipt paid on the spot without a
+vendor's bill) keeps the tag as before.
+
+**New entry** has two more tabs for the money itself:
+
+- **Pay bill**: the vendor, the bank or credit card account, the date and
+  the amount. It debits the vendor's own account and credits the bank or
+  card.
+- **Receive payment**: the customer, the bank account, the date and the
+  amount. It debits the bank and credits the customer's own account.
+
+Both show what is owed right now and can fill in that amount. The same
+buttons are next to each name on the Entities page.
+
+**Updating from an earlier version** converts the books by itself: every
+line in accounts receivable of an entry tagged with (or posted with) a
+customer, and every line in accounts payable of a vendor's entry, moves to
+that customer's or vendor's own account, with the move logged on the
+entry, and the tags the accounts now express are removed. Left where they
+are: lines ticked on a reconciliation, entries tagged with several
+customers or several vendors (nothing says whose the line is), and entries
+with no line in receivables or payables, which keep their tags.
 
 ### Editing an entry
 

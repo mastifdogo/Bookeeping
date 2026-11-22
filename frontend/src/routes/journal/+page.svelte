@@ -4,7 +4,7 @@
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import TagFields from '#lib/components/TagFields.svelte';
 	import { api, unwrap } from '#lib/api/client.ts';
-	import { emptyTagForm, tagBody, tagLabel } from '#lib/tags.ts';
+	import { emptyTagForm, tagBody, tagLabel, tagKey } from '#lib/tags.ts';
 	import EntryTotals from '#lib/components/EntryTotals.svelte';
 	import { _HIDE_REVERSED_KEY, _PAGE_SIZE } from './+page';
 	// The whole row opens the entry (the number stays a link for keyboards and new tabs).
@@ -164,7 +164,7 @@
 						<td>
 							{e.description}
 							{#if e.entity}<span class="muted small">· {e.entity.name}</span>{/if}
-							{#each e.tags as t (t.id)}
+							{#each e.tags as t (tagKey(t))}
 								<span class="badge tag {t.tag}" title={t.module_id ? `Set by ${t.module_id}` : 'Set by a person'}>{tagLabel(t)}</span>
 							{/each}
 							{#each e.links as l (l.module_id + ':' + l.ref)}

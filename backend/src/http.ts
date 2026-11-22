@@ -36,6 +36,7 @@ import {
 	decodeLoginRequest,
 	decodePasswordChange,
 	decodeReverseRequest,
+	decodeEntityPayment,
 	decodeEntryAmend,
 	decodeEntryEdit,
 	decodeReconciliationCreate,
@@ -135,6 +136,7 @@ import {
 	type OrgKind,
 } from "./orgs.ts";
 import { createEntity, getEntity, listEntities, updateEntity, type EntityInput, type EntityRole } from "./entities.ts";
+import { entityAccount, postEntityPayment } from "./entity-accounts.ts";
 import { MultipartError, formDataBoundary, parseHeaderParams, parseMultipart } from "./multipart.ts";
 import { CONTENT_TYPES, staticHandler } from "./static.ts";
 import { promises as fsp } from "node:fs";
@@ -1028,6 +1030,18 @@ async function handleUpdateEntity(c: Ctx): Promise<void> {
 	writeJSON(c.res, 200, await updateEntity(c.app, entityIdParam(c), await decodeBody(c, true, entityBody)));
 }
 
+/** The customer's or vendor's own account in a currency, made when they have none. */
+async function handleEntityAccount(c: Ctx): Promise<void> {
+	const b = await decodeBody(c, true, objectBody(["role", "currency"]));
+	writeJSON(c.res, 200, await entityAccount(c.app, entityIdParam(c), String(b.role ?? ""), String(b.currency ?? "")));
+}
+
+/** Pay bill (role vendor) and Receive payment (role customer). */
+async function handleEntityPayment(c: Ctx): Promise<void> {
+	const input = await decodeBody(c, true, decodeEntityPayment);
+	writeJSON(c.res, 201, await postEntityPayment(c.app, entityIdParam(c), input, c.user!.id));
+}
+
 async function handleListJournalEntries(c: Ctx): Promise<void> {
 	const [from, to] = queryDateRange(c.query);
 	const f: EntryFilter = { from, to, accountCode: null, hideReversed: queryBool(c.query, "hide_reversed"), limit: 50, offset: 0 };
@@ -1158,7 +1172,7 @@ async function handleBatchTags(c: Ctx): Promise<void> {
 		v.throwIfAny();
 	}
 	const input = tagInput(b);
-	const r = b.action === "set" ? await setTags(c.app, ids, input, { moduleId: null, userId: c.user!.id }) : await removeTags(c.app, ids, input, { moduleId: null });
+	const r = b.action === "set" ? await setTags(c.app, ids, input, { moduleId: null, userId: c.user!.id }) : await removeTags(c.app, ids, input, { moduleId: null, userId: c.user!.id });
 	writeJSON(c.res, 200, r);
 }
 
@@ -1166,7 +1180,7 @@ async function handleRemoveTag(c: Ctx): Promise<void> {
 	const id = pathId(c, "entryId");
 	const e = c.query.get("entity_id");
 	const t = c.query.get("id");
-	await removeTag(c.app, id, { tag: c.params.tag ?? "", entity_id: e ? Number(e) : null, id: t ? Number(t) : null }, { moduleId: null });
+	await removeTag(c.app, id, { tag: c.params.tag ?? "", entity_id: e ? Number(e) : null, id: t ? Number(t) : null }, { moduleId: null, userId: c.user!.id });
 	writeJSON(c.res, 200, await getJournalEntry(c.app, id));
 }
 
@@ -2543,6 +2557,8 @@ const ROUTES: Route[] = [
 	route("POST", "/entities", true, handleCreateEntity),
 	route("GET", "/entities/:entityId", true, handleGetEntity),
 	route("PATCH", "/entities/:entityId", true, handleUpdateEntity),
+	route("POST", "/entities/:entityId/account", true, handleEntityAccount),
+	route("POST", "/entities/:entityId/payments", true, handleEntityPayment),
 
 	route("GET", "/journal-entries", true, handleListJournalEntries),
 	route("POST", "/journal-entries", true, handleCreateJournalEntry),

@@ -5,7 +5,7 @@
 	import { openRow } from '#lib/rows.ts';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { ACCOUNT_KINDS, ACCOUNT_TYPES, CURRENCIES, api, kindLabel, unwrap, type Account, type AccountKind, type AccountType, type Currency } from '#lib/api/client.ts';
-	import { tagLabel } from '#lib/tags.ts';
+	import { tagLabel, tagKey } from '#lib/tags.ts';
 	import { naturalBalance } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
@@ -254,7 +254,7 @@
 					<td><a class="quiet" href="/journal/{l.journal_entry_id}">#{l.journal_entry_id}</a></td>
 					<td>
 						{l.description}
-						{#each l.tags as t (t.id)}
+						{#each l.tags as t (tagKey(t))}
 							<span class="badge tag {t.tag}" title={t.module_id ? `Set by ${t.module_id}` : 'Set by a person'}>{tagLabel(t)}</span>
 						{/each}
 						{#if l.memo}<div class="muted small">{l.memo}</div>{/if}

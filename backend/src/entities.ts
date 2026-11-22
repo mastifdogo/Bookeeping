@@ -9,6 +9,7 @@ import type { App } from "./app.ts";
 import { isPgError, queryRow, queryRows } from "./db.ts";
 import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
 import { checkText, trimSpace } from "./text.ts";
+import { entityAccounts, renameEntityAccounts, type EntityAccount } from "./entity-accounts.ts";
 
 export const ENTITY_ROLES = ["customer", "vendor"] as const;
 export type EntityRole = (typeof ENTITY_ROLES)[number];
@@ -25,6 +26,12 @@ export interface Entity {
 	is_active: boolean;
 	created_at: Date;
 	updated_at: Date;
+	/**
+	 * Their own accounts: a customer's under accounts receivable, a vendor's
+	 * under accounts payable, one per currency, with what is owed in each.
+	 * Empty until something is posted for them.
+	 */
+	accounts: EntityAccount[];
 }
 
 export interface EntityInput {
@@ -39,8 +46,9 @@ export interface EntityInput {
 }
 
 const COLUMNS = `id, name, is_customer, is_vendor, email, phone, address, notes, is_active, created_at, updated_at`;
-type Row = Omit<Entity, "id"> & { id: bigint };
-const toEntity = (r: Row): Entity => ({ ...r, id: Number(r.id) });
+type Row = Omit<Entity, "id" | "accounts"> & { id: bigint };
+const toEntity = (r: Row, accounts: EntityAccount[] = []): Entity => ({ ...r, id: Number(r.id), accounts });
+const withAccounts = async (app: App, r: Row): Promise<Entity> => toEntity(r, (await entityAccounts(app.db, [Number(r.id)])).get(Number(r.id)) ?? []);
 const TEXT_FIELDS = { email: 200, phone: 100, address: 1000, notes: 2000 } as const;
 const KEYS = ["name", "is_customer", "is_vendor", "is_active", ...Object.keys(TEXT_FIELDS)];
 
@@ -79,19 +87,20 @@ export async function listEntities(app: App, f: EntityFilter = {}): Promise<Enti
 		  ORDER BY lower(name)`,
 		[f.includeInactive === true, f.role ?? null, f.q ? f.q.trim() || null : null],
 	);
-	return rows.map(toEntity);
+	const accounts = await entityAccounts(app.db, null);
+	return rows.map((r) => toEntity(r, accounts.get(Number(r.id)) ?? []));
 }
 
 export async function getEntity(app: App, id: number): Promise<Entity> {
 	const r = Number.isSafeInteger(id) && id > 0 ? await queryRow<Row>(app.db, `SELECT ${COLUMNS} FROM entities WHERE id = $1`, [id]) : null;
 	if (!r) throw new NotFoundError();
-	return toEntity(r);
+	return withAccounts(app, r);
 }
 
 /** The entity with that name (any capitalisation), or null. */
 export async function findEntity(app: App, name: string): Promise<Entity | null> {
 	const r = await queryRow<Row>(app.db, `SELECT ${COLUMNS} FROM entities WHERE lower(name) = lower($1)`, [trimSpace(String(name))]);
-	return r ? toEntity(r) : null;
+	return r ? withAccounts(app, r) : null;
 }
 
 export async function createEntity(app: App, input: EntityInput): Promise<Entity> {
@@ -129,7 +138,9 @@ export async function updateEntity(app: App, id: number, input: EntityInput): Pr
 			  WHERE id = $1 RETURNING ${COLUMNS}`,
 			[id, trimSpace(next.name), next.is_customer, next.is_vendor, trimSpace(next.email), trimSpace(next.phone), trimSpace(next.address), trimSpace(next.notes), next.is_active],
 		);
-		return toEntity(r!);
+		// Their own accounts are named after them.
+		await renameEntityAccounts(app.db, id, cur.name, r!.name);
+		return withAccounts(app, r!);
 	} catch (err) {
 		if (isPgError(err) && err.constraint === "entities_name_unique") throw duplicate(trimSpace(next.name));
 		throw err;

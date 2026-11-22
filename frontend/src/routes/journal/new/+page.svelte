@@ -3,6 +3,7 @@
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import AccountSelect from '#lib/components/AccountSelect.svelte';
 	import ExpenseForm from '#lib/components/ExpenseForm.svelte';
+	import PaymentForm from '#lib/components/PaymentForm.svelte';
 	import { page } from '$app/state';
 	import { ApiError, CURRENCIES, api, today, unwrap, type Currency } from '#lib/api/client.ts';
 	import { formatCents, parseAmount } from '#lib/money.ts';
@@ -14,10 +15,20 @@
 	let nextKey = 0;
 	const blankLine = (): Line => ({ key: nextKey++, account_code: '', debit: '', credit: '', memo: '' });
 
-	// What is being entered: a full journal entry, or a quick expense.
-	type Kind = 'entry' | 'expense';
-	let kind = $state<Kind>(page.url.searchParams.get('type') === 'expense' ? 'expense' : 'entry');
+	// What is being entered: a full journal entry, a quick expense, a bill paid or a customer's payment received.
+	const KINDS = [
+		['entry', 'Journal entry', 'journal entry'],
+		['expense', 'Expense', 'expense'],
+		['pay-bill', 'Pay bill', 'bill payment'],
+		['receive-payment', 'Receive payment', 'customer payment']
+	] as const;
+	type Kind = (typeof KINDS)[number][0];
+	const asked = page.url.searchParams.get('type');
+	let kind = $state<Kind>(KINDS.find((k) => k[0] === asked)?.[0] ?? 'entry');
+	// ?entity=<id> starts Pay bill or Receive payment with that vendor or customer chosen.
+	const preset = Number(page.url.searchParams.get('entity')) || null;
 	let vendors = $derived(data.entities.filter((e) => e.is_vendor));
+	let customers = $derived(data.entities.filter((e) => e.is_customer));
 
 	let entryDate = $state(today());
 	let description = $state('');
@@ -124,15 +135,20 @@
 </script>
 
 <div class="toolbar">
-	<h1 style="margin:0">New {kind === 'expense' ? 'expense' : 'journal entry'}</h1>
+	<h1 style="margin:0">New {KINDS.find((k) => k[0] === kind)?.[2]}</h1>
 	<div class="segmented" role="radiogroup" aria-label="What to enter">
-		<label class:on={kind === 'entry'}><input type="radio" name="kind" value="entry" bind:group={kind} /> Journal entry</label>
-		<label class:on={kind === 'expense'}><input type="radio" name="kind" value="expense" bind:group={kind} /> Expense</label>
+		{#each KINDS as [value, label] (value)}
+			<label class:on={kind === value}><input type="radio" name="kind" {value} bind:group={kind} /> {label}</label>
+		{/each}
 	</div>
 </div>
 
 {#if kind === 'expense'}
 	<ExpenseForm accounts={data.accounts} {vendors} />
+{:else if kind === 'pay-bill'}
+	<PaymentForm role="vendor" accounts={data.accounts} entities={vendors} {preset} />
+{:else if kind === 'receive-payment'}
+	<PaymentForm role="customer" accounts={data.accounts} entities={customers} {preset} />
 {:else}
 
 {#if data.accounts.length < 2}
@@ -156,7 +172,11 @@
 			</label>
 		{/if}
 	</div>
-	<p class="muted small">Paying a bill or a receipt? Choose <strong>Expense</strong> above for a quicker form.</p>
+	<p class="muted small">
+		A receipt or a new bill? Choose <strong>Expense</strong> above. Paying a vendor's bill, or a customer paying you? <strong>Pay bill</strong> and
+		<strong>Receive payment</strong> post it to their own account.
+		{#if entityId !== ''}A line posted to accounts receivable or payable goes to this customer's or vendor's own account.{/if}
+	</p>
 
 	<div class="table-wrap">
 		<table class="lines">
@@ -210,6 +230,7 @@
 <style>
 	.segmented {
 		display: inline-flex;
+		flex-wrap: wrap;
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		overflow: hidden;

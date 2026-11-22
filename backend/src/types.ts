@@ -53,6 +53,8 @@ export interface Account {
 	parent_code: string | null;
 	/** balance_cents plus the balances of every sub-account below it. */
 	total_balance_cents: bigint;
+	/** Whose account it is, for a customer's own account under accounts receivable or a vendor's under accounts payable; null for every other account. */
+	entity: { id: number; name: string; role: "customer" | "vendor" } | null;
 	created_at: Date;
 	updated_at: Date;
 }

@@ -161,6 +161,19 @@ export function decodeJournalEntryCreate(v: unknown): JournalEntryCreate {
 }
 
 /** { lines: [{ line_number, debit_cents, credit_cents }], reason? } */
+export function decodeEntityPayment(v: unknown): import("./entity-accounts.ts").EntityPayment {
+	const o = object(v, "EntityPayment", ["role", "account_code", "entry_date", "amount_cents", "description", "reference"]);
+	const p = "EntityPayment.";
+	return {
+		role: str(o, "role", p) ?? "",
+		account_code: str(o, "account_code", p) ?? "",
+		entry_date: date(o, "entry_date") ?? "",
+		amount_cents: int64(o, "amount_cents", p) ?? 0n,
+		description: str(o, "description", p),
+		reference: str(o, "reference", p),
+	};
+}
+
 export function decodeEntryAmend(v: unknown): EntryAmend {
 	const o = object(v, "EntryAmend", ["lines", "reason"]);
 	if (!Array.isArray(o.lines)) throw new DecodeError("EntryAmend.lines must be a list");

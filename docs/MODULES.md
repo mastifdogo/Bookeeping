@@ -831,6 +831,28 @@ payable (`payable`): customers' invoices are posted to the first, vendors'
 bills and receipts to the second, by Ledger and by every module, so use
 the tagged account in the entry's currency when your own setting is empty.
 
+Since Ledger 0.31.0 each customer has an account of their own under
+accounts receivable and each vendor one under accounts payable, per
+currency: `await ctx.entities.account(entityId, "customer" | "vendor",
+currency)` returns it (an `Account`), making it the first time. Post a
+customer's invoice and its payment there, a vendor's bill and its payment
+there: the balance is what is owed, and every entity carries it as
+`accounts: [{ role, code, currency, owed_cents }]`. Such an account has
+`entity: { id, name, role }` and no `kind`. Ledger also routes for you: an
+entry posted with `entity_id` and a line to the tagged receivable (a
+customer's entry) or payable (a vendor's) account is posted to their own
+account instead, so read the account codes back from the entry returned,
+never assume the code you sent. The tags `customer` and `vendor` follow
+the accounts: an entry with a line in a customer's or vendor's own account
+reads as tagged with them (`ctx.tags.of` and `entries`, with
+`account_code` set and `id` 0) without a tag being kept; setting the tag on
+an entry with a line in receivables or payables moves that line to their
+account, and taking it off moves it back. Only an entry with no such line
+keeps the tag itself. `ctx.entities.payment(entityId, { role, account_code,
+entry_date, amount_cents, description?, reference? }, user)` posts a bill
+payment (`"vendor"`) or a customer's payment (`"customer"`) between a bank
+or card account and their own account.
+
 ## Files the module kept (`ctx.storage`)
 
 From Ledger 0.13.2 to 0.26 a module could keep files that weren't PDFs in a

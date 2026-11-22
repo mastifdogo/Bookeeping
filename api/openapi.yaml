@@ -2582,6 +2582,65 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /entities/{entityId}/account:
+    parameters:
+      - { name: entityId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Entities]
+      operationId: entityAccount
+      summary: The customer's or vendor's own account in a currency
+      description: |
+        Each customer has an account of their own under accounts receivable and
+        each vendor one under accounts payable, one per currency. This returns
+        it, making it (and accounts receivable or payable in that currency,
+        when the books have none) the first time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, currency]
+              additionalProperties: false
+              properties:
+                role: { type: string, enum: [customer, vendor] }
+                currency: { $ref: '#/components/schemas/Currency' }
+      responses:
+        '200':
+          description: The account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /entities/{entityId}/payments:
+    parameters:
+      - { name: entityId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Entities]
+      operationId: postEntityPayment
+      summary: Pay a vendor's bill, or receive a customer's payment
+      description: |
+        Posts one entry between a bank or credit card account and the vendor's
+        or customer's own account, in the bank account's currency. Role vendor
+        (Pay bill): what the vendor is owed is debited, the bank or card
+        credited. Role customer (Receive payment): the bank is debited, what
+        the customer owes credited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EntityPayment' }
+      responses:
+        '201':
+          description: The entry posted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JournalEntry' }
+        '422': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
   /search:
     get:
       tags: [Reports]
@@ -3414,6 +3473,14 @@ components:
         quantity: { type: number, nullable: true, description: 'The tag rate: how many; null for other tags' }
         unit: { type: string, nullable: true, description: 'The tag rate: of what (hours, km, litres…)' }
         rate_cents: { type: integer, nullable: true, description: 'The tag rate: price of one unit in cents, in the entry''s currency' }
+        account_code:
+          type: string
+          nullable: true
+          description: |
+            For customer and vendor: the customer's or vendor's own account the
+            entry has a line in, when that is what says whose the entry is. Such
+            a tag is read from the account, not kept apart (its id is 0); taking
+            it off moves the line back to accounts receivable or payable.
     DashboardLayout:
       type: object
       required: [tiles]
@@ -3607,7 +3674,7 @@ components:
 
     Account:
       type: object
-      required: [code, name, type, currency, description, is_active, balance_cents, kind, module_id, module_key, hidden, parent_code, total_balance_cents, created_at, updated_at]
+      required: [code, name, type, currency, description, is_active, balance_cents, kind, module_id, module_key, hidden, parent_code, total_balance_cents, created_at, updated_at, entity]
       properties:
         hidden: { type: boolean, description: 'Left out of account lists and pickers (still in reports). Clearing accounts are hidden unless shown.' }
         module_id: { type: string, nullable: true, description: The module that made the account (a clearing account of its own; "ledger" for Ledger's own) }
@@ -3628,6 +3695,15 @@ components:
           description: Current balance in the account's currency (debit-positive)
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        entity:
+          type: object
+          nullable: true
+          description: Whose account it is, for a customer's own account under accounts receivable or a vendor's under accounts payable; null for every other account
+          required: [id, name, role]
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            role: { type: string, enum: [customer, vendor] }
     AccountCreate:
       type: object
       required: [code, name, type, currency]
@@ -3671,7 +3747,7 @@ components:
     Entity:
       type: object
       description: A person or business the books deal with; a customer, a vendor, or both.
-      required: [id, name, is_customer, is_vendor, email, phone, address, notes, is_active, created_at, updated_at]
+      required: [id, name, is_customer, is_vendor, email, phone, address, notes, is_active, created_at, updated_at, accounts]
       properties:
         id: { type: integer }
         name: { type: string }
@@ -3684,6 +3760,33 @@ components:
         is_active: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        accounts:
+          type: array
+          description: Their own accounts (a customer's under accounts receivable, a vendor's under accounts payable, one per currency) with what is owed in each; empty until something is posted for them
+          items: { $ref: '#/components/schemas/EntityAccount' }
+    EntityAccount:
+      type: object
+      required: [role, code, currency, owed_cents]
+      properties:
+        role: { type: string, enum: [customer, vendor] }
+        code: { $ref: '#/components/schemas/AccountCode' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        owed_cents:
+          allOf: [{ $ref: '#/components/schemas/SignedCents' }]
+          description: What the customer owes (role customer) or what the vendor is owed (role vendor); negative when it is the other way round
+    EntityPayment:
+      type: object
+      required: [role, account_code, entry_date, amount_cents]
+      additionalProperties: false
+      properties:
+        role: { type: string, enum: [vendor, customer], description: 'vendor: a bill is paid; customer: a payment is received' }
+        account_code:
+          allOf: [{ $ref: '#/components/schemas/AccountCode' }]
+          description: The bank or credit card account the money left or arrived in
+        entry_date: { type: string, format: date }
+        amount_cents: { $ref: '#/components/schemas/Cents' }
+        description: { type: string, maxLength: 500, description: 'Left out: "Bill payment - <vendor>" or "Payment received - <customer>"' }
+        reference: { type: string, maxLength: 100 }
     EntityInput:
       type: object
       additionalProperties: false
@@ -3705,7 +3808,7 @@ components:
       required: [entry_date, description, lines]
       additionalProperties: false
       properties:
-        entity_id: { type: integer, nullable: true, description: The vendor or customer the entry is with }
+        entity_id: { type: integer, nullable: true, description: 'The vendor or customer the entry is with. A line posted to accounts receivable (a customer''s entry) or payable (a vendor''s) then goes to that customer''s or vendor''s own account.' }
         entry_date: { type: string, format: date }
         description: { type: string, minLength: 1, maxLength: 500 }
         reference: { type: string, maxLength: 100, default: '' }

@@ -1,6 +1,7 @@
 import type { App } from "./app.ts";
 import { relatedEntries } from "./related.ts";
 import { tagsOfEntries } from "./tags.ts";
+import { retrackEntry, routeEntryLines } from "./entity-accounts.ts";
 import { entryMoves, syncUnreconciledLater, UNRECONCILED_WHERE } from "./unreconciled.ts";
 import { withTx, queryRow, queryRows, toNumber, type Queryable } from "./db.ts";
 import { ConflictError, NotFoundError, ValidationError } from "./errors.ts";
@@ -220,6 +221,8 @@ export async function createJournalEntry(
 	validateJournalEntry(e);
 	if (links) for (const l of links.links) validateLink(l);
 	const id = await withTx(app.db, {}, async (tx) => {
+		// A customer's or vendor's entry: its receivable or payable lines go to their own account.
+		e = await routeEntryLines(tx, e);
 		const accounts = await lockAccounts(tx, lineCodes(e.lines));
 		const v = new ValidationError();
 		checkLinesPostable(v, e, accounts, jsonFieldNames);
@@ -780,6 +783,8 @@ export async function editJournalEntry(app: App, id: bigint, input: EntryEdit, a
 		for (const [n, code] of accounts) await tx.query(`UPDATE transactions SET account_id = $2 WHERE id = $1`, [byNumber.get(n)!.id, to.get(code)!.id]);
 		for (const [n, memo] of memos) await tx.query(`UPDATE transactions SET memo = $2 WHERE id = $1`, [byNumber.get(n)!.id, memo]);
 		for (const [n, amount] of amounts) await tx.query(`UPDATE transactions SET amount = $2 WHERE id = $1`, [byNumber.get(n)!.id, amount]);
+		// Another customer or vendor: the lines in the previous one's own account, or in receivables or payables, follow.
+		if (head.entity_id !== undefined) await retrackEntry(tx, id, orig.entity?.id ?? null, head.entity_id, actorId);
 	});
 	if (accounts.size > 0) await syncUnreconciledLater(app);
 	return getJournalEntry(app, id);
@@ -810,7 +815,7 @@ export interface EntryFilter {
 	from: string | null;
 	to: string | null;
 	accountCode: string | null;
-	/** Only entries with this entity (vendor, customer): posted with it, or tagged with it. */
+	/** Only entries with this entity (vendor, customer): posted with it, tagged with it, or with a line in its own account. */
 	entityId?: number | null;
 	/** Only entries carrying this tag. */
 	tag?: string | null;
@@ -831,8 +836,10 @@ export async function listJournalEntries(app: App, f: EntryFilter): Promise<Jour
 		        SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id
 		         WHERE t.journal_entry_id = e.id AND a.code = $3))
 		  AND (NOT $6 OR (e.reverses_id IS NULL AND r.id IS NULL))
-		  AND ($7::bigint IS NULL OR e.entity_id = $7 OR EXISTS (SELECT 1 FROM journal_entry_tags jt WHERE jt.entry_id = e.id AND jt.entity_id = $7))
-		  AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM journal_entry_tags jt WHERE jt.entry_id = e.id AND jt.tag = $8))
+		  AND ($7::bigint IS NULL OR e.entity_id = $7 OR EXISTS (SELECT 1 FROM journal_entry_tags jt WHERE jt.entry_id = e.id AND jt.entity_id = $7)
+		       OR EXISTS (SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.journal_entry_id = e.id AND a.entity_id = $7))
+		  AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM journal_entry_tags jt WHERE jt.entry_id = e.id AND jt.tag = $8)
+		       OR EXISTS (SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.journal_entry_id = e.id AND a.entity_role = $8))
 		ORDER BY e.entry_date DESC, e.id DESC
 		LIMIT $4 OFFSET $5`,
 		[f.from, f.to, f.accountCode, f.limit, f.offset, f.hideReversed === true, f.entityId ?? null, f.tag ?? null],

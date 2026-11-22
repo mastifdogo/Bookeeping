@@ -8,7 +8,7 @@
 	import TagFields from '#lib/components/TagFields.svelte';
 	import EntryTotals from '#lib/components/EntryTotals.svelte';
 	import { openRow } from '#lib/rows.ts';
-	import { emptyTagForm, tagBody, tagLabel } from '#lib/tags.ts';
+	import { emptyTagForm, tagBody, tagLabel, tagKey } from '#lib/tags.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -70,7 +70,11 @@
 		const who = editing && !paired ? data.entities.find((x) => String(x.id) === head.entity) : undefined;
 		if (!who) return null;
 		const kinds: string[] = [...(who.is_customer ? ['receivable'] : []), ...(who.is_vendor ? ['payable'] : [])];
-		const kindOf = (code: string) => data.accounts.find((a) => a.code === code)?.kind ?? '';
+		// A customer's or vendor's own account counts as receivables or payables.
+		const kindOf = (code: string) => {
+			const a = data.accounts.find((x) => x.code === code);
+			return a?.entity ? (a.entity.role === 'customer' ? 'receivable' : 'payable') : (a?.kind ?? '');
+		};
 		if (e.lines.some((l) => kinds.includes(kindOf(draft[l.line_number]?.account ?? l.account_code)))) return null;
 		const targets = data.accounts.filter((a) => a.is_active && kinds.includes(a.kind ?? '') && e.lines.some((l) => l.currency === a.currency));
 		return targets.length > 0 ? { who, targets } : null;
@@ -398,7 +402,7 @@
 				<strong>{steer.who.name}</strong> is a {steer.who.is_customer && steer.who.is_vendor ? 'customer and vendor' : steer.who.is_customer ? 'customer' : 'vendor'}:
 				{steer.who.is_customer && steer.who.is_vendor ? 'invoices are posted to accounts receivable, bills and receipts to accounts payable' : steer.who.is_customer ? 'invoices are posted to accounts receivable' : 'bills and receipts are posted to accounts payable'}
 				({steer.targets.map((a) => `${a.code} ${a.name}`).join(', ')}). None of this entry's lines is there; if it is one of those, or its
-				payment, choose that account on a line below.
+				payment, choose that account on a line below and it goes to {steer.who.name}'s own account.
 			</p>
 		{/if}
 		<div class="toolbar" style="margin:0.6rem 0 0; align-items:flex-end">
@@ -482,8 +486,8 @@
 <div class="card tags">
 	<div class="muted small">Tags <span title="Tags are shared with every module: a tag set here, or by a module, is seen by all of them.">(shared with modules)</span></div>
 	<div class="taglist">
-		{#each e.tags as t (t.id)}
-			<span class="badge tag {t.tag}" title="{t.module_id ? `Set by ${moduleName(t.module_id)}` : `Set by ${t.set_by ?? 'a person'}`}, {new Date(t.set_at).toLocaleString()}{t.note ? `: ${t.note}` : ''}">
+		{#each e.tags as t (tagKey(t))}
+			<span class="badge tag {t.tag}" title={t.account_code && t.id === 0 ? `Read from the entry's line in ${t.account_code}, this ${t.tag}'s own account. Taking it off moves the line back to accounts ${t.tag === 'customer' ? 'receivable' : 'payable'}.` : `${t.module_id ? `Set by ${moduleName(t.module_id)}` : `Set by ${t.set_by ?? 'a person'}`}, ${new Date(t.set_at).toLocaleString()}${t.note ? `: ${t.note}` : ''}`}>
 				{tagLabel(t)}{#if canEdit && t.tag === 'rate'}<button type="button" class="x" disabled={busy} aria-label="Change this item" title="Change" onclick={() => editRate(t)}>✎</button>{/if}{#if canEdit}<button type="button" class="x" disabled={busy} aria-label="Take off the tag {t.tag}" onclick={() => dropTag(t)}>×</button>{/if}
 			</span>
 		{:else}
@@ -529,7 +533,7 @@
 								<td><a class="quiet" href="/journal/{r.id}">{r.id}</a></td>
 								<td>
 									{r.description}{#if r.reference}<span class="muted small"> · {r.reference}</span>{/if}
-									{#each r.tags as t (t.id)}<span class="badge tag {t.tag}">{tagLabel(t)}</span>{/each}
+									{#each r.tags as t (tagKey(t))}<span class="badge tag {t.tag}">{tagLabel(t)}</span>{/each}
 									{#if r.reversed}<span class="badge warn">reversed</span>{/if}
 								</td>
 								<td class="small">

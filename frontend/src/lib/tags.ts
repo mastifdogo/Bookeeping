@@ -14,7 +14,12 @@ export interface TagLike {
 	quantity?: number | null;
 	unit?: string | null;
 	rate_cents?: number | null;
+	/** Set when the tag is read from the customer's or vendor's own account (its id is then 0). */
+	account_code?: string | null;
 }
+
+/** Tells an entry's tags apart in a list: those read from an account all have the id 0. */
+export const tagKey = (t: TagLike): string => `${t.id ?? 0}:${t.tag}:${t.entity?.id ?? ''}`;
 
 /** "paid", "customer: Acme", "rate: Labour, 7.5 hours, 80.00 = 600.00" (description, quantity, rate). */
 export function tagLabel(t: TagLike): string {

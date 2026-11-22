@@ -328,7 +328,18 @@ Decide, and state briefly to the user:
   (accounts payable): a customer's invoice is posted to the receivable
   account and a vendor's bill or receipt to the payable account in its
   currency. Keep the module's account setting, but when it is empty use the
-  tagged account, and work without one on an older Ledger. Accounts can be
+  tagged account, and work without one on an older Ledger. Since Ledger
+  0.31.0 each customer has an account of their own under accounts
+  receivable and each vendor one under accounts payable, per currency
+  (`await ctx.entities.account(entityId, "customer" | "vendor", currency)`,
+  made the first time; such an account has `entity: { id, name, role }`
+  and no `kind`): post an invoice or a bill and its payment there, or post
+  to the tagged account with `entity_id` and Ledger routes the line there
+  (read the code back from the returned entry). What is owed is that
+  account's balance (`entity.accounts[].owed_cents`). Don't tag such
+  entries `customer` or `vendor`: the account says whose they are, and
+  `ctx.tags.of` still returns them as tagged. Leave these accounts out of
+  pickers for a sale's or a cost's account and for bank accounts. Accounts can be
   **sub-accounts** (Ledger 0.15.0): `parent_code` is the parent,
   `balance_cents` the account's own postings, `total_balance_cents` adds
   everything below it. Show account pickers and lists as a tree (indent

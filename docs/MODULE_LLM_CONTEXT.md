@@ -161,6 +161,38 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
   in its currency: when the module's own setting for that account is empty,
   use the tagged one (`listAccounts()` filtered by `kind` and `currency`),
   and never offer either as the account a sale or a cost is for.
+- **Customers' and vendors' own accounts** (Ledger ≥ 0.31.0): every
+  customer has a sub-account of accounts receivable and every vendor one of
+  accounts payable, per currency, and what is owed is its balance.
+  `await ctx.entities.account(entityId, role, currency)` → the `Account`
+  (made the first time; look it up each time, never save its code). Such
+  an account has `entity: { id, name, role: "customer" | "vendor" }` and
+  `kind: null`; every other account has `entity: null`. Entities carry
+  `accounts: [{ role, code, currency, owed_cents }]` (`owed_cents`: what the
+  customer owes or the vendor is owed; negative is a credit). Rules:
+  - Post an invoice or bill, and the payment that settles it, to the
+    entity's own account: either pass its code, or post to the tagged
+    receivable/payable account **with `entity_id`** and Ledger routes the
+    line there. Read codes back from the returned entry
+    (`entry.lines[n].account_code`); don't compare a posted line's code
+    with the receivable/payable setting. To recognise "a receivable (or
+    payable) line", test `account.kind === "receivable"` **or**
+    `account.entity?.role === "customer"` (`"payable"` / `"vendor"`).
+  - Don't tag such entries `customer`/`vendor`: the account says it.
+    `ctx.tags.of(entryId)` and `ctx.tags.entries({ entity_id })` still
+    return them as tagged (`{ id: 0, tag, entity, account_code }`).
+    `ctx.tags.set(entry, "customer", { entity_id })` on an entry with a
+    line in receivables moves that line to the customer's account (no tag
+    is kept); `ctx.tags.remove` moves it back. An entry with no such line
+    keeps a real tag. `paid`, `billed`, `overdue` and `rate` are unchanged.
+  - `ctx.entities.payment(entityId, { role, account_code, entry_date,
+    amount_cents, description?, reference? }, user)` posts Dr vendor's
+    account / Cr bank (`role: "vendor"`) or Dr bank / Cr customer's account
+    (`role: "customer"`) and returns the entry.
+  - On an older Ledger `ctx.entities.account` is undefined: post to the
+    receivable/payable account and tag as before.
+  - Never offer an account with `entity` in a picker for a sale's or a
+    cost's account, or as a bank account.
 - **Sub-accounts** (Ledger ≥ 0.15.0): `Account.parent_code` is the account
   it sits under (same type and currency, at most 5 levels) or `null`;
   `balance_cents` is the account's own postings and `total_balance_cents`

@@ -8,6 +8,7 @@ import type { App } from "./app.ts";
 import { queryRow, queryRows, withTx, type Queryable } from "./db.ts";
 import { NotFoundError, ValidationError } from "./errors.ts";
 import { log } from "./log.ts";
+import { claimLines, releaseLines, type EntityRole } from "./entity-accounts.ts";
 
 /** The tags every module understands the same way. Others are allowed: lowercase words. */
 export const STANDARD_TAGS = ["paid", "billed", "overdue", "customer", "vendor", "rate"] as const;
@@ -35,6 +36,12 @@ export interface EntryTag {
 	unit: string | null;
 	/** For the tag "rate": the price of one unit in cents, in the entry's currency; null for other tags. */
 	rate_cents: number | null;
+	/**
+	 * For "customer" and "vendor": the customer's or vendor's own account the
+	 * entry has a line in, when that is what says whose the entry is (the tag
+	 * is read from the account, it isn't kept apart; its id is 0); null otherwise.
+	 */
+	account_code: string | null;
 }
 
 /** What a tag "rate" says: one item, enough for a form to fill in a line (description, quantity × rate). */
@@ -106,6 +113,7 @@ const toTag = (r: Row): EntryTag => ({
 	quantity: r.quantity === null ? null : Number(r.quantity),
 	unit: r.unit,
 	rate_cents: r.rate_cents === null ? null : Number(r.rate_cents),
+	account_code: null,
 });
 
 const rateOfTag = (t: EntryTag): EntryRate => ({
@@ -134,6 +142,23 @@ export async function tagsOfEntries(db: Queryable, ids: (number | bigint)[]): Pr
 	for (const r of await queryRows<Row>(db, SELECT + ` WHERE t.entry_id = ANY($1::bigint[]) ORDER BY t.id`, [ids])) {
 		const k = Number(r.entry_id);
 		out.set(k, [...(out.get(k) ?? []), toTag(r)]);
+	}
+	// "customer" and "vendor" read from the accounts: a line in a customer's or vendor's own account says whose the entry is.
+	const own = await queryRows<{ entry_id: bigint; tag: string; entity_id: bigint; name: string; code: string; posted_at: Date }>(
+		db,
+		`SELECT DISTINCT ON (t.journal_entry_id, a.entity_role, a.entity_id) t.journal_entry_id AS entry_id, a.entity_role AS tag, a.entity_id, n.name, a.code, e.posted_at
+		   FROM transactions t JOIN accounts a ON a.id = t.account_id JOIN entities n ON n.id = a.entity_id JOIN journal_entries e ON e.id = t.journal_entry_id
+		  WHERE t.journal_entry_id = ANY($1::bigint[]) AND a.entity_id IS NOT NULL
+		  ORDER BY t.journal_entry_id, a.entity_role, a.entity_id, t.line_number`,
+		[ids],
+	);
+	for (const r of own) {
+		const k = Number(r.entry_id);
+		const list = out.get(k) ?? [];
+		const kept = list.find((t) => t.tag === r.tag && t.entity?.id === Number(r.entity_id));
+		if (kept) kept.account_code = r.code;
+		else list.push({ id: 0, tag: r.tag, entity: { id: Number(r.entity_id), name: r.name }, note: "", module_id: null, set_by: null, set_at: r.posted_at, description: null, quantity: null, unit: null, rate_cents: null, account_code: r.code });
+		out.set(k, list);
 	}
 	return out;
 }
@@ -238,6 +263,16 @@ async function setTagTx(tx: Queryable, entryId: bigint, t: Checked, by: { module
 		changes.push({ entry_id: Number(entryId), action: "set", tag: "rate", tag_id: Number(r.rows[0].id), entity_id: null, module_id: by.moduleId });
 		return;
 	}
+	if (ENTITY_TAGS.has(t.tag) && t.entityId !== null) {
+		// The entry's line in accounts receivable or payable moves to the customer's or vendor's own account,
+		// which then says whose the entry is; a tag is kept only for an entry with no such line.
+		const { moved, tracked } = await claimLines(tx, entryId, t.tag as EntityRole, t.entityId, by.userId);
+		if (tracked) {
+			await tx.query(`DELETE FROM journal_entry_tags WHERE entry_id = $1 AND tag = $2 AND entity_id = $3`, [entryId, t.tag, t.entityId]);
+			if (moved > 0) changes.push({ entry_id: Number(entryId), action: "set", tag: t.tag, tag_id: null, entity_id: t.entityId, module_id: by.moduleId });
+			return;
+		}
+	}
 	const r = await tx.query(
 		`INSERT INTO journal_entry_tags (entry_id, tag, entity_id, note, module_id, created_by) VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (entry_id, tag, entity_id) WHERE tag <> 'rate' DO UPDATE
@@ -328,7 +363,7 @@ export async function setTags(app: App, entryIds: unknown, input: TagInput, by: 
 }
 
 /** Takes a tag off many entries at once. Returns how many entries had it. */
-export async function removeTags(app: App, entryIds: unknown, input: { tag: string; entity_id?: number | null }, by: { moduleId: string | null }): Promise<{ entries: number; changed: number }> {
+export async function removeTags(app: App, entryIds: unknown, input: { tag: string; entity_id?: number | null }, by: { moduleId: string | null; userId?: number | null }): Promise<{ entries: number; changed: number }> {
 	const ids = batchIds(entryIds);
 	const tag = typeof input?.tag === "string" ? input.tag.trim().toLowerCase() : "";
 	const entityId = input?.entity_id === undefined || input.entity_id === null ? null : Number(input.entity_id);
@@ -338,11 +373,14 @@ export async function removeTags(app: App, entryIds: unknown, input: { tag: stri
 	v.throwIfAny();
 	const gone = await withTx(app.db, {}, async (tx) => {
 		await checkEntries(tx, ids);
-		return queryRows<{ id: bigint; entry_id: bigint; entity_id: bigint | null }>(
+		const rows = await queryRows<{ id: bigint; entry_id: bigint; entity_id: bigint | null }>(
 			tx,
 			`DELETE FROM journal_entry_tags WHERE entry_id = ANY($1::bigint[]) AND tag = $2 AND ($3::bigint IS NULL OR entity_id = $3) RETURNING id, entry_id, entity_id`,
 			[ids, tag, entityId],
 		);
+		// Read from the customer's or vendor's own account: the line goes back to receivables or payables.
+		if (ENTITY_TAGS.has(tag)) for (const id of ids) for (const who of await releaseLines(tx, id, tag as EntityRole, entityId, by.userId ?? null)) rows.push({ id: 0n, entry_id: id, entity_id: BigInt(who) });
+		return rows;
 	});
 	announce(app, gone.map((g) => ({ entry_id: Number(g.entry_id), action: "removed" as const, tag, tag_id: tag === "rate" ? Number(g.id) : null, entity_id: g.entity_id === null ? null : Number(g.entity_id), module_id: by.moduleId })));
 	return { entries: ids.length, changed: new Set(gone.map((g) => String(g.entry_id))).size };
@@ -353,24 +391,32 @@ export async function removeTags(app: App, entryIds: unknown, input: { tag: stri
  * them when no entity is given; for "rate": the item with that id, or all of
  * them when no id is given).
  */
-export async function removeTag(app: App, entryId: bigint, input: { tag: string; entity_id?: number | null; id?: number | null }, by: { moduleId: string | null }): Promise<EntryTag[]> {
+export async function removeTag(app: App, entryId: bigint, input: { tag: string; entity_id?: number | null; id?: number | null }, by: { moduleId: string | null; userId?: number | null }): Promise<EntryTag[]> {
 	const tag = typeof input?.tag === "string" ? input.tag.trim().toLowerCase() : "";
 	const entityId = input?.entity_id === undefined || input.entity_id === null ? null : Number(input.entity_id);
 	const tagId = input?.id === undefined || input.id === null ? null : Number(input.id);
 	if (!TAG_RE.test(tag) || (entityId !== null && (!Number.isSafeInteger(entityId) || entityId < 1)) || (tagId !== null && (!Number.isSafeInteger(tagId) || tagId < 1))) throw new NotFoundError();
 	if (!(await queryRow(app.db, `SELECT 1 FROM journal_entries WHERE id = $1`, [entryId]))) throw new NotFoundError();
-	const gone = await queryRows<{ id: bigint; entity_id: bigint | null }>(
-		app.db,
-		`DELETE FROM journal_entry_tags WHERE entry_id = $1 AND tag = $2 AND ($3::bigint IS NULL OR entity_id = $3) AND ($4::bigint IS NULL OR id = $4) RETURNING id, entity_id`,
-		[entryId, tag, entityId, tagId],
-	);
+	const gone = await withTx(app.db, {}, async (tx) => {
+		const rows = await queryRows<{ id: bigint; entity_id: bigint | null }>(
+			tx,
+			`DELETE FROM journal_entry_tags WHERE entry_id = $1 AND tag = $2 AND ($3::bigint IS NULL OR entity_id = $3) AND ($4::bigint IS NULL OR id = $4) RETURNING id, entity_id`,
+			[entryId, tag, entityId, tagId],
+		);
+		// Read from the customer's or vendor's own account: the line goes back to receivables or payables.
+		if (ENTITY_TAGS.has(tag) && tagId === null) for (const who of await releaseLines(tx, entryId, tag as EntityRole, entityId, by.userId ?? null)) rows.push({ id: 0n, entity_id: BigInt(who) });
+		return rows;
+	});
 	announce(app, gone.map((g) => ({ entry_id: Number(entryId), action: "removed" as const, tag, tag_id: tag === "rate" ? Number(g.id) : null, entity_id: g.entity_id === null ? null : Number(g.entity_id), module_id: by.moduleId })));
 	return (await tagsOfEntries(app.db, [entryId])).get(Number(entryId)) ?? [];
 }
 
 /** Every tag in use, with how many entries carry it (the standard ones always listed). */
 export async function listTags(app: App): Promise<{ tag: string; entries: number; standard: boolean }[]> {
-	const rows = await queryRows<{ tag: string; n: bigint }>(app.db, `SELECT tag, count(DISTINCT entry_id) AS n FROM journal_entry_tags GROUP BY tag`);
+	const rows = await queryRows<{ tag: string; n: bigint }>(app.db, `SELECT tag, count(DISTINCT entry_id) AS n
+		   FROM (SELECT tag, entry_id FROM journal_entry_tags
+		         UNION SELECT a.entity_role, t.journal_entry_id FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE a.entity_id IS NOT NULL) x
+		  GROUP BY tag`);
 	const counts = new Map(rows.map((r) => [r.tag, Number(r.n)]));
 	const std = STANDARD_TAGS as readonly string[];
 	return [...std, ...rows.map((r) => r.tag).filter((t) => !std.includes(t)).sort()].map((tag) => ({ tag, entries: counts.get(tag) ?? 0, standard: std.includes(tag) }));

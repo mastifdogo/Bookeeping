@@ -1696,6 +1696,57 @@ export interface paths {
         patch: operations["updateEntity"];
         trace?: never;
     };
+    "/entities/{entityId}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The customer's or vendor's own account in a currency
+         * @description Each customer has an account of their own under accounts receivable and
+         *     each vendor one under accounts payable, one per currency. This returns
+         *     it, making it (and accounts receivable or payable in that currency,
+         *     when the books have none) the first time.
+         */
+        post: operations["entityAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/entities/{entityId}/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityId: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pay a vendor's bill, or receive a customer's payment
+         * @description Posts one entry between a bank or credit card account and the vendor's
+         *     or customer's own account, in the bank account's currency. Role vendor
+         *     (Pay bill): what the vendor is owed is debited, the bank or card
+         *     credited. Role customer (Receive payment): the bank is debited, what
+         *     the customer owes credited.
+         */
+        post: operations["postEntityPayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -2296,6 +2347,13 @@ export interface components {
             unit?: string | null;
             /** @description The tag rate: price of one unit in cents, in the entry's currency */
             rate_cents?: number | null;
+            /**
+             * @description For customer and vendor: the customer's or vendor's own account the
+             *     entry has a line in, when that is what says whose the entry is. Such
+             *     a tag is read from the account, not kept apart (its id is 0); taking
+             *     it off moves the line back to accounts receivable or payable.
+             */
+            account_code?: string | null;
         };
         DashboardLayout: {
             /** @description Empty for the standard layout */
@@ -2483,6 +2541,13 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description Whose account it is, for a customer's own account under accounts receivable or a vendor's under accounts payable; null for every other account */
+            entity: {
+                id: number;
+                name: string;
+                /** @enum {string} */
+                role: "customer" | "vendor";
+            } | null;
         };
         AccountCreate: {
             code: components["schemas"]["AccountCode"];
@@ -2537,6 +2602,31 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description Their own accounts (a customer's under accounts receivable, a vendor's under accounts payable, one per currency) with what is owed in each; empty until something is posted for them */
+            accounts: components["schemas"]["EntityAccount"][];
+        };
+        EntityAccount: {
+            /** @enum {string} */
+            role: "customer" | "vendor";
+            code: components["schemas"]["AccountCode"];
+            currency: components["schemas"]["Currency"];
+            /** @description What the customer owes (role customer) or what the vendor is owed (role vendor); negative when it is the other way round */
+            owed_cents: components["schemas"]["SignedCents"];
+        };
+        EntityPayment: {
+            /**
+             * @description vendor: a bill is paid; customer: a payment is received
+             * @enum {string}
+             */
+            role: "vendor" | "customer";
+            /** @description The bank or credit card account the money left or arrived in */
+            account_code: components["schemas"]["AccountCode"];
+            /** Format: date */
+            entry_date: string;
+            amount_cents: components["schemas"]["Cents"];
+            /** @description Left out: "Bill payment - <vendor>" or "Payment received - <customer>" */
+            description?: string;
+            reference?: string;
         };
         EntityInput: {
             name?: string;
@@ -2554,7 +2644,7 @@ export interface components {
          */
         AccountKind: "chequing" | "savings" | "credit_card" | "clearing" | "receivable" | "payable";
         JournalEntryCreate: {
-            /** @description The vendor or customer the entry is with */
+            /** @description The vendor or customer the entry is with. A line posted to accounts receivable (a customer's entry) or payable (a vendor's) then goes to that customer's or vendor's own account. */
             entity_id?: number | null;
             /** Format: date */
             entry_date: string;
@@ -6835,6 +6925,66 @@ export interface operations {
                 };
             };
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    entityAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    role: "customer" | "vendor";
+                    currency: components["schemas"]["Currency"];
+                };
+            };
+        };
+        responses: {
+            /** @description The account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            422: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    postEntityPayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entityId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntityPayment"];
+            };
+        };
+        responses: {
+            /** @description The entry posted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalEntry"];
+                };
+            };
             422: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };

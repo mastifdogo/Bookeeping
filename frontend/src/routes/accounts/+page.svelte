@@ -214,6 +214,7 @@
 						<td class="mono"><a href="/accounts/{encodeURIComponent(a.code)}">{a.code}</a></td>
 						<td style:padding-left={depth ? `${0.6 + depth * 1.25}rem` : undefined}>
 							{#if depth}<span class="muted" aria-hidden="true">↳ </span>{/if}{a.name}
+							{#if a.entity}<a class="badge" href="/journal?entity_id={a.entity.id}" title="{a.entity.name}'s own account: what {a.entity.role === 'customer' ? 'they owe' : 'they are owed'}">{a.entity.role}</a>{/if}
 							{#if a.kind}<span class="badge" class:warn={a.kind === 'clearing' && a.balance_cents !== 0}>{kindLabel(a.kind)}{a.kind === 'clearing' && a.balance_cents !== 0 ? ': not cleared' : ''}</span>{/if}
 							{#if !tree && a.parent_code}<span class="muted small">(under {a.parent_code})</span>{/if}
 							{#if a.description}<div class="muted small">{a.description}</div>{/if}

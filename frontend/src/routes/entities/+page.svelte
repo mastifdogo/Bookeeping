@@ -5,6 +5,7 @@
 	import { page } from '$app/state';
 	import ErrorNotice from '#lib/components/ErrorNotice.svelte';
 	import { api, unwrap, type Entity } from '#lib/api/client.ts';
+	import { formatCents } from '#lib/money.ts';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -79,6 +80,8 @@
 </div>
 <p class="muted small">
 	One list for Ledger and its modules: the vendor on an expense, the customer on an invoice. An entity can be a customer, a vendor, or both.
+	Each has an account of their own under accounts receivable (customers) or payable (vendors), made the first time something is posted for
+	them: its balance is what is owed.
 </p>
 
 {#if notice}<div class="notice ok">{notice}</div>{/if}
@@ -126,7 +129,7 @@
 		<div class="empty">{data.entities.length === 0 ? 'No customers or vendors yet.' : 'None match.'}</div>
 	{:else}
 		<table>
-			<thead><tr><th>Name</th><th>Is a</th><th>Email</th><th>Phone</th><th></th></tr></thead>
+			<thead><tr><th>Name</th><th>Is a</th><th>Owed</th><th>Email</th><th>Phone</th><th></th></tr></thead>
 			<tbody>
 				{#each rows as e (e.id)}
 					<tr class:inactive={!e.is_active}>
@@ -135,10 +138,29 @@
 							{#if e.address || e.notes}<div class="muted small">{[e.address, e.notes].filter(Boolean).join(' · ')}</div>{/if}
 						</td>
 						<td>{roles(e)}</td>
+						<td class="owed">
+							{#each e.accounts as a (a.code)}
+								<div>
+									<a href="/accounts/{a.code}" class:muted={a.owed_cents === 0} title="{a.code}: {e.name}'s own account under accounts {a.role === 'customer' ? 'receivable' : 'payable'}">
+										{#if a.owed_cents === 0}
+											Nothing owed ({a.role === 'customer' ? 'customer' : 'vendor'}, {a.currency})
+										{:else}
+											{a.role === 'customer' ? (a.owed_cents < 0 ? 'Credit' : 'Owes you') : a.owed_cents < 0 ? 'Credit with them' : 'You owe'}
+											{formatCents(Math.abs(a.owed_cents))}
+											{a.currency}
+										{/if}
+									</a>
+								</div>
+							{/each}
+						</td>
 						<td>{e.email}</td>
 						<td>{e.phone}</td>
 						<td class="num actions">
 							<a class="button" href="/journal?entity_id={e.id}">Entries</a>
+							{#if canEdit && e.is_active}
+								{#if e.is_vendor}<a class="button" href="/journal/new?type=pay-bill&entity={e.id}">Pay bill</a>{/if}
+								{#if e.is_customer}<a class="button" href="/journal/new?type=receive-payment&entity={e.id}">Receive payment</a>{/if}
+							{/if}
 							{#if canEdit}
 								<button disabled={busy} onclick={() => start(e)}>Edit</button>
 								<button disabled={busy} onclick={() => setActive(e, !e.is_active)}>{e.is_active ? 'Deactivate' : 'Reactivate'}</button>
@@ -172,7 +194,8 @@
 		color: var(--muted);
 		padding: 0;
 	}
-	.actions {
+	.actions,
+	.owed {
 		white-space: nowrap;
 	}
 	tr.inactive td {

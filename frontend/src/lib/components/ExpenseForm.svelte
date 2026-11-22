@@ -5,7 +5,8 @@
 	// from). A vendor's bill or receipt goes through accounts payable (the
 	// account tagged "payable" in that currency): one entry debits the expense
 	// and credits payables, and, unless it isn't paid yet, a second, linked to
-	// it, pays it from the bank or card.
+	// it, pays it from the bank or card. Posted with the vendor, both land in
+	// the vendor's own account under payables (Ledger routes the line there).
 	import { goto, invalidateAll } from '$app/navigation';
 	import ErrorNotice from './ErrorNotice.svelte';
 	import AccountSelect from './AccountSelect.svelte';
@@ -33,7 +34,7 @@
 	const isBank = (a: Account) => a.kind === 'chequing' || a.kind === 'savings' || a.kind === 'credit_card';
 	// Paid from: tagged bank and card accounts first, then other asset and liability accounts.
 	let payAccounts = $derived(
-		[...data.accounts.filter(isBank), ...data.accounts.filter((a) => !isBank(a) && (a.type === 'asset' || a.type === 'liability'))].map((a) => ({
+		[...data.accounts.filter(isBank), ...data.accounts.filter((a) => !isBank(a) && pickable(a) && (a.type === 'asset' || a.type === 'liability'))].map((a) => ({
 			...a,
 			name: a.kind ? `${a.name} (${kindLabel(a.kind)})` : a.name
 		}))
@@ -54,6 +55,8 @@
 		const currency = exp?.currency ?? paid?.currency;
 		return hasVendor ? data.accounts.find((a) => a.kind === 'payable' && (!currency || a.currency === currency)) : undefined;
 	});
+	// Paid from: not a customer's or vendor's own account (Pay bill is for those).
+	const pickable = (a: Account) => !a.entity;
 	let ready = $derived(cents !== null && cents > 0 && (waits ? payable !== undefined : paidFrom !== '') && expense !== '' && (vendor !== NEW || vendorName.trim() !== ''));
 
 	async function submit(e: SubmitEvent) {
@@ -159,8 +162,8 @@
 	</p>
 	<p class="muted small" style="margin-bottom:0">
 		{#if hasVendor && payable}
-			A vendor's bill or receipt goes through <strong>{payable.code} {payable.name}</strong>: one entry debits the expense account and
-			credits it{#if waits}, where it waits until it is paid{:else}, and a second, linked to the first, pays it from the account it was paid from{/if}.
+			A vendor's bill or receipt goes through the vendor's own account under <strong>{payable.code} {payable.name}</strong>: one entry debits the
+			expense account and credits it{#if waits}, where it waits until it is paid (<strong>Pay bill</strong> above){:else}, and a second, linked to the first, pays it from the account it was paid from{/if}.
 		{:else if hasVendor}
 			No account is tagged Accounts payable{#if waits}, so a bill that isn't paid yet can't be posted: tag one on the Accounts page{:else} in this currency, so this posts one entry straight from the account it was paid from. Tag one on the Accounts page to post vendors' bills and receipts there{/if}.
 		{:else}

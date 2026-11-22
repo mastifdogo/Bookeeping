@@ -30,6 +30,7 @@ const ACCOUNT_SELECT = `
 	       (SELECT p.code FROM accounts p WHERE p.id = a.parent_id) AS parent_code,
 	       COALESCE((WITH RECURSIVE sub AS (SELECT a.id UNION ALL SELECT c.id FROM accounts c JOIN sub ON c.parent_id = sub.id)
 	                 SELECT sum(t.amount) FROM transactions t WHERE t.account_id IN (SELECT id FROM sub)), 0)::bigint AS total_balance,
+	       a.entity_id, a.entity_role, (SELECT n.name FROM entities n WHERE n.id = a.entity_id) AS entity_name,
 	       a.created_at, a.updated_at
 	  FROM accounts a`;
 
@@ -48,6 +49,9 @@ interface AccountRow {
 	hidden: boolean;
 	parent_code: string | null;
 	total_balance: bigint;
+	entity_id: bigint | null;
+	entity_role: "customer" | "vendor" | null;
+	entity_name: string | null;
 	created_at: Date;
 	updated_at: Date;
 }
@@ -70,6 +74,7 @@ function toAccount(r: AccountRow): Account {
 		hidden: r.hidden,
 		parent_code: r.parent_code,
 		total_balance_cents: r.total_balance,
+		entity: r.entity_id === null || r.entity_role === null ? null : { id: Number(r.entity_id), name: r.entity_name ?? "", role: r.entity_role },
 		created_at: r.created_at,
 		updated_at: r.updated_at,
 	};
@@ -266,7 +271,9 @@ export async function updateAccount(app: App, code: string, input: AccountUpdate
 	v.throwIfAny();
 	let kind: AccountKind | null = null;
 	if (input.kind) {
-		kind = checkKind(v, input.kind, (await getAccountRow(app, code)).type);
+		const cur = await getAccountRow(app, code);
+		kind = checkKind(v, input.kind, cur.type);
+		if (cur.entity_id !== null) v.add("kind", `this is the account of ${cur.entity_name}; a customer's or vendor's own account can't be tagged`);
 		v.throwIfAny();
 	}
 	let parentId: bigint | null = null;
