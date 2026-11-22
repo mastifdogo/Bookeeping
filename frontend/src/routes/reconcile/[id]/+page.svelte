@@ -263,7 +263,7 @@
 			{/if}
 			{#if ai}
 				<span class="small">
-					The AI read <strong>{ai.lines.length}</strong> line{ai.lines.length === 1 ? '' : 's'} from the statement:
+					{ai.model ? 'The AI read' : 'Read from the statement:'} <strong>{ai.lines.length}</strong> line{ai.lines.length === 1 ? '' : 's'} from the statement:
 					<strong>{ai.matched.length}</strong> matched your books and {ai.matched.length === 1 ? 'is' : 'are'} ticked{#if notInBooks.length > 0}, <strong
 							>{notInBooks.length}</strong
 						> {notInBooks.length === 1 ? "isn't" : "aren't"} in your books{/if}. Check them against the statement before finishing.
@@ -325,7 +325,7 @@
 		<strong class="big"><Amount cents={d.difference_cents} /></strong>
 		<span class="small">
 			{#if d.difference_cents === 0}{open ? 'Balanced. Ready to finish.' : `Reconciled${rec.finished_by ? ` by ${rec.finished_by}` : ''}.`}{:else}Tick
-				lines until this is 0.00, or finish and the difference goes to Unreconciled.{/if}
+				lines until this is 0.00, or finish and the difference is posted against Unreconciled{rec.entity_role ? ` (statement lines your books don't have, for you to move to the right account)` : ''}.{/if}
 			{#if open && d.totals.uncleared.debit_count + d.totals.uncleared.credit_count > 0}<br /><span class="muted"
 					>{rec.entity_role ? `On finishing, lines not ticked stay in this ${rec.entity_role}'s account.` : 'On finishing, lines not ticked move to Unreconciled.'}</span
 				>{/if}
@@ -336,7 +336,7 @@
 <div class="card totals">
 	<table class="mini">
 		<thead>
-			<tr><th></th><th class="num">{debitNormal ? 'Deposits' : 'Charges'} (debits)</th><th class="num">{debitNormal ? 'Withdrawals' : 'Payments'} (credits)</th></tr>
+			<tr><th></th><th class="num">{debitNormal ? 'Deposits' : 'Payments'} (debits)</th><th class="num">{debitNormal ? 'Withdrawals' : 'Charges'} (credits)</th></tr>
 		</thead>
 		<tbody>
 			<tr>

@@ -472,6 +472,8 @@ function makeContext(app: App, m: LoadedModule) {
 				const r = (await listReconciliations(app, String(accountCode))).find((x) => x.status === "open");
 				return r ? { ...(await getReconciliation(app, BigInt(r.id))), href: `/reconcile/${r.id}` } : null;
 			},
+			/** One reconciliation in full (lines, totals, difference_cents, reading with matched and unmatched statement lines), with href. */
+			get: async (id: number | bigint | string) => ({ ...(await getReconciliation(app, entryIdOf(id))), href: `/reconcile/${id}` }),
 			/** The account's reconciliations, newest first (open one first). */
 			list: (accountCode: string) => listReconciliations(app, String(accountCode)),
 		},

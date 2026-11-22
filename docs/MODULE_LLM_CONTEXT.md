@@ -227,7 +227,9 @@ as ISO strings in responses. Parameters: pass `bigint`, numbers or strings.
     A person finishes it. For a customer's or vendor's own account, lines
     not ticked stay in the account (on a bank account they move to
     Unreconciled). An account has one reconciliation in progress:
-    `start` returns that one; `ctx.reconcile.open(accountCode)` asks.
+    `start` returns that one; `ctx.reconcile.open(accountCode)` asks,
+    `ctx.reconcile.list(accountCode)` lists them all (newest first) and
+    `ctx.reconcile.get(id)` gives one in full, finished ones too.
     `r.reconciliation.entity_role` is `"vendor"`, `r.reading` has
     `matched` / `unmatched`, `r.difference_cents` what is left to explain.
   - `ctx.ledger.moveLine(entryId, lineNumber, accountCode, { reason },

@@ -333,14 +333,17 @@ export async function startReconciliation(app: App, input: ReconciliationStart, 
 	if (!isDate(o.statement_date)) bad("statement_date must be a date (YYYY-MM-DD)");
 	if (o.statement_balance_cents === undefined) bad("statement_balance_cents is required");
 	const closing = cents(o.statement_balance_cents, "statement_balance_cents");
+	// Checked before anything is opened: a bad line leaves no empty reconciliation behind.
+	const lines: StatementLine[] = [];
+	if (o.lines !== undefined) {
+		if (!Array.isArray(o.lines) || o.lines.length > MAX_LINES) bad(`lines must be a list of at most ${MAX_LINES}`);
+		o.lines.forEach((l, i) => {
+			if (!isDate(l?.date) || !Number.isSafeInteger(l?.amount_cents) || l.amount_cents === 0) bad(`lines[${i}] needs a date (YYYY-MM-DD) and amount_cents (whole cents, not 0)`);
+			lines.push({ date: l.date, description: String(l.description ?? "").replace(/\s+/g, " ").trim().slice(0, 300), amount_cents: l.amount_cents });
+		});
+	}
 	const d = await createReconciliation(app, { account_code: acc!.code, statement_date: o.statement_date!, statement_balance_cents: closing, document_id: documentId }, userId);
 	if (o.lines === undefined) return documentId === null ? d : preReconcile(app, BigInt(d.reconciliation.id)).catch(() => d);
-	if (!Array.isArray(o.lines) || o.lines.length > MAX_LINES) bad(`lines must be a list of at most ${MAX_LINES}`);
-	const lines: StatementLine[] = [];
-	o.lines.forEach((l, i) => {
-		if (!isDate(l?.date) || !Number.isSafeInteger(l?.amount_cents) || l.amount_cents === 0) bad(`lines[${i}] needs a date (YYYY-MM-DD) and amount_cents (whole cents, not 0)`);
-		lines.push({ date: l.date, description: String(l.description ?? "").replace(/\s+/g, " ").trim().slice(0, 300), amount_cents: l.amount_cents });
-	});
 	const opening = o.opening_balance_cents === undefined || o.opening_balance_cents === null ? null : Number(cents(o.opening_balance_cents, "opening_balance_cents"));
 	return apply(app, BigInt(d.reconciliation.id), {
 		read_at: new Date().toISOString(),
