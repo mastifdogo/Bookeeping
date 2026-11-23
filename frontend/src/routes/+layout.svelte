@@ -149,7 +149,7 @@
 	wideQuery.addEventListener('change', (e) => (wide = e.matches));
 	let showPanes = $derived(wide && panes.split && !embedded);
 	const MAIN_PANE: Pane = { id: MAIN_ID, path: null, weight: 1, order: 0 };
-	// Any window can be closed, the last one too: the page area is then empty until a page is chosen.
+	// Any window can be closed, the last one too: nothing is drawn in the page area until a page is opened.
 	let closed = $state(false);
 	afterNavigate(() => (closed = false));
 	let shown = $derived(showPanes ? panes.list : closed ? [] : [MAIN_PANE]);
@@ -349,12 +349,6 @@
 			</nav>
 		</aside>
 		<div class="panes" class:split={showPanes} class:busy={dragId !== null || busyPointer} bind:this={container}>
-			{#if shown.length === 0}
-				<section class="pane none" aria-label="No window open">
-					<p>No window is open. Choose a page from the sidebar.</p>
-					<button onclick={() => (closed = false)}>Reopen {pageTitle(page.url.pathname, nav)}</button>
-				</section>
-			{/if}
 			{#each shown as p (p.id)}
 				{@const title = pageTitle(p.path ?? page.url.pathname, nav)}
 				<section
@@ -766,13 +760,6 @@
 		border: 1px solid var(--border);
 		border-radius: var(--win-radius);
 		margin-bottom: var(--win-gap);
-	}
-	.pane.none {
-		flex: 1;
-		align-items: center;
-		justify-content: center;
-		gap: 0.5rem;
-		color: var(--muted);
 	}
 	.pane header svg {
 		width: 16px;
