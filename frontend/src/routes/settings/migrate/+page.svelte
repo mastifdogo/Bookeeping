@@ -126,7 +126,6 @@
 	const pct = (x: number) => `${Math.round(x * 100)}%`;
 </script>
 
-<p><a href="/settings/import-export">← Import &amp; export</a></p>
 <h2 style="margin-top:0">Migrate from other software</h2>
 <p class="muted">
 	Bring your books over from QuickBooks, Xero, Wave, Sage, FreshBooks or a spreadsheet: export a report as CSV there, upload it

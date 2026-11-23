@@ -38,7 +38,6 @@
 	}
 </script>
 
-<p class="small"><a href="/reports">← Reports</a></p>
 <h1>Income statement</h1>
 
 <form class="toolbar" onsubmit={apply}>

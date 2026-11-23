@@ -22,7 +22,6 @@
 	}
 </script>
 
-<p class="small"><a href="/reports">← Reports</a></p>
 <h1>Balance sheet</h1>
 
 <form class="toolbar" onsubmit={apply}>

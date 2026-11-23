@@ -220,6 +220,7 @@ export function pageTitle(path: string, items: NavItem[]): string {
  */
 export function sectionHref(path: string, items: NavItem[]): string | null {
 	const p = path.split(/[?#]/)[0]!;
+	if (p === '/settings/migrate') return '/settings/import-export'; // the one settings page that is opened from another
 	if (p.startsWith('/settings')) return null;
 	if (/^\/reconcile\/./.test(p)) return '/reconcile?list'; // "?list": not straight back into the one in progress
 	if (/^\/journal\/\d+$/.test(p)) return '/journal';

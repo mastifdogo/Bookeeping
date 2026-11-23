@@ -387,8 +387,6 @@
 	}
 </script>
 
-<p class="small"><a href="/journal">← Journal</a></p>
-
 <div class="toolbar">
 	<h1 style="margin:0">Entry #{e.id}</h1>
 	{#if e.reverses_id}<span class="badge">reversal of <a href="/journal/{e.reverses_id}">#{e.reverses_id}</a></span>{/if}

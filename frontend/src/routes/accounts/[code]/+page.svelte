@@ -121,8 +121,6 @@
 	const moduleName = (id: string) => page.data.modules?.find((m: { id: string }) => m.id === id)?.label ?? id;
 </script>
 
-<p class="small"><a href="/accounts">← Accounts</a></p>
-
 <div class="toolbar">
 	<h1 style="margin:0">
 		<span class="mono">{account.code}</span>
