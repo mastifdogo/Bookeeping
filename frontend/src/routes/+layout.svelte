@@ -590,8 +590,11 @@
 		align-items: center;
 		gap: 0.25rem;
 	}
+	/* The arrow sits in the column of the tab icons under it, and the search bar starts where their names do. */
 	.search-row .back {
 		flex: none;
+		padding: 0.45rem 0.45rem 0.45rem 0.6rem;
+		border-left: 3px solid transparent;
 	}
 	.search-row .back:disabled {
 		opacity: 0.4;
@@ -611,6 +614,8 @@
 	}
 	.collapsed .search-row .back {
 		align-self: center;
+		padding-left: 0.4rem;
+		padding-right: 0.4rem;
 	}
 	svg {
 		flex: none;
