@@ -429,7 +429,7 @@ CREATE TABLE invoices (
   `<a href="#/…">` or `location.hash = …`. Ledger mirrors it in its own
   address (`/apps/<id>#/invoices/31`), so the Back button in Ledger's
   sidebar steps through the module's views, and reloads and links open the
-  same view. Never add a "Back" or "← List" button. With nothing after
+  same view. Never add a "Back" or "← List" button; the title of the module's window (its name) is a link to its first view when the page is on another one (Ledger 0.35.5), so no "Home" link either. With nothing after
   `#`, show the first view (or what the query asks for) without changing
   the address, and never change the address in answer to a `hashchange`
   (Back would get stuck).

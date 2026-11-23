@@ -1070,7 +1070,7 @@ next to the sidebar or in a side-by-side pane (so it should work from about
   address (`/apps/<id>#/invoices/31`), so the Back button in its sidebar
   steps through the module's views as through its own pages, and a reload,
   a link or a restored window opens the same view. So a page has no "Back"
-  or "← All invoices" button of its own. Two rules: with nothing after `#`
+  or "← All invoices" button of its own; and the title of the module's window (its name) is a link to its first view when the page is on another one (Ledger 0.35.5), so no "Home" link either. Two rules: with nothing after `#`
   show the first view (or what the link's query asks for, e.g. `?invoice=31`)
   without changing the address; and never change the address in answer to
   a `hashchange` (no redirects), or Back gets stuck on that step.

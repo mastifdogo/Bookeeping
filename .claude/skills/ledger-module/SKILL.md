@@ -395,7 +395,7 @@ Decide, and state briefly to the user:
   own Back button (in its sidebar) then steps through the module's views,
   and reloads and links come back to the same view. Show the first view
   when nothing is after `#`, and never change the address in answer to a
-  `hashchange`, or Back gets stuck. Ledger injects `/ledger-ui.js` into the page
+  `hashchange`, or Back gets stuck. And the title of the module's window (its name) is a link to its first view when the page is on another one (Ledger 0.35.5), so no "Home" link either. Ledger injects `/ledger-ui.js` into the page
   (0.24.0): lists as real `<table>`/`<th>` and fields as `<input>`/
   `<select>` get resizable columns and fields for free (`data-no-resize`
   opts an element out), and forms marked `data-ledger-entry` /

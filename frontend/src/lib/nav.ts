@@ -220,13 +220,12 @@ export function pageTitle(path: string, items: NavItem[]): string {
  */
 export function sectionHref(path: string, items: NavItem[]): string | null {
 	const p = path.split(/[?#]/)[0]!;
-	const hash = path.includes('#') ? path.slice(path.indexOf('#')) : '';
 	if (p.startsWith('/settings')) return null;
 	if (/^\/reconcile\/./.test(p)) return '/reconcile?list'; // "?list": not straight back into the one in progress
 	if (/^\/journal\/\d+$/.test(p)) return '/journal';
 	if (/^\/accounts\/./.test(p)) return '/accounts';
-	// A module's page on a view of its own (/apps/sales#/invoices/31)
-	if (items.some((i) => i.href === p)) return p.startsWith('/apps/') && hash.length > 1 ? p : null;
+	// A module's page on a view of its own (/apps/sales#/invoices/31, /apps/sales?open=invoices/31): its first view
+	if (items.some((i) => i.href === p)) return p.startsWith('/apps/') && path.replace(/#$/, '') !== p ? p : null;
 	const prefix = items.filter((i) => i.href !== '/' && p.startsWith(i.href + '/')).sort((a, b) => b.href.length - a.href.length)[0];
 	return prefix?.href ?? null;
 }

@@ -389,7 +389,7 @@
 		</aside>
 		<div class="panes" class:split={showPanes} class:busy={dragId !== null || busyPointer} bind:this={container}>
 			{#each shown as p (p.id)}
-				{@const at = p.path ?? page.url.pathname + page.url.hash}
+				{@const at = p.path ?? page.url.pathname + page.url.search + page.url.hash}
 				{@const title = pageTitle(at, nav)}
 				{@const up = sectionHref(at, nav)}
 				<section
