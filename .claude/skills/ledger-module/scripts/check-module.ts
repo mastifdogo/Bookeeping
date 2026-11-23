@@ -146,6 +146,7 @@ if (m.ui) {
 		const css = html + (await local(/<link[^>]+href=["']([^"']+\.css)[^"']*["']/gi));
 		const js = html + (await local(/<script[^>]+src=["']([^"']+)["']/gi));
 		if (/\.innerHTML\s*=/.test(js)) warn(`${m.ui}/${f} (or a script it loads) assigns innerHTML; use textContent for data`);
+		if (/["'`>]\s*(?:[←‹]\s*\w|Back["'`<])/.test(js)) warn(`${m.ui}/${f} (or a script it loads) seems to have a back button; keep the view after "#" instead, and Ledger's Back button steps through it (Ledger 0.35.4)`);
 		if (!/prefers-color-scheme:\s*dark/.test(css)) warn(`${m.ui}/${f} has no dark mode (prefers-color-scheme)`);
 	}
 }

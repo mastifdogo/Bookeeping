@@ -95,7 +95,7 @@
 	const embedded = window.self !== window.top && window.parent.location.origin === location.origin;
 	if (embedded) document.documentElement.classList.add('in-pane');
 	afterNavigate(() => {
-		if (embedded) window.parent.postMessage({ type: 'ledger-pane', path: location.pathname + location.search }, location.origin);
+		if (embedded) window.parent.postMessage({ type: 'ledger-pane', path: location.pathname + location.search + location.hash }, location.origin);
 	});
 	// "/" and Ctrl/Cmd+K in a pane open the search of the window around it.
 	function embeddedKey(e: KeyboardEvent) {
@@ -148,7 +148,7 @@
 		goto(path);
 	}
 	// Back: undoes the last change to the windows (a page opened in one, a
-	// window opened, closed or moved). Kept for this page load only.
+	// view opened inside a module's page, a window opened, closed or moved). Kept for this page load only.
 	interface WinState {
 		key: string;
 		path: string;
@@ -156,7 +156,8 @@
 		panes: Pane[];
 	}
 	function winState(): WinState {
-		const path = page.url.pathname + page.url.search;
+		// With the part after "#": the view a module's page is on (/apps/sales#/invoices/31).
+		const path = page.url.pathname + page.url.search + page.url.hash;
 		const list = panes.list.map((p) => ({ ...p }));
 		const key = JSON.stringify([path, closed, list.map((p) => [p.id, p.path, p.order])]);
 		return { key, path, closed, panes: list };
@@ -194,11 +195,15 @@
 		for (const p of prev.panes) {
 			const was = open.get(p.id);
 			if (!was) firstSrc.delete(p.id);
-			else if (p.path && was.path !== p.path) frames[p.id]?.contentWindow?.location.replace(p.path);
+			else if (p.path && was.path !== p.path) {
+				// Only the view inside a module's page differs: "#" alone is its first view, and doesn't reload the window.
+				const first = !p.path.includes('#') && was.path?.split('#')[0] === p.path;
+				frames[p.id]?.contentWindow?.location.replace(first ? p.path + '#' : p.path);
+			}
 		}
 		panes.list = prev.panes.map((p) => ({ ...p }));
 		panes.save();
-		if (prev.path !== page.url.pathname + page.url.search) await goto(prev.path);
+		if (prev.path !== page.url.pathname + page.url.search + page.url.hash) await goto(prev.path, { reset: prev.path.split('#')[0] !== page.url.pathname + page.url.search });
 		closed = prev.closed;
 	}
 
@@ -348,7 +353,7 @@
 				</div>
 				<div class="links" id="main-links">
 					<div class="search-row">
-						<button class="icon-button back" onclick={goBack} disabled={undo.length === 0} title="Undo the last window change">
+						<button class="icon-button back" onclick={goBack} disabled={undo.length === 0} title="Back: the page, the view in a module or the windows as they were before">
 							{@render icon(ICONS.back)}<span class="sr-only">Back</span>
 						</button>
 						<div class="search"><SearchPalette {nav} isAdmin={data.user.server_admin} {collapsed} /></div>

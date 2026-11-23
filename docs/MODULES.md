@@ -1062,6 +1062,31 @@ next to the sidebar or in a side-by-side pane (so it should work from about
 - Ledger draws a window around the page: a rounded panel with a small gap
   around it (and between panes side by side). Fill the frame; don't draw an
   outer border or frame of your own.
+- **No back buttons: Ledger's Back button does it** (Ledger 0.35.4). Keep the
+  view the page is on in the address after `#` (`#/invoices`,
+  `#/invoices/31`) and show the view from it: on load and on `hashchange`.
+  Open a view with a link (`<a href="#/invoices/31">`) or
+  `location.hash = "#/invoices/31"`. Ledger carries that part in its own
+  address (`/apps/<id>#/invoices/31`), so the Back button in its sidebar
+  steps through the module's views as through its own pages, and a reload,
+  a link or a restored window opens the same view. So a page has no "Back"
+  or "← All invoices" button of its own. Two rules: with nothing after `#`
+  show the first view (or what the link's query asks for, e.g. `?invoice=31`)
+  without changing the address; and never change the address in answer to
+  a `hashchange` (no redirects), or Back gets stuck on that step.
+
+```html
+<script>
+	function route() {
+		const [, view, id] = location.hash.split("/"); // "#/invoices/31" → "invoices", "31"
+		if (view === "invoices" && id) showInvoice(id);
+		else showList();
+	}
+	addEventListener("hashchange", route);
+	route();
+</script>
+```
+
 - **Resizable columns and fields** (Ledger 0.24.0): Ledger adds
   `<script src="/ledger-ui.js" defer>` to every HTML page it serves from
   `ui/`. Users drag the right edge of a column heading (`th`), text field,

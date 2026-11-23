@@ -424,6 +424,15 @@ CREATE TABLE invoices (
 - Ledger draws the window around the page (rounded, with a gap around it):
   don't add an outer border, margin or rounded frame of your own, and let
   the page fill the frame.
+- No back buttons (Ledger 0.35.4): keep the view in the address after `#`
+  (`#/invoices/31`), show it on load and on `hashchange`, open views with
+  `<a href="#/…">` or `location.hash = …`. Ledger mirrors it in its own
+  address (`/apps/<id>#/invoices/31`), so the Back button in Ledger's
+  sidebar steps through the module's views, and reloads and links open the
+  same view. Never add a "Back" or "← List" button. With nothing after
+  `#`, show the first view (or what the query asks for) without changing
+  the address, and never change the address in answer to a `hashchange`
+  (Back would get stuck).
 - Ledger adds `/ledger-ui.js` to every HTML page it serves from `ui/`
   (Ledger 0.24.0): table columns (`th`) and text fields and dropdowns can
   be resized by dragging their right edge, remembered per page. Use real

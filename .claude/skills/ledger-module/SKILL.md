@@ -389,7 +389,13 @@ Decide, and state briefly to the user:
   `ledger-new-account` message (Ledger 0.11.3; snippet in the context file)
   and then selects the account it created, so nothing the user filled in is
   lost. Ledger draws the window frame around the page, so no outer border
-  or frame of its own. Ledger injects `/ledger-ui.js` into the page
+  or frame of its own. **No back buttons** (Ledger 0.35.4): keep the view
+  in the address after `#` (`#/invoices/31`), show it on load and on
+  `hashchange`, and open views with `#` links or `location.hash`; Ledger's
+  own Back button (in its sidebar) then steps through the module's views,
+  and reloads and links come back to the same view. Show the first view
+  when nothing is after `#`, and never change the address in answer to a
+  `hashchange`, or Back gets stuck. Ledger injects `/ledger-ui.js` into the page
   (0.24.0): lists as real `<table>`/`<th>` and fields as `<input>`/
   `<select>` get resizable columns and fields for free (`data-no-resize`
   opts an element out), and forms marked `data-ledger-entry` /
