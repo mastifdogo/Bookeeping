@@ -20,6 +20,7 @@ export const ICONS = {
 	close: 'M6 6l12 12M18 6L6 18',
 	expand: 'M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7',
 	grip: 'M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01',
+	back: 'M19 12H5M12 19l-7-7 7-7',
 	up: 'M6 15l6-6 6 6',
 	down: 'M6 9l6 6 6-6'
 } as const;

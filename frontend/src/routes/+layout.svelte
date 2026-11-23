@@ -73,20 +73,6 @@
 	}
 	let showConsole = $derived(data.user?.root === true && consoleOn);
 
-	// Organizations: each has books of its own; switching reloads everything,
-	// including module pages open beside.
-	let orgs = $derived((data.user?.organizations ?? []).filter((o) => o.status === 'ready'));
-	let orgError = $state('');
-	async function switchOrg(id: number) {
-		orgError = '';
-		const r = await api().POST('/auth/organization', { body: { organization_id: id } });
-		if (r.error) {
-			orgError = r.error.error.message;
-			return;
-		}
-		location.assign('/');
-	}
-
 	async function logout() {
 		await api().POST('/auth/logout');
 		await invalidateAll();
@@ -161,6 +147,61 @@
 		panes.promote(next.id);
 		goto(path);
 	}
+	// Back: undoes the last change to the windows (a page opened in one, a
+	// window opened, closed or moved). Kept for this page load only.
+	interface WinState {
+		key: string;
+		path: string;
+		closed: boolean;
+		panes: Pane[];
+	}
+	function winState(): WinState {
+		const path = page.url.pathname + page.url.search;
+		const list = panes.list.map((p) => ({ ...p }));
+		const key = JSON.stringify([path, closed, list.map((p) => [p.id, p.path, p.order])]);
+		return { key, path, closed, panes: list };
+	}
+	let undo = $state<WinState[]>([]);
+	let current: WinState | null = null;
+	let restoring: string | null = null;
+	let lastPush = 0;
+	let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+	$effect(() => {
+		if (embedded) return;
+		const now = winState();
+		if (current && now.key === current.key) {
+			current = now; // only sizes changed: keep the latest
+			return;
+		}
+		if (restoring !== null) {
+			if (now.key === restoring) restoring = null;
+		} else if (current && Date.now() - lastPush > 400) {
+			// One step per action: closing a window may also change the page a moment later.
+			undo = [...undo.slice(-49), current];
+			lastPush = Date.now();
+		}
+		current = now;
+	});
+	async function goBack() {
+		const prev = undo.at(-1);
+		if (!prev) return;
+		undo = undo.slice(0, -1);
+		restoring = prev.key;
+		clearTimeout(restoreTimer);
+		restoreTimer = setTimeout(() => (restoring = null), 3000);
+		// Windows beside that were closed come back at the page they showed.
+		const open = new Map(panes.list.map((p) => [p.id, p]));
+		for (const p of prev.panes) {
+			const was = open.get(p.id);
+			if (!was) firstSrc.delete(p.id);
+			else if (p.path && was.path !== p.path) frames[p.id]?.contentWindow?.location.replace(p.path);
+		}
+		panes.list = prev.panes.map((p) => ({ ...p }));
+		panes.save();
+		if (prev.path !== page.url.pathname + page.url.search) await goto(prev.path);
+		closed = prev.closed;
+	}
+
 	let lastOrder = $derived(Math.max(...shown.map((p) => p.order)));
 
 	let container: HTMLElement | undefined = $state();
@@ -306,19 +347,12 @@
 					</button>
 				</div>
 				<div class="links" id="main-links">
-					{#if orgs.length > 1}
-						<label class="org" title="Books: {data.user.organization.name}">
-							<span class="sr-only">Books</span>
-							<span class="org-short" aria-hidden="true">{data.user.organization.name.slice(0, 1).toUpperCase()}</span>
-							<select value={data.user.organization.id} onchange={(e) => switchOrg(Number(e.currentTarget.value))}>
-								{#each orgs as o (o.id)}<option value={o.id}>{o.name}</option>{/each}
-							</select>
-						</label>
-						{#if orgError}<p class="small org-error">{orgError}</p>{/if}
-					{:else if data.user.organization.id !== 1}
-						<div class="org org-name" title="Books">{data.user.organization.name}</div>
-					{/if}
-					<SearchPalette {nav} isAdmin={data.user.server_admin} {collapsed} />
+					<div class="search-row">
+						<button class="icon-button back" onclick={goBack} disabled={undo.length === 0} title="Undo the last window change">
+							{@render icon(ICONS.back)}<span class="sr-only">Back</span>
+						</button>
+						<div class="search"><SearchPalette {nav} isAdmin={data.user.server_admin} {collapsed} /></div>
+					</div>
 					<ul>
 						{#each visible as l (l.id)}
 							<li>
@@ -529,36 +563,33 @@
 	.brand-short {
 		display: none;
 	}
-	.org {
-		display: block;
-		margin: 0 0.5rem;
+	/* Back beside the search bar; stacked above it when the sidebar is collapsed. */
+	.search-row {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
 	}
-	.org select {
-		width: 100%;
-		font-weight: 600;
+	.search-row .back {
+		flex: none;
 	}
-	.org-name {
-		font-weight: 600;
-		padding: 0.25rem 0.5rem;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+	.search-row .back:disabled {
+		opacity: 0.4;
+		cursor: default;
+		background: none;
 	}
-	.org-short {
-		display: none;
+	.search-row .back {
+		margin-bottom: 0.4rem;
 	}
-	.org-error {
-		color: var(--danger);
-		margin: 0 0.5rem;
+	.search-row .search {
+		flex: 1;
+		min-width: 0;
 	}
-	.collapsed .org select,
-	.collapsed .org-name {
-		display: none;
+	.collapsed .search-row {
+		flex-direction: column;
+		align-items: stretch;
 	}
-	.collapsed .org-short {
-		display: block;
-		text-align: center;
-		font-weight: 700;
+	.collapsed .search-row .back {
+		align-self: center;
 	}
 	svg {
 		flex: none;

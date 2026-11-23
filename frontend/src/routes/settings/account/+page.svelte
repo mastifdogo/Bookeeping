@@ -6,6 +6,19 @@
 
 	let { data }: PageProps = $props();
 
+	// Books: each organization has books of its own; switching reloads everything.
+	let orgs = $derived((data.user?.organizations ?? []).filter((o) => o.status === 'ready'));
+	let orgError = $state<unknown>(null);
+	async function switchOrg(id: number) {
+		orgError = null;
+		try {
+			unwrap(await api().POST('/auth/organization', { body: { organization_id: id } }));
+			location.assign('/');
+		} catch (err) {
+			orgError = err;
+		}
+	}
+
 	let current = $state('');
 	let next = $state('');
 	let repeat = $state('');
@@ -90,6 +103,16 @@
 		<strong>{data.user?.organization.name}</strong>.
 		{#if data.user?.last_login_at}<span class="muted small">Last login {new Date(data.user.last_login_at).toLocaleString()}.</span>{/if}
 	</p>
+	{#if data.user && orgs.length > 1}
+		<ErrorNotice error={orgError} />
+		<label style="margin-bottom:0">
+			Books
+			<select value={data.user.organization.id} onchange={(e) => switchOrg(Number(e.currentTarget.value))} style="max-width:320px">
+				{#each orgs as o (o.id)}<option value={o.id}>{o.name}</option>{/each}
+			</select>
+		</label>
+		<p class="muted small" style="margin-bottom:0">Switching books opens their dashboard.</p>
+	{/if}
 </div>
 
 <form class="card" onsubmit={submit} style="max-width:480px">

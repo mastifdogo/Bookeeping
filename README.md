@@ -327,7 +327,7 @@ When adding a user under **Settings → Users**, choose their books: the main
 books, an existing organization (they get its accounts and entries), or a
 new business or personal organization of their own, optionally starting
 with a basic chart of accounts. A user's role applies per organization, and
-anyone in more than one switches between them at the top of the sidebar.
+anyone in more than one switches between them under **Settings → Account**.
 The app asks root to create a new organization's database (the updater runs
 `deploy/create-org-db.sh` through `ledger-update.path`, in seconds);
 upgrades, module installs and backups cover every organization.
@@ -336,7 +336,9 @@ upgrades, module installs and backups cover every organization.
 
 The search box at the top of the sidebar (or `/`, or Ctrl/Cmd+K) finds pages
 and settings, accounts, journal entries by text, `#number` or amount
-(`1,800` or `45.00`), and whatever modules add.
+(`1,800` or `45.00`), and whatever modules add. The arrow beside it undoes
+the last change to the windows: a page opened, a window opened beside,
+closed or moved.
 
 ### AI and Gmail for modules
 
