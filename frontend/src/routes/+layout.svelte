@@ -5,7 +5,7 @@
 	import { afterNavigate, goto, invalidateAll } from '$app/navigation';
 	import { api } from '#lib/api/client.ts';
 	import { formatCents } from '#lib/money.ts';
-	import { ICONS, arrangeNav, pageTitle } from '#lib/nav.ts';
+	import { ICONS, arrangeNav, pageTitle, sectionHref } from '#lib/nav.ts';
 	import NavIcon from '#lib/components/NavIcon.svelte';
 	import RootConsole from '#lib/components/RootConsole.svelte';
 	import SearchPalette from '#lib/components/SearchPalette.svelte';
@@ -389,7 +389,9 @@
 		</aside>
 		<div class="panes" class:split={showPanes} class:busy={dragId !== null || busyPointer} bind:this={container}>
 			{#each shown as p (p.id)}
-				{@const title = pageTitle(p.path ?? page.url.pathname, nav)}
+				{@const at = p.path ?? page.url.pathname + page.url.hash}
+				{@const title = pageTitle(at, nav)}
+				{@const up = sectionHref(at, nav)}
 				<section
 					class="pane"
 					class:bare={p.id === MAIN_ID && bare && !showPanes}
@@ -404,7 +406,21 @@
 						<!-- svelte-ignore a11y_no_static_element_interactions (keyboard users close/open panes with the buttons) -->
 						<header class:alone={!showPanes} draggable={showPanes ? 'true' : undefined} ondragstart={(e) => showPanes && dragStart(e, p.id)} ondragend={() => (dragId = null)} title={showPanes ? 'Drag to move' : undefined}>
 							{#if showPanes}{@render icon(ICONS.grip)}{/if}
-							<span class="pane-title">{title}</span>
+							<span class="pane-title">
+								{#if up}
+									<!-- The title is the way back to the section's first page (the list a record was opened from). -->
+									<a
+										href={up}
+										draggable="false"
+										title="Back to {pageTitle(up, nav)}"
+										onclick={(e) => {
+											if (p.id === MAIN_ID) return;
+											e.preventDefault();
+											frames[p.id]?.contentWindow?.location.assign(up);
+										}}>{title}</a
+									>
+								{:else}{title}{/if}
+							</span>
 							{#if p.id !== MAIN_ID}
 								<button class="icon-button" title="Open here, full width" onclick={() => openHere(p)}>
 									{@render icon(ICONS.expand)}<span class="sr-only">Open here</span>
@@ -810,6 +826,13 @@
 		font-weight: 600;
 		color: var(--text);
 		font-size: 0.9rem;
+	}
+	.pane-title a {
+		color: inherit;
+		text-decoration: none;
+	}
+	.pane-title a:hover {
+		text-decoration: underline;
 	}
 	.pane.drop-target {
 		outline: 2px dashed var(--accent);

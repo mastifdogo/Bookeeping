@@ -215,7 +215,6 @@
 	}
 </script>
 
-{#if !(split && tall)}<p class="small back"><a href="/reconcile?list">← All reconciliations</a></p>{/if}
 
 <div class="split" class:on={split} class:tall={split && tall} class:flip={split && flip} class:dragging bind:this={splitEl} style="--left:{left}%">
 	{#if split}
@@ -268,7 +267,6 @@
 		></div>
 	{/if}
 	<section class="work">
-{#if split && tall}<p class="small back"><a href="/reconcile?list">← All reconciliations</a></p>{/if}
 <div class="toolbar">
 	<h1 style="margin:0">
 		{new Date(`${rec.statement_date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
@@ -507,9 +505,6 @@
 	.split.tall .work {
 		padding-top: 0.5rem;
 		padding-right: 0.75rem;
-	}
-	.back {
-		margin: 0 0 0.4rem;
 	}
 	.split.on {
 		display: grid;

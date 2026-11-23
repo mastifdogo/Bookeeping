@@ -212,3 +212,21 @@ export function pageTitle(path: string, items: NavItem[]): string {
 	const prefix = items.filter((i) => i.href !== '/' && p.startsWith(i.href + '/')).sort((a, b) => b.href.length - a.href.length)[0];
 	return prefix?.label ?? p;
 }
+
+/**
+ * The first page of the section `path` is inside (the list a record was opened
+ * from, a module's first view), or null when `path` is that page. The window's
+ * title links there, so pages need no "← All …" link of their own.
+ */
+export function sectionHref(path: string, items: NavItem[]): string | null {
+	const p = path.split(/[?#]/)[0]!;
+	const hash = path.includes('#') ? path.slice(path.indexOf('#')) : '';
+	if (p.startsWith('/settings')) return null;
+	if (/^\/reconcile\/./.test(p)) return '/reconcile?list'; // "?list": not straight back into the one in progress
+	if (/^\/journal\/\d+$/.test(p)) return '/journal';
+	if (/^\/accounts\/./.test(p)) return '/accounts';
+	// A module's page on a view of its own (/apps/sales#/invoices/31)
+	if (items.some((i) => i.href === p)) return p.startsWith('/apps/') && hash.length > 1 ? p : null;
+	const prefix = items.filter((i) => i.href !== '/' && p.startsWith(i.href + '/')).sort((a, b) => b.href.length - a.href.length)[0];
+	return prefix?.href ?? null;
+}
