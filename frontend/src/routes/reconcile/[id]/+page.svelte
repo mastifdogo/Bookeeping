@@ -101,14 +101,6 @@
 	// --- The statement beside the lines -------------------------------------
 	let pickId = $state<number | null>(null);
 	let showDoc = $state(true);
-	// Full height: the statement takes the whole window, top to bottom, with nothing above it. Remembered in this browser.
-	const TALL_STORAGE = 'ledger.reconcile.tall';
-	let tall = $state(false);
-	try {
-		tall = localStorage.getItem(TALL_STORAGE) === '1';
-	} catch {
-		// storage blocked: for this page only
-	}
 	// The browser's own PDF toolbar (page, zoom, print) can be left out, so only the page shows. Remembered in this browser.
 	const BAR_STORAGE = 'ledger.reconcile.pdfbar';
 	let pdfBar = $state(true);
@@ -137,14 +129,6 @@
 		flip = on;
 		try {
 			localStorage.setItem(SIDE_STORAGE, on ? 'right' : 'left');
-		} catch {
-			// storage blocked
-		}
-	}
-	function setTall(on: boolean) {
-		tall = on;
-		try {
-			localStorage.setItem(TALL_STORAGE, on ? '1' : '0');
 		} catch {
 			// storage blocked
 		}
@@ -216,7 +200,7 @@
 </script>
 
 
-<div class="split" class:on={split} class:tall={split && tall} class:flip={split && flip} class:dragging bind:this={splitEl} style="--left:{left}%">
+<div class="split" class:on={split} class:flip={split && flip} class:dragging bind:this={splitEl} style="--left:{left}%">
 	{#if split}
 		<section class="doc" aria-label="Statement">
 			<div class="docbar">
@@ -228,7 +212,6 @@
 					<button class="link" aria-pressed={!pdfBar} title={pdfBar ? "Hide the PDF viewer's toolbar (page, zoom, print), so only the page shows" : "Show the PDF viewer's toolbar again"} onclick={() => setPdfBar(!pdfBar)}>{pdfBar ? 'Hide toolbar' : 'Show toolbar'}</button>
 				{/if}
 				<button class="link" title="Put the statement on the {flip ? 'left' : 'right'} and the transactions on the {flip ? 'right' : 'left'}" onclick={() => setFlip(!flip)}>{flip ? 'Move left' : 'Move right'}</button>
-				<button class="link" aria-pressed={tall} title={tall ? 'Back to the statement under the page heading' : 'The statement fills the window from top to bottom'} onclick={() => setTall(!tall)}>{tall ? 'Normal height' : 'Full height'}</button>
 				<button class="link" onclick={() => (showDoc = false)}>Hide</button>
 			</div>
 			{#if rec.document_type === 'application/pdf'}
@@ -494,15 +477,15 @@
 		padding-top: 0.5rem;
 		padding-bottom: 0.5rem;
 	}
-	/* Full height: nothing above or around the statement. */
-	:global(main:has(.split.tall)) {
+	/* The statement takes the whole window, top to bottom: nothing above or around it. */
+	:global(main:has(.split.on)) {
 		padding: 0;
 	}
-	.split.tall .doc {
+	.split.on .doc {
 		border-radius: 0;
 		border-width: 0 1px 0 0;
 	}
-	.split.tall .work {
+	.split.on .work {
 		padding-top: 0.5rem;
 		padding-right: 0.75rem;
 	}
@@ -531,10 +514,10 @@
 	.split.on.flip .doc {
 		order: 3;
 	}
-	.split.tall.flip .doc {
+	.split.on.flip .doc {
 		border-width: 0 0 0 1px;
 	}
-	.split.tall.flip .work {
+	.split.on.flip .work {
 		padding-left: 0.75rem;
 		padding-right: 0.6rem;
 	}
