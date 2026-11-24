@@ -153,7 +153,6 @@
 	};
 </script>
 
-<h1>Reconcile</h1>
 {#if justFinished}
 	<div class="notice ok">
 		Reconciled <span class="mono">{justFinished.account_code}</span> {justFinished.account_name} to {describe(justFinished.statement_date)}, {justFinished.statement_date.slice(0, 4)}.

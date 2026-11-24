@@ -187,7 +187,6 @@
 </script>
 
 <div class="toolbar">
-	<h1 style="margin:0">Documents</h1>
 	<span class="spacer"></span>
 	{#if canEdit}<button class="primary" onclick={startImport}>{importing ? 'Close' : '+ Import files'}</button>{/if}
 </div>

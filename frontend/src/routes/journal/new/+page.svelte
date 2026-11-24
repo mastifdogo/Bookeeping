@@ -135,7 +135,6 @@
 </script>
 
 <div class="toolbar">
-	<h1 style="margin:0">New {KINDS.find((k) => k[0] === kind)?.[2]}</h1>
 	<div class="segmented" role="radiogroup" aria-label="What to enter">
 		{#each KINDS as [value, label] (value)}
 			<label class:on={kind === value}><input type="radio" name="kind" {value} bind:group={kind} /> {label}</label>

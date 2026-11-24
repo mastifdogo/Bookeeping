@@ -388,7 +388,6 @@
 </script>
 
 <div class="toolbar">
-	<h1 style="margin:0">Entry #{e.id}</h1>
 	{#if e.reverses_id}<span class="badge">reversal of <a href="/journal/{e.reverses_id}">#{e.reverses_id}</a></span>{/if}
 	{#if e.reversed_by_id}<span class="badge warn">reversed by <a href="/journal/{e.reversed_by_id}">#{e.reversed_by_id}</a></span>{/if}
 	{#if e.import_id}<span class="badge">imported (batch {e.import_id})</span>{/if}

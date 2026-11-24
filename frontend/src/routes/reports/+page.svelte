@@ -1,4 +1,3 @@
-<h1>Reports</h1>
 <div class="grid">
 	<a class="card report" href="/reports/balance-sheet">
 		<h2>Balance sheet</h2>

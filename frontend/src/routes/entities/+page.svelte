@@ -73,7 +73,7 @@
 </script>
 
 <div class="toolbar">
-	<h1 style="margin:0">Entities <span class="muted" style="font-weight:400; font-size:1rem">customers &amp; vendors</span></h1>
+	<span class="muted">Customers &amp; vendors</span>
 	<span class="spacer"></span>
 	<label class="inline"><input type="checkbox" checked={data.includeInactive} onchange={toggleInactive} /> Show inactive</label>
 	{#if canEdit}<button class="primary" onclick={() => (editing === 'new' ? (editing = null) : start(null))}>{editing === 'new' ? 'Close' : '+ New'}</button>{/if}

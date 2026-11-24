@@ -35,8 +35,6 @@
 	]);
 </script>
 
-<h1>Settings</h1>
-
 <nav class="tabs" aria-label="Settings">
 	{#each tabs as t, i (t.href)}
 		{#if i === OWN.length || (i > OWN.length && t.title !== tabs[i - 1]!.title)}<span class="sep" aria-hidden="true"></span>{/if}

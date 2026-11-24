@@ -150,7 +150,6 @@
 </script>
 
 <div class="toolbar">
-	<h1 style="margin:0">Accounts</h1>
 	<span class="spacer"></span>
 	{#if tree && folded.length > 0}
 		<button onclick={() => setOpen(allOpen ? [] : folded)}>{allOpen ? 'Collapse all' : 'Expand all'}</button>
